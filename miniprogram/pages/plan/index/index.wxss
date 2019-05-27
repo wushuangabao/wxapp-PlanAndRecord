@@ -1,0 +1,39 @@
+/* miniprogram/pages/plan/index/index.wxss */
+
+.tab-content {
+  margin-left: 10rpx;
+  min-height: 140rpx;
+  height: 100%;
+  /* display: flex;
+  flex-direction: column;
+  justify-content: center; */
+  font-size: 28rpx;
+  color: rgba(140, 152, 174, 1);
+}
+
+.description{
+  margin:20rpx;
+  font-size: 28rpx;
+  display: flex;
+  justify-content: center;
+}
+
+.button {
+  background: rgba(223, 237, 255, 1) !important;
+  box-shadow: 6rpx 6rpx 16rpx 0px rgba(229, 233, 239, 0.5) !important;
+  color: rgba(45, 97, 179, 1) !important;
+  margin-top: 20rpx;
+}
+
+.center {
+  height: 500rpx;
+  width: 750rpx;
+  background: #fff;
+  color: #555;
+  border-radius: 8rpx;
+  font-size: 28rpx;
+
+  display:flex;
+  flex-direction: column;
+  justify-content: center;
+}

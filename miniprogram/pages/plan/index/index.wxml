@@ -1,0 +1,28 @@
+<!--miniprogram/pages/plan/index/index.wxml-->
+
+<l-tabs bind:linchange="changeTabs" aminmated>
+
+  <l-tab wx:for="{{dubbleTabs}}" tab="{{item.tab}}" key="{{item.key}}" sub-key="{{item.subKey}}" sub-tab="{{item.subTab}}" slot="{{item.subKey||item.key}}" wx:key="{{item.subTab||item.key}}">
+
+    <view class="tab-content">
+      <view wx:for="{{list}}" wx:key="id">
+        <l-list title="{{item.name}}" desc="{{item.description}}" tag-content="{{item.tag}}" tag-color="#F4516c" />
+      </view>
+    </view>
+
+  </l-tab>
+
+</l-tabs>
+
+<view class="description">{{description}}</view>
+
+<l-button l-class="button" size="long" data-subKey="{{item.subKey}}" data-key="{{item.key}}" bind:lintap="onBtnTap">
+  新增一项事务
+</l-button>
+
+<l-popup show="{{showPopup}}" content-align="center" bind:lintap="onBgTap">
+  <view class="center">
+    <l-input label="事务"  placeholder="请写下你要做的事情"  />
+    <l-input label="说明"  placeholder="如有必要，输入详细描述"  />
+  </view>
+</l-popup>

@@ -1,0 +1,51 @@
+{
+  "pages": [
+    "pages/record/index/index",
+    "pages/plan/index/index",
+    "pages/analysis/index/index",
+    "pages/index/index",
+    "pages/userConsole/userConsole",
+    "pages/storageConsole/storageConsole",
+    "pages/databaseGuide/databaseGuide",
+    "pages/addFunction/addFunction",
+    "pages/deployFunctions/deployFunctions",
+    "pages/chooseLib/chooseLib",
+    "pages/openapi/openapi"
+  ],
+  "window": {
+    "backgroundTextStyle": "light",
+    "navigationBarBackgroundColor": "#3963BC",
+    "navigationBarTitleText": "计划与记录",
+    "navigationBarTextStyle": "white"
+  },
+  "navigateToMiniProgramAppIdList": [
+    "wxb05fa7b69aa7e5b7"
+  ],
+  "tabBar": {
+    "color": "#bbbbbb",
+    "selectedColor": "#3963BC",
+    "backgroundColor": "#ffffff",
+    "borderStyle": "white",
+    "list": [
+      {
+        "pagePath": "pages/plan/index/index",
+        "text": "计划",
+        "iconPath": "/images/tabbar/chess.png",
+        "selectedIconPath": "/images/tabbar/chess-select.png"
+      },
+      {
+        "pagePath": "pages/record/index/index",
+        "text": "记录",
+        "iconPath": "/images/tabbar/calendar.png",
+        "selectedIconPath": "/images/tabbar/calendar-select.png"
+      },
+      {
+        "pagePath": "pages/analysis/index/index",
+        "text": "分析",
+        "iconPath": "/images/tabbar/chart.png",
+        "selectedIconPath": "/images/tabbar/chart-select.png"
+      }
+    ]
+  },
+  "sitemapLocation": "sitemap.json"
+}

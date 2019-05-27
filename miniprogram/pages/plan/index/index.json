@@ -1,0 +1,10 @@
+{
+  "usingComponents": {
+    "l-tabs": "/miniprogram_npm/lin-ui/combined-tabs/index",
+    "l-tab": "/miniprogram_npm/lin-ui/tabpanel/index",
+    "l-list": "/miniprogram_npm/lin-ui/list/index",
+    "l-button": "/miniprogram_npm/lin-ui/button/index",
+    "l-popup": "/miniprogram_npm/lin-ui/popup/index",
+    "l-input": "/miniprogram_npm/lin-ui/input/index"
+  }
+}
