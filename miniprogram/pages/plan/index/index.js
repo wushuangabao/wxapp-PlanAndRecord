@@ -6,12 +6,16 @@ const tabNames = ["事务管理", "日程管理"],
 Page({
 
   data: {
+    // 描述列表
     descriptions: [],
     description: "日程管理：从时间的维度，锁定重要的事情。",
+    // 标签列表
     dubbleTabs: [{
       tab: tabNames[1],
       key: "日程管理：从时间的维度，锁定重要的事情。"
     }],
+    // 事务管理列表
+    subTabNames:[],
     lists: [],
     list: [{
         name: "item1",
@@ -22,6 +26,7 @@ Page({
         name: "item2"
       }
     ],
+    // 弹出层
     showPopup:false,
   },
 
@@ -29,7 +34,7 @@ Page({
   /// 新增事务
   ////////////////////////////////
 
-  onBtnTap(e){
+  onAddTap(e){
     console.log(e);
     this.setData({
       showPopup:true
@@ -37,6 +42,13 @@ Page({
   },
 
   onBgTap(){
+    this.setData({
+      showPopup: false
+    });
+  },
+
+  onConfirmTap(){
+    // todo
     this.setData({
       showPopup: false
     });
@@ -61,14 +73,15 @@ Page({
     }
   },
 
-  // 根据appData.toDoLists创建标签
+  // 根据appData.toDoLists给页面数据赋值
   createDubbleTabs() {
     var lists = appData.toDoLists,
       len = lists.length,
       descriptions = this.data.descriptions,
       size = descriptions.length,
       dubbleTabs = this.data.dubbleTabs,
-      pageLists = this.data.lists;
+      pageLists = this.data.lists,
+      subTabNames = this.data.subTabNames;
     if (len > 0)
       for (var i = 0; i < len; i++) {
         let dubbleTab = {
@@ -79,13 +92,18 @@ Page({
         };
         dubbleTabs.push(dubbleTab);
         descriptions.push(lists[i].name + "：" + lists[i].description);
-        pageLists.push(lists[i].lists)
+        pageLists.push(lists[i].lists);
+        subTabNames.push({
+          id:size,
+          name:lists[i].name
+        });
         size++;
       }
     this.setData({
       dubbleTabs: dubbleTabs,
       descriptions: descriptions,
-      lists: pageLists
+      lists: pageLists,
+      subTabNames: subTabNames
     });
   },
 

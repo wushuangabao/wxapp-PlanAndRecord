@@ -16,13 +16,20 @@
 
 <view class="description">{{description}}</view>
 
-<l-button l-class="button" size="long" data-subKey="{{item.subKey}}" data-key="{{item.key}}" bind:lintap="onBtnTap">
+<l-button l-class="button" size="long" data-subKey="{{item.subKey}}" data-key="{{item.key}}" bind:lintap="onAddTap">
   新增一项事务
 </l-button>
 
-<l-popup show="{{showPopup}}" content-align="center" bind:lintap="onBgTap">
-  <view class="center">
-    <l-input label="事务"  placeholder="请写下你要做的事情"  />
-    <l-input label="说明"  placeholder="如有必要，输入详细描述"  />
+<l-popup show="{{showPopup}}" content-align="bottom" bind:lintap="onBgTap">
+  <view class="popup">
+    <l-input label="事务" placeholder="请写下你要做的事情" />
+    <l-input label="说明" placeholder="如有必要，输入详细描述" />
+    <l-radio-group placement="row">
+      <l-radio l-title-class="l-title-class" l-class="l-radio" wx:for="{{subTabNames}}" wx:key="{{item.id}}" shape="circle" value="{{item.name}}">
+      </l-radio>
+    </l-radio-group>
+    <l-button l-class="button" style="margin-left:550rpx;" size="medium" bind:lintap="onConfirmTap">
+      确认
+    </l-button>
   </view>
 </l-popup>
