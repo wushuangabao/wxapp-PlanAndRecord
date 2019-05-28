@@ -29,6 +29,11 @@
   margin-top: 20rpx;
 }
 
+.deleteBtn{
+  margin-left:300rpx;
+  color: rgb(226, 50, 89) !important;
+}
+
 .popup {
   height: 500rpx;
   width: 750rpx;

@@ -23,10 +23,11 @@ Page({
     showPopup: false,
     inputTag: false,
     evtTag: "紧急",
-    evtName: "未命名事务",
+    evtName: "",
     evtDesc: "",
     evtTabName: null,
     evtTabId: null,
+    currentItem: -1, //表示当前没有在修改某事务
   },
 
 
@@ -38,13 +39,24 @@ Page({
     let evtTabId = this.data.subObjId,
       evtTabName = this.data.subTabNames[evtTabId].name;
     this.setData({
+      inputTag: false,
+      evtName: "",
+      evtDesc: "",
       evtTabName: evtTabName,
       evtTabId: evtTabId,
-      showPopup: true
+      showPopup: true,
+      currentItem: -1
     });
   },
 
   onBgTap() {
+    this.setData({
+      showPopup: false
+    });
+  },
+
+  onDeleteTap() {
+    this.deleteEvent();
     this.setData({
       showPopup: false
     });
@@ -60,24 +72,24 @@ Page({
     if (this.data.inputTag) {
       item["tag"] = this.data.evtTag;
     }
-    // if (this.data.evtTabName == null) {
-    //   wx.lin.showMessage({
-    //     duration: 2500,
-    //     type: 'error',
-    //     content: '必须选择事件的类型！'
-    //   });
-    // } else {
-    //   this.addEvent(item, this.data.evtTabName);
-    //   this.setData({
-    //     showPopup: false
-    //   });
-    // }
-    this.addEvent(item, this.data.evtTabName);
-    this.setData({
-      showPopup: false
-    });
+    if (this.data.evtName == "") {
+      wx.lin.showMessage({
+        duration: 2000,
+        type: 'error',
+        content: '必须填写事务的名称！'
+      });
+    } else {
+      if (this.data.currentItem != -1) {
+        this.deleteEvent();
+      }
+      this.addEvent(item, this.data.evtTabName);
+      this.setData({
+        showPopup: false
+      });
+    }
   },
 
+  // 点击一项事务，进行修改
   onItemTap(e) {
     let id = Number(e.currentTarget.id),
       item = this.data.list[id],
@@ -90,7 +102,8 @@ Page({
         evtDesc: "",
         evtTabName: subObj,
         evtTabId: subObjId,
-        showPopup: true
+        showPopup: true,
+        currentItem: id
       };
     if (item.tag) {
       evtData.tag = item.tag;
@@ -231,6 +244,16 @@ Page({
     this.setHeight();
   },
 
+  // 删除事务
+  deleteEvent() {
+    let list = this.data.list;
+    list.splice(this.data.currentItem, 1);
+    this.setData({
+      list: list
+    });
+    this.setHeight();
+  },
+
   onLoad(options) {
     this.crtEventTabs();
     this.crtTimeTabs();
@@ -250,7 +273,7 @@ Page({
         let ratio = 750 / clientWidth;
         let height = clientHeight * ratio;
         that.setData({
-          vHeight: height - 176
+          vHeight: height - 300
         });
       }
     });
@@ -271,6 +294,11 @@ Page({
       // 超出屏幕的部分不可见，防止事务太多
       if (height > this.data.vHeight) {
         height = this.data.vHeight;
+        wx.lin.showMessage({
+          duration: 2500,
+          type: 'warning',
+          content: '事情太多了，考虑扔掉一些吧！'
+        });
       }
     }
     this.setData({
