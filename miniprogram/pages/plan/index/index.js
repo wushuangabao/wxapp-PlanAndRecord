@@ -6,17 +6,19 @@ const tabNames = ["事务管理", "日程管理"],
 Page({
 
   data: {
+    // 屏幕高度
+    height: 1400,
     // 描述列表
     descriptions: [],
     description: "",
     // 标签列表
     dubbleTabs: [],
+    object: "日程",
+    subObjId: null,
     // 事务管理列表
     subTabNames: [],
     lists: [],
     list: [],
-    object: "日程",
-    subObjId: null,
     // 弹出层
     showPopup: false,
     inputTag: false,
@@ -33,8 +35,11 @@ Page({
   ////////////////////////////////
 
   onAddTap(e) {
-    console.log(e);
+    let evtTabId = this.data.subObjId,
+      evtTabName = this.data.subTabNames[evtTabId].name;
     this.setData({
+      evtTabName: evtTabName,
+      evtTabId: evtTabId,
       showPopup: true
     });
   },
@@ -55,18 +60,46 @@ Page({
     if (this.data.inputTag) {
       item["tag"] = this.data.evtTag;
     }
-    if (this.data.evtTabName == null) {
-      wx.lin.showMessage({
-        duration: 2500,
-        type: 'error',
-        content: '必须选择事件的类型！'
-      });
-    } else {
-      this.addEvent(item, this.data.evtTabName);
-      this.setData({
-        showPopup: false
-      });
+    // if (this.data.evtTabName == null) {
+    //   wx.lin.showMessage({
+    //     duration: 2500,
+    //     type: 'error',
+    //     content: '必须选择事件的类型！'
+    //   });
+    // } else {
+    //   this.addEvent(item, this.data.evtTabName);
+    //   this.setData({
+    //     showPopup: false
+    //   });
+    // }
+    this.addEvent(item, this.data.evtTabName);
+    this.setData({
+      showPopup: false
+    });
+  },
+
+  onItemTap(e) {
+    let id = Number(e.currentTarget.id),
+      item = this.data.list[id],
+      subObjId = this.data.subObjId,
+      subObj = this.data.subTabNames[subObjId].name,
+      evtData = {
+        inputTag: false,
+        evtTag: "紧急",
+        evtName: item.name,
+        evtDesc: "",
+        evtTabName: subObj,
+        evtTabId: subObjId,
+        showPopup: true
+      };
+    if (item.tag) {
+      evtData.tag = item.tag;
+      evtData.inputTag = true;
     }
+    if (item.description) {
+      evtData.evtDesc = item.description;
+    }
+    this.setData(evtData);
   },
 
   inputEvtTag(e) {
@@ -194,6 +227,8 @@ Page({
         lists: lists
       });
     }
+
+    this.setHeight();
   },
 
   onLoad(options) {
@@ -204,6 +239,42 @@ Page({
         activeKey: 0,
         activeSubKey: 0
       }
+    });
+
+    // 获取屏幕高度(rpx)
+    let that = this;
+    wx.getSystemInfo({
+      success: function(res) {
+        let clientHeight = res.windowHeight;
+        let clientWidth = res.windowWidth;
+        let ratio = 750 / clientWidth;
+        let height = clientHeight * ratio;
+        that.setData({
+          vHeight: height - 176
+        });
+      }
+    });
+
+    this.setHeight();
+  },
+
+  setHeight() {
+    let maxSize = 0,
+      height = 352,
+      lists = this.data.lists;
+    for (var i = 0; i < lists.length; i++) {
+      if (lists[i].length > maxSize)
+        maxSize = lists[i].length;
+    }
+    if (maxSize > 4) {
+      height = 88 * maxSize;
+      // 超出屏幕的部分不可见，防止事务太多
+      if (height > this.data.vHeight) {
+        height = this.data.vHeight;
+      }
+    }
+    this.setData({
+      height: height
     });
   },
 

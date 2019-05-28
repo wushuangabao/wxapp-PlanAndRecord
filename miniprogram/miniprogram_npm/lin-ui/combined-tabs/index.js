@@ -1,6 +1,6 @@
 // components/tabs/index.js
 Component({
-  externalClasses: ['l-class-header', 'l-class-active', 'l-class-inactive', 'l-class-line', 'l-class-tabimage'],
+  externalClasses: ['l-class-header', 'l-class-active', 'l-class-inactive', 'l-class-line'],
   relations: {
     '../tabpanel/index': {
       type: 'child',
@@ -20,6 +20,10 @@ Component({
    * 组件的属性列表
    */
   properties: {
+    heightSwiper: {
+      type: Number,
+      value: 800
+    },
     activeKey: {
       type: String,
       value: '',
@@ -32,6 +36,10 @@ Component({
     aminmated: Boolean,
     scrollable: Boolean,
     swipeable: {
+      type: Boolean,
+      value: true,
+    },
+    subSwipeable: {
       type: Boolean,
       value: true,
     },

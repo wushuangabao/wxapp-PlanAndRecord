@@ -2,13 +2,13 @@
 
 <l-message />
 
-<l-tabs bind:linchange="changeTabs" aminmated>
+<l-tabs bind:linchange="changeTabs" heightSwiper="{{height}}" l-class-header="l-class-header">
 
   <l-tab wx:for="{{dubbleTabs}}" tab="{{item.tab}}" key="{{item.key}}" sub-key="{{item.subKey}}" sub-tab="{{item.subTab}}" slot="{{item.subKey||item.key}}" wx:key="{{item.subTab||item.key}}">
 
     <view class="tab-content">
-      <view wx:for="{{list}}" wx:key="id">
-        <l-list title="{{item.name}}" desc="{{item.description}}" tag-content="{{item.tag}}" tag-color="#F4516c" />
+      <view wx:for="{{list}}" wx:key="">
+        <l-list title="{{item.name}}" desc="{{item.description}}" tag-content="{{item.tag}}" tag-color="#F4516c" bind:lintap="onItemTap" id="{{index}}" />
       </view>
     </view>
 
@@ -18,7 +18,7 @@
 
 <view class="description">{{description}}</view>
 
-<l-button l-class="button" size="long" data-subKey="{{item.subKey}}" data-key="{{item.key}}" bind:lintap="onAddTap">
+<l-button l-class="button" size="long" bind:lintap="onAddTap">
   新增一项{{object}}
 </l-button>
 
@@ -26,7 +26,7 @@
   <view class="popup">
     <l-input label="事务" placeholder="请写下你要做的事情" bind:linchange="inputEvtName"/>
     <l-input label="说明" placeholder="如有必要，输入详细描述" bind:linchange="inputEvtDesc"/>
-    <l-radio-group placement="row" bind:linchange="selectTab">
+    <l-radio-group placement="row" bind:linchange="selectTab" current="{{subTabNames[subObjId].name}}">
       <l-radio l-title-class="l-title-class" l-class="l-radio" wx:for="{{subTabNames}}" wx:key="{{item.id}}" shape="circle" value="{{item.name}}" />
     </l-radio-group >
     <view style="display:flex;align-items:center;margin-top:30rpx;">
