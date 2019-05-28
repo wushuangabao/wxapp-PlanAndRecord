@@ -1,5 +1,7 @@
 <!--miniprogram/pages/plan/index/index.wxml-->
 
+<l-message />
+
 <l-tabs bind:linchange="changeTabs" aminmated>
 
   <l-tab wx:for="{{dubbleTabs}}" tab="{{item.tab}}" key="{{item.key}}" sub-key="{{item.subKey}}" sub-tab="{{item.subTab}}" slot="{{item.subKey||item.key}}" wx:key="{{item.subTab||item.key}}">
@@ -17,17 +19,20 @@
 <view class="description">{{description}}</view>
 
 <l-button l-class="button" size="long" data-subKey="{{item.subKey}}" data-key="{{item.key}}" bind:lintap="onAddTap">
-  新增一项事务
+  新增一项{{object}}
 </l-button>
 
 <l-popup show="{{showPopup}}" content-align="bottom" bind:lintap="onBgTap">
   <view class="popup">
-    <l-input label="事务" placeholder="请写下你要做的事情" />
-    <l-input label="说明" placeholder="如有必要，输入详细描述" />
-    <l-radio-group placement="row">
-      <l-radio l-title-class="l-title-class" l-class="l-radio" wx:for="{{subTabNames}}" wx:key="{{item.id}}" shape="circle" value="{{item.name}}">
-      </l-radio>
-    </l-radio-group>
+    <l-input label="事务" placeholder="请写下你要做的事情" bind:linchange="inputEvtName"/>
+    <l-input label="说明" placeholder="如有必要，输入详细描述" bind:linchange="inputEvtDesc"/>
+    <l-radio-group placement="row" bind:linchange="selectTab">
+      <l-radio l-title-class="l-title-class" l-class="l-radio" wx:for="{{subTabNames}}" wx:key="{{item.id}}" shape="circle" value="{{item.name}}" />
+    </l-radio-group >
+    <view style="display:flex;align-items:center;margin-top:30rpx;">
+      <switch class="switch" bindchange="switchChange" color="#F4516c" />
+      <input wx:if="{{inputTag}}" maxlength="6" style="margin-left:20rpx;" placeholder="{{evtTag}}" auto-focus bindinput="inputEvtTag"/>
+    </view>
     <l-button l-class="button" style="margin-left:550rpx;" size="medium" bind:lintap="onConfirmTap">
       确认
     </l-button>

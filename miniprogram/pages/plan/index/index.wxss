@@ -46,3 +46,12 @@
   padding-left: 40rpx;
   margin-top: 20rpx;
 }
+
+/* switch */
+.wx-switch-input {
+    zoom: .66;
+}
+/* 边距 */
+.switch{
+  margin-left: 40rpx;
+}
