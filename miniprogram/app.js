@@ -71,7 +71,7 @@ App({
       toDoLists: [{
           name: "备忘",
           description: "简单任务，容易遗忘掉",
-          lists: [
+          list: [
             {
             name:"一件事情",
             description:"具体描述，可以不写",
@@ -86,7 +86,7 @@ App({
         {
           name: "习惯",
           description: "希望养成，有利于自身成长",
-          lists: [
+          list: [
             {
               name: "一件事情",
               tag: "紧急"
@@ -99,12 +99,12 @@ App({
         {
           name: "项目",
           description: "复杂任务，时间线较长",
-          lists: []
+          list: []
         },
         {
           name: "愿望",
           description: "感兴趣的事，想做的事",
-          lists: []
+          list: []
         }
       ]
 

@@ -32,9 +32,10 @@ Page({
 
 
   ////////////////////////////////
-  /// 新增事务
+  /// 弹出层
   ////////////////////////////////
 
+  // 点击新增按钮
   onAddTap(e) {
     let evtTabId = this.data.subObjId,
       evtTabName = this.data.subTabNames[evtTabId].name;
@@ -55,6 +56,7 @@ Page({
     });
   },
 
+  // 点击删除按钮
   onDeleteTap() {
     this.deleteEvent();
     this.setData({
@@ -62,6 +64,7 @@ Page({
     });
   },
 
+  // 点击确认按钮
   onConfirmTap() {
     var item = {
       name: this.data.evtName
@@ -89,31 +92,9 @@ Page({
     }
   },
 
-  // 点击一项事务，进行修改
-  onItemTap(e) {
-    let id = Number(e.currentTarget.id),
-      item = this.data.list[id],
-      subObjId = this.data.subObjId,
-      subObj = this.data.subTabNames[subObjId].name,
-      evtData = {
-        inputTag: false,
-        evtTag: "紧急",
-        evtName: item.name,
-        evtDesc: "",
-        evtTabName: subObj,
-        evtTabId: subObjId,
-        showPopup: true,
-        currentItem: id
-      };
-    if (item.tag) {
-      evtData.tag = item.tag;
-      evtData.inputTag = true;
-    }
-    if (item.description) {
-      evtData.evtDesc = item.description;
-    }
-    this.setData(evtData);
-  },
+  ////////////////////////
+  /// 表单操作
+  ////////////////////////
 
   inputEvtTag(e) {
     let tag = e.detail.value;
@@ -144,11 +125,37 @@ Page({
     this.data.evtTabName = tabName;
   },
 
+  ////////////////////////////////
+  /// 点击某项事务（进而删、改）
+  ////////////////////////////////
+  onItemTap(e) {
+    let id = Number(e.currentTarget.id),
+      item = this.data.list[id],
+      subObjId = this.data.subObjId,
+      subObj = this.data.subTabNames[subObjId].name,
+      evtData = {
+        inputTag: false,
+        evtTag: "紧急",
+        evtName: item.name,
+        evtDesc: "",
+        evtTabName: subObj,
+        evtTabId: subObjId,
+        showPopup: true,
+        currentItem: id
+      };
+    if (item.tag) {
+      evtData.tag = item.tag;
+      evtData.inputTag = true;
+    }
+    if (item.description) {
+      evtData.evtDesc = item.description;
+    }
+    this.setData(evtData);
+  },
 
   ///////////////////////////////
-  /// 标签-列表
+  /// 改变标签
   ///////////////////////////////
-
   changeTabs(e) {
     // 修改description,list的内容
     if (e.detail.currentIndex == 1) {
@@ -167,8 +174,10 @@ Page({
     }
   },
 
-  // 根据appData.toDoLists
-  // 给页面的 事务管理数据 赋值
+  //////////////////////////////
+  /// 根据appData.toDoLists
+  /// 给页面的 事务管理数据 赋值
+  //////////////////////////////
   crtEventTabs() {
     var lists = appData.toDoLists,
       len = lists.length,
@@ -187,7 +196,7 @@ Page({
         };
         dubbleTabs.push(dubbleTab);
         descriptions.push(lists[i].name + "：" + lists[i].description);
-        pageLists.push(lists[i].lists);
+        pageLists.push(lists[i].list);
         subTabNames.push({
           id: size,
           name: lists[i].name
@@ -202,7 +211,9 @@ Page({
     });
   },
 
-  // 给页面的 日程管理数据 赋值
+  //////////////////////////////
+  /// 给页面的 日程管理数据 赋值
+  //////////////////////////////
   crtTimeTabs() {
     var dubbleTabs = this.data.dubbleTabs;
     dubbleTabs.push({
@@ -214,7 +225,9 @@ Page({
     });
   },
 
-  // 新增事务
+  ///////////////////////
+  /// 新增事务
+  ///////////////////////
   addEvent(item, evtTabName) {
     var lists = this.data.lists,
       subTabNames = this.data.subTabNames,
@@ -244,7 +257,9 @@ Page({
     this.setHeight();
   },
 
-  // 删除事务
+  //////////////////////
+  /// 删除事务
+  //////////////////////
   deleteEvent() {
     let list = this.data.list;
     list.splice(this.data.currentItem, 1);
@@ -254,6 +269,9 @@ Page({
     this.setHeight();
   },
 
+  ///////////////////////
+  /// 页面初始化
+  ///////////////////////
   onLoad(options) {
     this.crtEventTabs();
     this.crtTimeTabs();
@@ -263,7 +281,6 @@ Page({
         activeSubKey: 0
       }
     });
-
     // 获取屏幕高度(rpx)
     let that = this;
     wx.getSystemInfo({
@@ -277,10 +294,12 @@ Page({
         });
       }
     });
-
     this.setHeight();
   },
 
+  /////////////////////
+  /// 设置tabs的高度
+  /////////////////////
   setHeight() {
     let maxSize = 0,
       height = 352,
