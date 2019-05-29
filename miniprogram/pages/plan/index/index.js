@@ -3,9 +3,10 @@
 const tabNames = ["事务管理", "日程管理"],
   appData = getApp().globalData,
   AV = getApp().AV,
-  getDataForRender = data => ({
+  convertEvtTabs = data => ({
     name: data.get('name'),
-    id: data.get('id')
+    id: data.get('id'),
+    description: data.get('description')
   });
 
 Page({
@@ -191,14 +192,7 @@ Page({
     }).get({
       success: res => {
         this.setEvtData(res.data);
-        // 调用自定义组件tabs的方法
-        this.componentTabs.initTabs();
-        this.changeTabs({
-          detail: {
-            activeKey: 0,
-            activeSubKey: 0
-          }
-        });
+        this.resetTabs();
       },
       fail: err => {
         this.showQryError(err);
@@ -327,18 +321,60 @@ Page({
 
   onReady() {
     this.componentTabs = this.selectComponent('#tabs');
-    this.crtEventData();
+    // this.crtEventData();
     // this.crtTimeTabs();
 
 
     new AV.Query('EvtTabs')
       .find()
       .then(todos => {
-        var data = todos.map(getDataForRender)
-        console.log(data)
+        var data = todos.map(convertEvtTabs);
+        this.crtEvtTabs(data);
       })
       .catch(console.error);
 
+  },
+
+  crtEvtTabs(data) {
+    var evtTabNames = [],
+      descriptions = [],
+      dubbleTabs = [],
+      //lists = [],
+      len = data.length;
+    if (len > 0) {
+      for (var i = 0; i < len; i++) {
+        let dubbleTab = {
+          tab: tabNames[0],
+          key: "事务管理",
+          subKey: data[i].id,
+          subTab: data[i].name
+        };
+        dubbleTabs.push(dubbleTab);
+        descriptions.push(data[i].name + "：" + data[i].description);
+        evtTabNames.push(data[i].name);
+        //lists.push(data[i].list);
+      }
+      this.setData({
+        dubbleTabs: dubbleTabs,
+        evtDescriptions: descriptions,
+        evtTabNames: evtTabNames,
+        // lists: lists,
+        sizeEvt: len
+      });
+      this.resetTabs();
+    }
+  },
+
+  resetTabs() {
+    // 调用自定义组件tabs的方法
+    this.componentTabs.initTabs();
+    // 
+    this.changeTabs({
+      detail: {
+        activeKey: 0,
+        activeSubKey: 0
+      }
+    });
   },
 
   /////////////////////
