@@ -1,7 +1,12 @@
 // miniprogram/pages/plan/index/index.js
 
 const tabNames = ["事务管理", "日程管理"],
-  appData = getApp().globalData;
+  appData = getApp().globalData,
+  AV = getApp().AV,
+  getDataForRender = data => ({
+    name: data.get('name'),
+    id: data.get('id')
+  });
 
 Page({
 
@@ -180,13 +185,13 @@ Page({
   //////////////////////////////
   crtEventData() {
     let openid = wx.getStorageSync("openid");
-    // 查询当前用户的evtTabs
+    // 查询当前用户的toDoList
     wx.cloud.database().collection('toDoList').where({
       _openid: openid
     }).get({
       success: res => {
         this.setEvtData(res.data);
-        // 调用自定义组件的方法
+        // 调用自定义组件tabs的方法
         this.componentTabs.initTabs();
         this.changeTabs({
           detail: {
@@ -324,6 +329,16 @@ Page({
     this.componentTabs = this.selectComponent('#tabs');
     this.crtEventData();
     // this.crtTimeTabs();
+
+
+    new AV.Query('EvtTabs')
+      .find()
+      .then(todos => {
+        var data = todos.map(getDataForRender)
+        console.log(data)
+      })
+      .catch(console.error);
+
   },
 
   /////////////////////

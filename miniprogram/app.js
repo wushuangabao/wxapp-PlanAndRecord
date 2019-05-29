@@ -1,6 +1,14 @@
 //app.js
+
 App({
   onLaunch: function() {
+
+    const AV = require('./libs/av-weapp-min.js');
+    AV.init({
+      appId: '4PIIJybk0I1qelR97Peq3vCd-gzGzoHsz',
+      appKey: 'r89pv7xbJUOdWT52UpuMSKjT',
+    });
+    this.AV = AV;
 
     if (!wx.cloud) {
       console.error('请使用 2.2.3 或以上的基础库以使用云能力')
@@ -63,10 +71,6 @@ App({
         ],
       ],
 
-      // //////////////////////////////
-      // /// 计划
-      // //////////////////////////////
-
       // // 事务管理
       // toDoLists: [{
       //     name: "备忘",
@@ -83,31 +87,6 @@ App({
       //       }
       //     ]
       //   },
-      //   {
-      //     name: "习惯",
-      //     description: "希望养成，有利于自身成长",
-      //     list: [
-      //       {
-      //         name: "一件事情",
-      //         tag: "紧急"
-      //       },
-      //       {
-      //         name: "一件事情",
-      //       }
-      //     ]
-      //   },
-      //   {
-      //     name: "项目",
-      //     description: "复杂任务，时间线较长",
-      //     list: []
-      //   },
-      //   {
-      //     name: "愿望",
-      //     description: "感兴趣的事，想做的事",
-      //     list: []
-      //   }
-      // ]
-
 
     }
   }
