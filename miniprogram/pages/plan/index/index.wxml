@@ -2,7 +2,7 @@
 
 <l-message />
 
-<l-tabs bind:linchange="changeTabs" heightSwiper="{{height}}" l-class-header="l-class-header">
+<l-tabs bind:linchange="changeTabs" id="tabs" height-swiper="{{height}}" l-class-header="l-class-header">
 
   <l-tab wx:for="{{dubbleTabs}}" tab="{{item.tab}}" key="{{item.key}}" sub-key="{{item.subKey}}" sub-tab="{{item.subTab}}" slot="{{item.subKey||item.key}}" wx:key="{{item.subTab||item.key}}">
 

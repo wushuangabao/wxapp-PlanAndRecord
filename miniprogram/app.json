@@ -1,17 +1,15 @@
 {
   "pages": [
-        "pages/record/index/index",
-        "pages/plan/index/index",
-        "pages/analysis/index/index",
+        
     "pages/index/index",
-    "pages/userConsole/userConsole",
     "pages/storageConsole/storageConsole",
     "pages/databaseGuide/databaseGuide",
     "pages/addFunction/addFunction",
-    "pages/deployFunctions/deployFunctions",
     "pages/chooseLib/chooseLib",
-    "pages/openapi/openapi"
-
+    "pages/openapi/openapi",
+"pages/record/index/index",
+"pages/plan/index/index",
+"pages/analysis/index/index"
   ],
   "window": {
     "backgroundTextStyle": "light",

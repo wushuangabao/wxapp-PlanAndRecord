@@ -9,14 +9,14 @@ Page({
     // 屏幕高度
     height: 1400,
     // 描述列表
-    descriptions: [],
+    evtDescriptions: [],
     description: "",
     // 标签列表
     dubbleTabs: [],
-    object: "日程",
+    object: "事务",
     subObjId: null,
     // 事务管理列表
-    subTabNames: [],
+    evtTabNames: [],
     lists: [],
     list: [],
     // 弹出层
@@ -38,7 +38,7 @@ Page({
   // 点击新增按钮
   onAddTap(e) {
     let evtTabId = this.data.subObjId,
-      evtTabName = this.data.subTabNames[evtTabId].name;
+      evtTabName = this.data.evtTabNames[evtTabId];
     this.setData({
       inputTag: false,
       evtName: "",
@@ -132,7 +132,7 @@ Page({
     let id = Number(e.currentTarget.id),
       item = this.data.list[id],
       subObjId = this.data.subObjId,
-      subObj = this.data.subTabNames[subObjId].name,
+      subObj = this.data.evtTabNames[subObjId].name,
       evtData = {
         inputTag: false,
         evtTag: "紧急",
@@ -166,7 +166,7 @@ Page({
     } else {
       let id = Number(e.detail.activeSubKey);
       this.setData({
-        description: this.data.descriptions[id],
+        description: this.data.evtDescriptions[id],
         list: this.data.lists[id],
         object: "事务",
         subObjId: id
@@ -178,37 +178,68 @@ Page({
   /// 根据appData.toDoLists
   /// 给页面的 事务管理数据 赋值
   //////////////////////////////
-  crtEventTabs() {
-    var lists = appData.toDoLists,
-      len = lists.length,
-      descriptions = this.data.descriptions,
-      size = descriptions.length,
-      dubbleTabs = this.data.dubbleTabs,
-      pageLists = this.data.lists,
-      subTabNames = this.data.subTabNames;
-    if (len > 0)
+  crtEventData() {
+    let openid = wx.getStorageSync("openid");
+    // 查询当前用户的evtTabs
+    wx.cloud.database().collection('toDoList').where({
+      _openid: openid
+    }).get({
+      success: res => {
+        this.setEvtData(res.data);
+        // 调用自定义组件的方法
+        this.componentTabs.initTabs();
+        this.changeTabs({
+          detail: {
+            activeKey: 0,
+            activeSubKey: 0
+          }
+        });
+      },
+      fail: err => {
+        this.showQryError(err);
+      }
+    });
+  },
+
+  // 查询失败的提示
+  showQryError(err) {
+    wx.lin.showMessage({
+      duration: 2000,
+      type: 'error',
+      content: '数据库查询失败！'
+    });
+    console.error('[数据库] [查询记录] 失败：', err);
+  },
+
+  // 设置事务分类、描述、todolists
+  setEvtData(data) {
+    console.log('[数据库] [查询toDoList] 成功: ', data);
+    var evtTabNames = [],
+      descriptions = [],
+      dubbleTabs = [],
+      lists = [],
+      len = data.length;
+    if (len > 0) {
       for (var i = 0; i < len; i++) {
         let dubbleTab = {
           tab: tabNames[0],
           key: "事务管理",
-          subKey: size.toString(),
-          subTab: lists[i].name
+          subKey: data[i].id,
+          subTab: data[i].name
         };
         dubbleTabs.push(dubbleTab);
-        descriptions.push(lists[i].name + "：" + lists[i].description);
-        pageLists.push(lists[i].list);
-        subTabNames.push({
-          id: size,
-          name: lists[i].name
-        });
-        size++;
+        descriptions.push(data[i].name + "：" + data[i].description);
+        evtTabNames.push(data[i].name);
+        lists.push(data[i].list);
       }
-    this.setData({
-      dubbleTabs: dubbleTabs,
-      descriptions: descriptions,
-      lists: pageLists,
-      subTabNames: subTabNames
-    });
+      this.setData({
+        dubbleTabs: dubbleTabs,
+        evtDescriptions: descriptions,
+        evtTabNames: evtTabNames,
+        lists: lists,
+        sizeEvt: len
+      });
+    }
   },
 
   //////////////////////////////
@@ -230,11 +261,11 @@ Page({
   ///////////////////////
   addEvent(item, evtTabName) {
     var lists = this.data.lists,
-      subTabNames = this.data.subTabNames,
+      evtTabNames = this.data.evtTabNames,
       id = -1;
-    // 查找item的tag对应的subTabNames中的下标
-    for (var i = 0; i < subTabNames.length; i++) {
-      if (subTabNames[i].name == evtTabName)
+    // 查找item的tag对应的evtTabNames中的下标
+    for (var i = 0; i < evtTabNames.length; i++) {
+      if (evtTabNames[i] == evtTabName)
         id = i;
     }
     if (id === -1) return;
@@ -273,14 +304,6 @@ Page({
   /// 页面初始化
   ///////////////////////
   onLoad(options) {
-    this.crtEventTabs();
-    this.crtTimeTabs();
-    this.changeTabs({
-      detail: {
-        activeKey: 0,
-        activeSubKey: 0
-      }
-    });
     // 获取屏幕高度(rpx)
     let that = this;
     wx.getSystemInfo({
@@ -295,6 +318,12 @@ Page({
       }
     });
     this.setHeight();
+  },
+
+  onReady() {
+    this.componentTabs = this.selectComponent('#tabs');
+    this.crtEventData();
+    // this.crtTimeTabs();
   },
 
   /////////////////////

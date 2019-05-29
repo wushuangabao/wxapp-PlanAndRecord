@@ -1,17 +1,9 @@
 <!--index.wxml-->
 <view class="container">
 
-  <!-- 用户 openid -->
+  <!-- 用户 -->
   <view class="userinfo">
-    <button 
-      open-type="getUserInfo" 
-      bindgetuserinfo="onGetUserInfo"
-      class="userinfo-avatar"
-      style="background-image: url({{avatarUrl}})"
-    ></button>
-    <view>
-      <button class="userinfo-nickname" bindtap="onGetOpenid">点击获取 openid</button>
-    </view>
+    <button open-type="getUserInfo" bindgetuserinfo="onGetUserInfo" class="userinfo-avatar" style="background-image: url({{avatarUrl}})"></button>
   </view>
 
 
@@ -47,5 +39,10 @@
     </navigator>
   </view>
 
+  <view class="uploader">
+    <view bindtap="goToPlan" class="uploader-text">
+      <text>my wxApp</text>
+    </view>
+  </view>
 
 </view>

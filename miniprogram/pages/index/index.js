@@ -10,14 +10,19 @@ Page({
     requestResult: ''
   },
 
+  goToPlan() {
+    wx.switchTab({
+      url: "../plan/index/index"
+    });
+  },
+
   onLoad: function() {
     if (!wx.cloud) {
       wx.redirectTo({
         url: '../chooseLib/chooseLib',
-      })
+      });
       return
     }
-
     // 获取用户信息
     wx.getSetting({
       success: res => {
@@ -28,12 +33,17 @@ Page({
               this.setData({
                 avatarUrl: res.userInfo.avatarUrl,
                 userInfo: res.userInfo
-              })
+              });
             }
-          })
+          });
         }
       }
-    })
+    });
+    // 获取openid并跳转页面
+    if (!wx.getStorageSync("openid"))
+      this.getOpenid(this.goToPlan);
+    else
+      this.goToPlan();
   },
 
   onGetUserInfo: function(e) {
@@ -46,42 +56,38 @@ Page({
     }
   },
 
-  onGetOpenid: function() {
+  getOpenid: function(goFunc) {
     // 调用云函数
     wx.cloud.callFunction({
       name: 'login',
       data: {},
       success: res => {
-        console.log('[云函数] [login] result: ', res.result)
-        app.globalData.openid = res.result.openid
-        wx.navigateTo({
-          url: '../userConsole/userConsole',
-        })
+        console.log('[云函数] [login] openid: ', res.result.openid);
+        wx.setStorageSync("openid", res.result.openid);
+        goFunc();
       },
       fail: err => {
-        console.error('[云函数] [login] 调用失败', err)
-        wx.navigateTo({
-          url: '../deployFunctions/deployFunctions',
-        })
+        console.error('[云函数] [login] 调用失败', err);
+        // todo:错误处理
       }
     })
   },
 
   // 上传图片
-  doUpload: function () {
+  doUpload: function() {
     // 选择图片
     wx.chooseImage({
       count: 1,
       sizeType: ['compressed'],
       sourceType: ['album', 'camera'],
-      success: function (res) {
+      success: function(res) {
 
         wx.showLoading({
           title: '上传中',
         })
 
         const filePath = res.tempFilePaths[0]
-        
+
         // 上传图片
         const cloudPath = 'my-image' + filePath.match(/\.[^.]+?$/)[0]
         wx.cloud.uploadFile({
@@ -93,7 +99,7 @@ Page({
             app.globalData.fileID = res.fileID
             app.globalData.cloudPath = cloudPath
             app.globalData.imagePath = filePath
-            
+
             wx.navigateTo({
               url: '../storageConsole/storageConsole'
             })
