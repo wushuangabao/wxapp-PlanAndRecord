@@ -1,5 +1,9 @@
 // miniprogram/pages/plan/index/index.js
 
+// TODO: 
+// 将数据保存到云端数据库
+// 自定义事务的标签
+
 const tabNames = ["事务管理", "日程管理", "项目管理"],
   appData = getApp().globalData,
   AV = getApp().AV,
@@ -25,8 +29,8 @@ Page({
     description: "",
     // 标签列表
     dubbleTabs: [],
-    object: "事务", //主标签
-    subObjId: null, //子标签id
+    object: "事务", //当前主标签
+    subObjId: null, //当前子标签id
     // 事务管理列表
     evtTabNames: [],
     lists: [],
@@ -149,7 +153,7 @@ Page({
     let id = Number(e.currentTarget.id),
       item = this.data.list[id],
       subObjId = this.data.subObjId,
-      subObj = this.data.evtTabNames[subObjId].name,
+      subObj = this.data.evtTabNames[subObjId],
       evtData = {
         inputTag: false,
         evtTag: "紧急",
@@ -168,6 +172,7 @@ Page({
       evtData.evtDesc = item.description;
     }
     this.setData(evtData);
+    console.log(this.componentRadios)
   },
 
   ///////////////////////////////
@@ -400,13 +405,13 @@ Page({
   /////////////////////
   setHeight() {
     let maxSize = 0,
-      height = 352,
+      height = 480,
       lists = this.data.lists;
     for (var i = 0; i < lists.length; i++) {
       if (lists[i].length > maxSize)
         maxSize = lists[i].length;
     }
-    if (maxSize > 4) {
+    if (maxSize > 5) {
       height = 88 * maxSize;
       // 超出屏幕，提示事务太多
       if (height > this.data.vHeight) {
