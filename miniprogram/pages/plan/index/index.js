@@ -227,7 +227,9 @@ Page({
       });
     }
     this.setHeight();
-    //this.componentTabs.initTabs();
+    // 解决内容无法刷新的bug的笨办法：
+    this.onHide();
+    this.onLoad();
   },
 
   //////////////////////
@@ -240,7 +242,9 @@ Page({
       list: list
     });
     this.setHeight();
-    //this.componentTabs.initTabs();
+    // 解决内容无法刷新的bug的笨办法：
+    this.onHide();
+    this.onLoad();
   },
 
   ///////////////////////
