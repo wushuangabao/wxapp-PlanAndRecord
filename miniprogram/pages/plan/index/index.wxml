@@ -7,9 +7,7 @@
   <l-tab wx:for="{{dubbleTabs}}" tab="{{item.tab}}" key="{{item.key}}" sub-key="{{item.subKey}}" sub-tab="{{item.subTab}}" slot="{{item.subKey||item.key}}" wx:key="{{item.subTab||item.key}}">
 
     <view class="tab-content">
-
-      <l-list wx:for="{{list}}" wx:key="" title="{{item.name}}" desc="{{item.description}}" tag-content="{{item.tag}}" tag-color="#F4516c" bind:lintap="onItemTap" id="{{index}}" />
-
+      <l-list wx:for="{{lists[item.subKey]}}" wx:for-item="listItem" wx:key="" title="{{listItem.name}}" desc="{{listItem.description}}" tag-content="{{listItem.tag}}" tag-color="#F4516c" bind:lintap="onItemTap" id="{{index}}" />
     </view>
 
   </l-tab>

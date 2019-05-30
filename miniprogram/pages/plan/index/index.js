@@ -172,7 +172,6 @@ Page({
       evtData.evtDesc = item.description;
     }
     this.setData(evtData);
-    console.log(this.componentRadios)
   },
 
   ///////////////////////////////
@@ -228,6 +227,7 @@ Page({
       });
     }
     this.setHeight();
+    //this.componentTabs.initTabs();
   },
 
   //////////////////////
@@ -240,6 +240,7 @@ Page({
       list: list
     });
     this.setHeight();
+    //this.componentTabs.initTabs();
   },
 
   ///////////////////////
