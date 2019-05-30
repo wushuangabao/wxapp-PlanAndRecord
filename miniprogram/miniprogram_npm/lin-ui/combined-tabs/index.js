@@ -35,10 +35,6 @@ Component({
     },
     aminmated: Boolean,
     scrollable: Boolean,
-    swipeable: {
-      type: Boolean,
-      value: true,
-    },
     hasLine: {
       type: Boolean,
       value: true

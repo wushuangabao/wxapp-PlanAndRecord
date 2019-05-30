@@ -7,9 +7,9 @@
   <l-tab wx:for="{{dubbleTabs}}" tab="{{item.tab}}" key="{{item.key}}" sub-key="{{item.subKey}}" sub-tab="{{item.subTab}}" slot="{{item.subKey||item.key}}" wx:key="{{item.subTab||item.key}}">
 
     <view class="tab-content">
-      <view wx:for="{{list}}" wx:key="">
-        <l-list title="{{item.name}}" desc="{{item.description}}" tag-content="{{item.tag}}" tag-color="#F4516c" bind:lintap="onItemTap" id="{{index}}" />
-      </view>
+
+        <l-list wx:for="{{list}}" wx:key="" title="{{item.name}}" desc="{{item.description}}" tag-content="{{item.tag}}" tag-color="#F4516c" bind:lintap="onItemTap" id="{{index}}" />
+
     </view>
 
   </l-tab>
@@ -35,7 +35,7 @@
     <l-input label="事务" placeholder="请写下你要做的事情" value="{{evtName}}" bind:linchange="inputEvtName" clear="{{true}}" maxlength="12" />
     <l-input label="说明" placeholder="如有必要，输入详细描述" value="{{evtDesc}}" bind:linchange="inputEvtDesc" />
     <l-radio-group wx:if="{{currentItem!=-1}}" placement="row" bind:linchange="selectTab" current="{{subTabNames[subObjId].name}}">
-      <l-radio l-title-class="l-title-class" l-class="l-radio" wx:for="{{subTabNames}}" wx:key="{{item.id}}" shape="circle" value="{{item.name}}" />
+      <l-radio l-title-class="l-title-class" l-class="l-radio" wx:for="{{evtTabNames}}" wx:key="" shape="circle" value="{{item}}" />
     </l-radio-group>
     <view style="display:flex;align-items:center;margin-top:30rpx;">
       <switch class="switch" bindchange="switchChange" color="#F4516c" checked="{{inputTag}}" />

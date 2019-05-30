@@ -3,10 +3,17 @@
 const tabNames = ["事务管理", "日程管理"],
   appData = getApp().globalData,
   AV = getApp().AV,
-  convertEvtTabs = data => ({
+  convertEvtTab = data => ({
     name: data.get('name'),
     id: data.get('id'),
     description: data.get('description')
+  }),
+  convertEvtItem = data => ({
+    name: data.get('name'),
+    tab: data.get('tab'),
+    description: data.get('description'),
+    tag: data.get('tag'),
+    ddl: data.get('ddl')
   });
 
 Page({
@@ -19,8 +26,8 @@ Page({
     description: "",
     // 标签列表
     dubbleTabs: [],
-    object: "事务",
-    subObjId: null,
+    object: "事务", //主标签
+    subObjId: null, //子标签id
     // 事务管理列表
     evtTabNames: [],
     lists: [],
@@ -33,7 +40,8 @@ Page({
     evtDesc: "",
     evtTabName: null,
     evtTabId: null,
-    currentItem: -1, //表示当前没有在修改某事务
+    // 当前正修改的事务 在list中的下标
+    currentItem: -1,
   },
 
 
@@ -183,6 +191,8 @@ Page({
   //////////////////////////////
   /// 根据appData.toDoLists
   /// 给页面的 事务管理数据 赋值
+  ///
+  /// **弃用**
   //////////////////////////////
   crtEventData() {
     let openid = wx.getStorageSync("openid");
@@ -201,6 +211,7 @@ Page({
   },
 
   // 查询失败的提示
+  // **弃用**
   showQryError(err) {
     wx.lin.showMessage({
       duration: 2000,
@@ -211,6 +222,7 @@ Page({
   },
 
   // 设置事务分类、描述、todolists
+  // **弃用**
   setEvtData(data) {
     console.log('[数据库] [查询toDoList] 成功: ', data);
     var evtTabNames = [],
@@ -300,7 +312,7 @@ Page({
   },
 
   ///////////////////////
-  /// 页面初始化
+  /// 页面初始化1
   ///////////////////////
   onLoad(options) {
     // 获取屏幕高度(rpx)
@@ -317,64 +329,111 @@ Page({
       }
     });
     this.setHeight();
+    this.openid = wx.getStorageSync('openid');
   },
 
+  ///////////////////////
+  /// 页面初始化2
+  ///////////////////////
   onReady() {
     this.componentTabs = this.selectComponent('#tabs');
     // this.crtEventData();
     // this.crtTimeTabs();
-
-
+    // 上面两个方法是使用云开发。
+    // 现替换为下面的，使用leanCloud数据库：
     new AV.Query('EvtTabs')
       .find()
-      .then(todos => {
-        var data = todos.map(convertEvtTabs);
+      .then(tabs => {
+        var data = tabs.map(convertEvtTab);
         this.crtEvtTabs(data);
+        var query = new AV.Query('EvtItems');
+        query.equalTo('openid', this.openid);
+        query.find()
+          .then(items => {
+            var data = items.map(convertEvtItem);
+            this.crtEvtLists(data);
+            this.resetTabs();
+          })
+          .catch(console.error);
       })
       .catch(console.error);
-
   },
 
+  ///////////////////////
+  /// 创建toDoLists
+  ///////////////////////
+  crtEvtLists(data) {
+    var sizeEvtTabs = this.data.sizeEvtTabs,
+      lists = new Array(sizeEvtTabs),
+      len = data.length;
+    for (var i = 0; i < sizeEvtTabs; i++) {
+      lists[i] = [];
+    }
+    if (len > 0) {
+      for (var i = 0; i < len; i++) {
+        var tabId = data[i].tab;
+        if (tabId >= 0 && tabId < this.data.sizeEvtTabs) {
+          let item = {
+            name: data[i].name
+          };
+          if (data[i].description) {
+            item['description'] = data[i].description;
+          }
+          if (data[i].tag) {
+            item['tag'] = data[i].tag;
+          }
+          lists[tabId].push(item);
+        }
+      }
+      this.setData({
+        lists: lists
+      });
+    }
+  },
+
+  //////////////////////
+  /// 创建事务标签
+  //////////////////////
   crtEvtTabs(data) {
     var evtTabNames = [],
       descriptions = [],
       dubbleTabs = [],
-      //lists = [],
       len = data.length;
     if (len > 0) {
       for (var i = 0; i < len; i++) {
         let dubbleTab = {
           tab: tabNames[0],
           key: "事务管理",
-          subKey: data[i].id,
+          subKey: data[i].id.toString(), //如果不转化为字符串，subKey==0这项会无法显示
           subTab: data[i].name
         };
         dubbleTabs.push(dubbleTab);
         descriptions.push(data[i].name + "：" + data[i].description);
         evtTabNames.push(data[i].name);
-        //lists.push(data[i].list);
       }
       this.setData({
         dubbleTabs: dubbleTabs,
         evtDescriptions: descriptions,
         evtTabNames: evtTabNames,
-        // lists: lists,
-        sizeEvt: len
+        sizeEvtTabs: len
       });
-      this.resetTabs();
     }
   },
 
+  //////////////////////
+  /// 刷新标签
+  //////////////////////
   resetTabs() {
-    // 调用自定义组件tabs的方法
-    this.componentTabs.initTabs();
-    // 
+    this.crtTimeTabs(); //临时凑数 TODO
+    // 初始化当前标签
     this.changeTabs({
       detail: {
         activeKey: 0,
         activeSubKey: 0
       }
     });
+    // 调用自定义组件tabs的方法
+    this.componentTabs.initTabs();
   },
 
   /////////////////////
