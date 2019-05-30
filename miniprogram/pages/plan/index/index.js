@@ -212,24 +212,12 @@ Page({
     } else {
       id = this.data.evtTabId;
     }
-    if (this.data.subObjId == id) {
-      // 赋值list
-      let list = this.data.list;
-      list.push(item);
-      this.setData({
-        list: list
-      });
-    } else {
-      // 赋值lists
-      lists[id].push(item);
-      this.setData({
-        lists: lists
-      });
-    }
+    lists[id].push(item);
+    this.setData({
+      lists: lists,
+      dubbleTabs: this.data.dubbleTabs //必须重新赋值，否则内容不会刷新
+    });
     this.setHeight();
-    // 解决内容无法刷新的bug的笨办法：
-    this.onHide();
-    this.onLoad();
   },
 
   //////////////////////
@@ -239,12 +227,11 @@ Page({
     let list = this.data.list;
     list.splice(this.data.currentItem, 1);
     this.setData({
-      list: list
+      list: list,
+      dubbleTabs: this.data.dubbleTabs //必须重新赋值，否则内容不会刷新
     });
     this.setHeight();
-    // 解决内容无法刷新的bug的笨办法：
-    this.onHide();
-    this.onLoad();
+
   },
 
   ///////////////////////
