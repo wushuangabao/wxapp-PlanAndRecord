@@ -24,17 +24,16 @@ Page({
   data: {
     // 屏幕高度
     height: 1400,
-    // 描述列表
+    // 描述
     evtDescriptions: [],
     description: "",
-    // 标签列表
+    // 标签
     dubbleTabs: [],
     object: "事务", //当前主标签
     subObjId: null, //当前子标签id
-    // 事务管理列表
+    // 事务管理
     evtTabNames: [],
     lists: [],
-    list: [],
     // 弹出层
     showPopup: false,
     inputTag: false,
@@ -47,6 +46,26 @@ Page({
     currentItem: -1,
   },
 
+  ///////////////////////////////
+  /// 改变标签
+  ///////////////////////////////
+  changeTabs(e) {
+    // 修改description,list的内容
+    if (e.detail.currentIndex == 1) {
+      this.setData({
+        description: e.detail.activeKey,
+        object: "日程"
+      });
+    } else {
+      let id = Number(e.detail.activeSubKey);
+      this.setData({
+        description: this.data.evtDescriptions[id],
+        list: this.data.lists[id],
+        object: "事务",
+        subObjId: id
+      });
+    }
+  },
 
   ////////////////////////////////
   /// 弹出层
@@ -67,6 +86,7 @@ Page({
     });
   },
 
+  // 点击背景层
   onBgTap() {
     this.setData({
       showPopup: false
@@ -142,8 +162,10 @@ Page({
   selectTab(e) {
     let id = e.detail.id,
       tabName = e.detail.value;
+    this.setData({
+      evtTabName: tabName
+    });
     this.data.evtTabId = id;
-    this.data.evtTabName = tabName;
   },
 
   ////////////////////////////////
@@ -172,27 +194,6 @@ Page({
       evtData.evtDesc = item.description;
     }
     this.setData(evtData);
-  },
-
-  ///////////////////////////////
-  /// 改变标签
-  ///////////////////////////////
-  changeTabs(e) {
-    // 修改description,list的内容
-    if (e.detail.currentIndex == 1) {
-      this.setData({
-        description: e.detail.activeKey,
-        object: "日程"
-      });
-    } else {
-      let id = Number(e.detail.activeSubKey);
-      this.setData({
-        description: this.data.evtDescriptions[id],
-        list: this.data.lists[id],
-        object: "事务",
-        subObjId: id
-      });
-    }
   },
 
   ///////////////////////
@@ -224,10 +225,10 @@ Page({
   /// 删除事务
   //////////////////////
   deleteEvent() {
-    let list = this.data.list;
-    list.splice(this.data.currentItem, 1);
+    let lists = this.data.lists;
+    lists[this.data.evtTabId].splice(this.data.currentItem, 1);
     this.setData({
-      list: list,
+      lists: lists,
       dubbleTabs: this.data.dubbleTabs //必须重新赋值，否则内容不会刷新
     });
     this.setHeight();
@@ -288,7 +289,7 @@ Page({
           query.find()
             .then(items => {
               var data = items.map(convertEvtItem);
-              // 创建事务内容（todolist）
+              // 创建事务管理的内容
               this.crtEvtLists(data);
               // 创建日程标签 TODO
               this.crtTimeTabs();

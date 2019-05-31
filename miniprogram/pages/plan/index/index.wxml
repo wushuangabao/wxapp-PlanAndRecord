@@ -39,7 +39,7 @@
     </l-radio-group>
     <view style="display:flex;align-items:center;margin-top:30rpx;">
       <switch class="switch" bindchange="switchChange" color="#F4516c" checked="{{inputTag}}" />
-      <input wx:if="{{inputTag}}" maxlength="6" style="margin-left:20rpx;" placeholder="{{evtTag}}" auto-focus bindinput="inputEvtTag" />
+      <input wx:if="{{showPopup && inputTag}}" maxlength="6" style="margin-left:20rpx;" placeholder="{{evtTag}}" auto-focus bindinput="inputEvtTag" />
     </view>
   </view>
 </l-popup>
