@@ -9,7 +9,6 @@
     <view class="tab-content">
       <l-list wx:for="{{lists[item.subKey]}}" wx:for-item="listItem" wx:key="" title="{{listItem.name}}" desc="{{listItem.description}}" tag-content="{{listItem.tag}}" tag-color="#F4516c" bind:lintap="onItemTap" id="{{index}}" />
     </view>
-    <!-- bug:只有重新load之后才会刷新内容 -->
 
   </l-tab>
 

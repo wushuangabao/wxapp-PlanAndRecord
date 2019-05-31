@@ -60,7 +60,6 @@ Page({
       let id = Number(e.detail.activeSubKey);
       this.setData({
         description: this.data.evtDescriptions[id],
-        list: this.data.lists[id],
         object: "事务",
         subObjId: id
       });
@@ -173,7 +172,7 @@ Page({
   ////////////////////////////////
   onItemTap(e) {
     let id = Number(e.currentTarget.id),
-      item = this.data.list[id],
+      item = this.data.lists[this.data.subObjId][id],
       subObjId = this.data.subObjId,
       subObj = this.data.evtTabNames[subObjId],
       evtData = {
@@ -226,13 +225,12 @@ Page({
   //////////////////////
   deleteEvent() {
     let lists = this.data.lists;
-    lists[this.data.evtTabId].splice(this.data.currentItem, 1);
+    lists[this.data.subObjId].splice(this.data.currentItem, 1);
     this.setData({
       lists: lists,
       dubbleTabs: this.data.dubbleTabs //必须重新赋值，否则内容不会刷新
     });
     this.setHeight();
-
   },
 
   ///////////////////////
