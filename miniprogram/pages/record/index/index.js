@@ -66,7 +66,14 @@ Page({
       day = Number(this.data.day),
       arrDate = this.getPreDate(year, month, day);
     if (arrDate) {
-      this.setDate(arrDate[0], arrDate[1], arrDate[2]);
+      // 设置日期
+      setTimeout(() => {
+        this.setDate(arrDate[0], arrDate[1], arrDate[2]);
+      }, this.timeAnim-100);
+      // 输出动画
+      this.setData({
+        animation: this.animRight
+      });
     }
   },
 
@@ -79,7 +86,14 @@ Page({
       day = Number(this.data.day),
       arrDate = this.getNextDate(year, month, day);
     if (arrDate) {
-      this.setDate(arrDate[0], arrDate[1], arrDate[2]);
+      // 设置日期
+      setTimeout(() => {
+        this.setDate(arrDate[0], arrDate[1], arrDate[2]);
+      }, this.timeAnim-100);
+      // 输出动画
+      this.setData({
+        animation: this.animLeft
+      });
     }
   },
 
@@ -95,6 +109,24 @@ Page({
   /// 页面初始化
   //////////////////////
   onLoad: function(options) {
+    // 初始化动画效果
+    this.timeAnim = 200;
+    this.animLeft = wx.createAnimation({
+      timingFunction: "ease-in",
+      duration: this.timeAnim
+    });
+    this.animLeft.translate(-280, 0).step();
+    this.animLeft.translate(0, 0).step({
+      duration: 1
+    });
+    this.animRight = wx.createAnimation({
+      timingFunction: "ease-in",
+      duration: this.timeAnim
+    });
+    this.animRight.translate(280, 0).step();
+    this.animRight.translate(0, 0).step({
+      duration: 1
+    });
     // 初始化记录列表
     let record = wx.getStorageSync("record");
     if (record) {
@@ -227,11 +259,6 @@ Page({
     day++;
     // 检查是否超过了today
     if (day > arrToday[2] && month >= arrToday[1] && year >= arrToday[0]) {
-      wx.lin.showMessage({
-        duration: 2000,
-        type: 'error',
-        content: '你无法记录明天的事情！'
-      });
       return false;
     }
     let mday = 30;

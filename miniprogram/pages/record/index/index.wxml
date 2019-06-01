@@ -1,19 +1,17 @@
 <!--miniprogram/pages/record/index/index.wxml-->
 
-<l-message />
-
-<view class="record-list" style="min-height:{{vHeight-300}}rpx;">
-  <l-list wx:for="{{list}}" wx:key="{{index}}" title="{{item.fLong}}" desc="{{item.content}}" is-link="{{false}}" />
+<view class="record-list" style="min-height:{{vHeight-300}}rpx;" animation="{{animation}}">
+  <l-list l-class-desc="record-desc" l-class-content="time-long" wx:for="{{list}}" wx:key="{{index}}" title="{{item.fLong}}" desc="{{item.content}}" is-link="{{false}}" />
 </view>
 
 <view class="page-btn page-pre" bindtap='onPagePreTap'>
   <l-icon name="left" size="{{45}}" />
 </view>
-<view class="page-btn page-next" bindtap='onPageNextTap'>
+<view class="page-btn page-next" bindtap='onPageNextTap' wx:if="{{date!=today}}">
   <l-icon name="right" size="{{45}}" />
 </view>
 
-<picker mode="date" class="date-picker" value="{{date}}" start="2019-06-01" end="{{today}}" bindchange="selectDate">
+<picker mode="date" class="date-picker" value="{{date}}" start="2019-06-01" end="{{today}}" bindchange="selectDate" animation="{{animation}}">
   <l-grid>
     <l-grid-item key="year" slot="year">
       <view class="num">{{year}}</view>
