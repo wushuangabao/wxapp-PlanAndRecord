@@ -5,11 +5,9 @@
 <l-tabs bind:linchange="changeTabs" id="tabs" height-swiper="{{height}}" l-class-header="l-class-header">
 
   <l-tab wx:for="{{dubbleTabs}}" tab="{{item.tab}}" key="{{item.key}}" sub-key="{{item.subKey}}" sub-tab="{{item.subTab}}" slot="{{item.subKey||item.key}}" wx:key="{{item.subTab||item.key}}">
-
     <view class="tab-content">
-      <l-list wx:for="{{lists[item.subKey]}}" wx:for-item="listItem" wx:key="" title="{{listItem.name}}" desc="{{listItem.description}}" tag-content="{{listItem.tag}}" tag-color="#F4516c" bind:lintap="onItemTap" id="{{index}}" />
+      <l-list wx:for="{{lists[item.subKey]}}" wx:for-item="listItem" wx:key="" title="{{listItem.name}}" desc="{{listItem.description}}" tag-content="{{listItem.tag}}" tag-color="#F4516c" bind:lintap="onItemTap" id="{{index}}" is-link="{{false}}"/>
     </view>
-
   </l-tab>
 
 </l-tabs>
@@ -36,7 +34,7 @@
     <!-- <l-radio-group wx:if="{{currentItem!=-1}}" placement="row" bind:linchange="selectTab" id="radios"> -->
       <l-radio l-title-class="l-title-class" l-class="l-radio" wx:for="{{evtTabNames}}" wx:key="" shape="circle" value="{{item}}" />
     </l-radio-group>
-    <view style="display:flex;align-items:center;margin-top:30rpx;">
+    <view class="add-tag">
       <switch class="switch" bindchange="switchChange" color="#F4516c" checked="{{inputTag}}" />
       <input wx:if="{{showPopup && inputTag}}" maxlength="6" style="margin-left:20rpx;" placeholder="{{evtTag}}" auto-focus bindinput="inputEvtTag" />
     </view>

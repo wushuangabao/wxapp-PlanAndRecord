@@ -1,2 +1,67 @@
 <!--miniprogram/pages/record/index/index.wxml-->
 
+<l-message />
+
+<view class="record-list" style="min-height:{{vHeight-300}}rpx;">
+  <l-list wx:for="{{list}}" wx:key="{{index}}" title="{{item.fLong}}" desc="{{item.content}}" is-link="{{false}}" />
+</view>
+
+<view class="page-btn page-pre" bindtap='onPagePreTap'>
+  <l-icon name="left" size="{{45}}" />
+</view>
+<view class="page-btn page-next" bindtap='onPageNextTap'>
+  <l-icon name="right" size="{{45}}" />
+</view>
+
+<picker mode="date" class="date-picker" value="{{date}}" start="2019-06-01" end="{{today}}" bindchange="selectDate">
+  <l-grid>
+    <l-grid-item key="year" slot="year">
+      <view class="num">{{year}}</view>
+      <view class="text">年</view>
+    </l-grid-item>
+    <l-grid-item key="month" slot="month">
+      <view class="num">{{month}}</view>
+      <view class="text">月</view>
+    </l-grid-item>
+    <l-grid-item key="day" slot="day">
+      <view class="num">{{day}}</view>
+      <view class="text">日</view>
+    </l-grid-item>
+  </l-grid>
+</picker>
+
+<view class="new-record">
+  <l-grid rowNum="{{4}}" show-col-border="true" bind:lintap="onAddTap">
+    <l-grid-item wx:for="{{tagsTime}}" wx:key="{{index}}" key="{{index}}" slot="{{index}}">
+      <l-icon name="add" size="{{35}}" /> {{item.name}}
+    </l-grid-item>
+  </l-grid>
+</view>
+
+<l-popup show="{{showPopup}}" content-align="center" bind:lintap="onBgTap">
+  <view class="popup">
+
+    <!-- <view style="display:flex;">
+      <l-button wx:if="{{currentItem!=-1}}" l-class="button deleteBtn" size="medium" bind:lintap="onDeleteTap">
+        删除
+      </l-button>
+      <l-button l-class="button" style="margin-left:{{currentItem==-1?500:40}}rpx;" size="medium" bind:lintap="onConfirmTap">
+        {{currentItem==-1?"确认":"修改"}}
+      </l-button>
+    </view> -->
+
+    <view class="time-selector">
+      <l-count-selector count="0" min="0" max="12" />
+      <view class="time-unit">小时</view>
+      <l-count-selector count="0" min="0" max="55" step="5" />
+      <view class="time-unit">分钟</view>
+    </view>
+
+
+
+    <l-input label="记录" placeholder="请记录你做了什么事情" value="{{evtName}}" bind:linchange="inputRecord" clear="{{true}}" />
+
+
+
+  </view>
+</l-popup>

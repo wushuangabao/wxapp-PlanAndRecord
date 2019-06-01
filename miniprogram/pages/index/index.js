@@ -16,6 +16,12 @@ Page({
     });
   },
 
+  goToRecord() {
+    wx.switchTab({
+      url: "../record/index/index"
+    });
+  },
+
   onLoad: function() {
     if (!wx.cloud) {
       wx.redirectTo({
@@ -41,9 +47,9 @@ Page({
     });
     // 获取openid并跳转页面
     if (!wx.getStorageSync("openid"))
-      this.getOpenid(this.goToPlan);
+      this.getOpenid(this.goToRecord);
     else
-      this.goToPlan();
+      this.goToRecord();
   },
 
   onGetUserInfo: function(e) {
