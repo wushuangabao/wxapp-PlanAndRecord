@@ -28,11 +28,11 @@
   position: fixed;
   top: 38%;
   z-index: 9;
-  background-color: rgb(236, 255, 199);
-  border: 1px solid rgb(236, 255, 199);
+  background-color: rgb(66, 117, 199);
+  border: 1px solid rgb(66, 114, 192);
   display: flex;
   align-items: center;
-  box-shadow: 0 0 16rpx 0px rgba(180, 183, 189, 0.5);
+  box-shadow: 0 0 26rpx 2px rgba(68, 71, 75, 0.507);
 }
 
 .page-pre {

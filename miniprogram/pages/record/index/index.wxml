@@ -5,10 +5,10 @@
 </view>
 
 <view class="page-btn page-pre" bindtap='onPagePreTap'>
-  <l-icon name="left" size="{{45}}" />
+  <l-icon name="left" size="{{45}}" color="white" />
 </view>
 <view class="page-btn page-next" bindtap='onPageNextTap' wx:if="{{date!=today}}">
-  <l-icon name="right" size="{{45}}" />
+  <l-icon name="right" size="{{45}}" color="white" />
 </view>
 
 <picker mode="date" class="date-picker" value="{{date}}" start="2019-06-01" end="{{today}}" bindchange="selectDate" animation="{{animation}}">

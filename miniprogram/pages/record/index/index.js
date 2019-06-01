@@ -61,15 +61,21 @@ Page({
   /// 向前翻页
   /////////////////////
   onPagePreTap() {
+    if (!this.canChangePage)
+      return;
     let year = Number(this.data.year),
       month = Number(this.data.month),
       day = Number(this.data.day),
       arrDate = this.getPreDate(year, month, day);
     if (arrDate) {
+      this.canChangePage= false;
+      setTimeout(() => {
+        this.canChangePage= true;
+      }, this.timeAnim);
       // 设置日期
       setTimeout(() => {
         this.setDate(arrDate[0], arrDate[1], arrDate[2]);
-      }, this.timeAnim-100);
+      }, this.timeAnim - 100);
       // 输出动画
       this.setData({
         animation: this.animRight
@@ -81,15 +87,21 @@ Page({
   /// 向后翻页
   /////////////////////
   onPageNextTap() {
+    if (!this.canChangePage)
+      return;
     let year = Number(this.data.year),
       month = Number(this.data.month),
       day = Number(this.data.day),
       arrDate = this.getNextDate(year, month, day);
     if (arrDate) {
+      this.canChangePage = false;
+      setTimeout(() => {
+        this.canChangePage = true;
+      }, this.timeAnim);
       // 设置日期
       setTimeout(() => {
         this.setDate(arrDate[0], arrDate[1], arrDate[2]);
-      }, this.timeAnim-100);
+      }, this.timeAnim - 100);
       // 输出动画
       this.setData({
         animation: this.animLeft
@@ -109,6 +121,7 @@ Page({
   /// 页面初始化
   //////////////////////
   onLoad: function(options) {
+    this.canChangePage= true,
     // 初始化动画效果
     this.timeAnim = 200;
     this.animLeft = wx.createAnimation({
