@@ -397,13 +397,13 @@ Page({
   /////////////////////
   setHeight() {
     let maxSize = 0,
-      height = 480,
+      height = 650,
       lists = this.data.lists;
     for (var i = 0; i < lists.length; i++) {
       if (lists[i].length > maxSize)
         maxSize = lists[i].length;
     }
-    if (maxSize > 5) {
+    if (maxSize > 7) {
       height = 88 * maxSize;
       // 超出屏幕，提示事务太多
       if (height > this.data.vHeight) {
