@@ -3,6 +3,7 @@
 // TODO: 
 // 将数据保存到云端数据库
 // 自定义事务的标签
+// 构建 项目管理表
 
 const tabNames = ["事务管理", "日程管理", "项目管理"],
   appData = getApp().globalData,
@@ -290,7 +291,7 @@ Page({
               // 创建事务管理的内容
               this.crtEvtLists(data);
               // 创建日程标签 TODO
-              this.crtTimeTabs();
+              // this.crtTimeTabs();
               // 刷新标签（重新渲染）
               this.resetTabs();
               console.log("已完成plan数据的下载！");
@@ -384,7 +385,7 @@ Page({
     var dubbleTabs = this.data.dubbleTabs;
     dubbleTabs.push({
       tab: tabNames[1],
-      key: "日程管理：从时间的维度，锁定重要的事情。"
+      key: "日程管理：从时间的维度，锁定重要的事情。（开发中）"
     });
     this.setData({
       dubbleTabs: dubbleTabs
@@ -424,72 +425,7 @@ Page({
   /// 离开页面
   ////////////////////
   onHide() {
-    console.log("onHide");
+    // console.log("onHide");
     wx.setStorageSync('planData', this.data);
-  },
-
-  //////////////////////////////
-  /// 根据appData.toDoLists
-  /// 给页面的 事务管理数据 赋值
-  ///
-  /// **弃用**
-  //////////////////////////////
-  crtEventData() {
-    let openid = wx.getStorageSync("openid");
-    // 查询当前用户的toDoList
-    wx.cloud.database().collection('toDoList').where({
-      _openid: openid
-    }).get({
-      success: res => {
-        this.setEvtData(res.data);
-        this.resetTabs();
-      },
-      fail: err => {
-        this.showQryError(err);
-      }
-    });
-  },
-
-  // 查询失败的提示
-  // **弃用**
-  showQryError(err) {
-    wx.lin.showMessage({
-      duration: 2000,
-      type: 'error',
-      content: '数据库查询失败！'
-    });
-    console.error('[数据库] [查询记录] 失败：', err);
-  },
-
-  // 设置事务分类、描述、todolists
-  // **弃用**
-  setEvtData(data) {
-    console.log('[数据库] [查询toDoList] 成功: ', data);
-    var evtTabNames = [],
-      descriptions = [],
-      dubbleTabs = [],
-      lists = [],
-      len = data.length;
-    if (len > 0) {
-      for (var i = 0; i < len; i++) {
-        let dubbleTab = {
-          tab: tabNames[0],
-          key: "事务管理",
-          subKey: data[i].id,
-          subTab: data[i].name
-        };
-        dubbleTabs.push(dubbleTab);
-        descriptions.push(data[i].name + "：" + data[i].description);
-        evtTabNames.push(data[i].name);
-        lists.push(data[i].list);
-      }
-      this.setData({
-        dubbleTabs: dubbleTabs,
-        evtDescriptions: descriptions,
-        evtTabNames: evtTabNames,
-        lists: lists,
-        sizeEvt: len
-      });
-    }
   }
 })

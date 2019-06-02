@@ -68,10 +68,11 @@ Page({
       day = Number(this.data.day),
       arrDate = this.getPreDate(year, month, day);
     if (arrDate) {
-      this.canChangePage= false;
+      // 暂时禁止翻页
+      this.canChangePage = false;
       setTimeout(() => {
-        this.canChangePage= true;
-      }, this.timeAnim);
+        this.canChangePage = true;
+      }, this.timeAnim + 100);
       // 设置日期
       setTimeout(() => {
         this.setDate(arrDate[0], arrDate[1], arrDate[2]);
@@ -94,10 +95,11 @@ Page({
       day = Number(this.data.day),
       arrDate = this.getNextDate(year, month, day);
     if (arrDate) {
+      // 暂时禁止翻页
       this.canChangePage = false;
       setTimeout(() => {
         this.canChangePage = true;
-      }, this.timeAnim);
+      }, this.timeAnim + 100);
       // 设置日期
       setTimeout(() => {
         this.setDate(arrDate[0], arrDate[1], arrDate[2]);
@@ -121,9 +123,9 @@ Page({
   /// 页面初始化
   //////////////////////
   onLoad: function(options) {
-    this.canChangePage= true,
-    // 初始化动画效果
-    this.timeAnim = 200;
+    this.canChangePage = true,
+      // 初始化动画效果
+      this.timeAnim = 200;
     this.animLeft = wx.createAnimation({
       timingFunction: "ease-in",
       duration: this.timeAnim
