@@ -1,7 +1,7 @@
 // miniprogram/pages/record/index/index.js
 
 // 不同类别的事件标签的标识（颜色）
-const EvtColors = ["rgb(214,133,234)", "rgb(29,114,200)", "rgb(114,0,255)"];
+const EvtColors = ["rgb(235,103,204)", "rgb(29,114,200)", "rgb(114,0,255)"];
 
 Page({
 
@@ -62,7 +62,7 @@ Page({
   // 选择事件标签
   onEvtTagTap(e) {
     console.log(e);
-    let sheetList=[];
+    let sheetList = [];
     // case: 修改记录
     if (e.type == "tap") {
       let listId = e.currentTarget.dataset.listid,
@@ -295,16 +295,14 @@ Page({
   // 遍历tagsEvent字典，为事件标签赋EvtColors中的颜色，存储到tagsEvtColor字典中。
   // 每一类别的颜色相同，EvtColors的长度==类别的个数。
   setEvtColor(tagsEvtColor, tagsEvent, color) {
-    let evtLevel = level;
-    if (!evtLevel) {
-      evtLevel = 0; //第0类标签（"输入"）
-    } else if (EvtColors.length < evtLevel + 1)
-      return;
     let len = tagsEvent.length;
     for (var i = 0; i < len; i++) {
-      tagsEvtColor[tagsEvent[i].name] = EvtColors[i];
+      let evtColor = color;
+      if (!evtColor)
+        evtColor = EvtColors[i];
+      tagsEvtColor[tagsEvent[i].name] = evtColor;
       if (tagsEvent[i].list) {
-        this.setEvtColor(tagsEvtColor, tagsEvent[i].list, evtLevel + 1);
+        this.setEvtColor(tagsEvtColor, tagsEvent[i].list, evtColor);
       }
     }
   },
