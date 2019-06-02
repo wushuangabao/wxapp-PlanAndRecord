@@ -8,6 +8,7 @@
     "l-grid": "/miniprogram_npm/lin-ui/grid/index",
     "l-tag": "/miniprogram_npm/lin-ui/tag/index",
     "l-icon": "/miniprogram_npm/lin-ui/icon/index",
-    "l-count-selector": "/miniprogram_npm/lin-ui/count-selector/index"
+    "l-count-selector": "/miniprogram_npm/lin-ui/count-selector/index",
+    "l-action-sheet":"/miniprogram_npm/lin-ui/action-sheet/index"
   }
 }

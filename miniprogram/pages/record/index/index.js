@@ -1,4 +1,8 @@
 // miniprogram/pages/record/index/index.js
+
+// 不同类别的事件标签的标识（颜色）
+const EvtColors = ["rgb(214,133,234)", "rgb(29,114,200)", "rgb(114,0,255)"];
+
 Page({
 
   data: {
@@ -10,13 +14,14 @@ Page({
     today: "", //当天的日期
     // 弹出层
     showPopup: false,
+    record: "",
     content: "",
     long: 0, //以min为单位
     tagTimeId: 0,
-    tagEvtId: [0],
+    tagEvtId: [],
     // 记录列表
     list: [{
-        content: "一条记录最多能写几个字",
+        content: "一条记录最多能写几个字三四五六",
         long: 65,
         fLong: "1h 5min",
         tagTimeId: 0,
@@ -34,7 +39,7 @@ Page({
         long: 10,
         fLong: "10min",
         tagTimeId: 2,
-        tagEvt: ["输出", "编程", "做游戏"]
+        tagEvt: ["输出", "画画"]
       },
       {
         content: "一条记录",
@@ -57,6 +62,64 @@ Page({
   // 选择事件标签
   onEvtTagTap(e) {
     console.log(e);
+    let sheetList=[];
+    // case: 修改记录
+    if (e.type == "tap") {
+      let listId = e.currentTarget.dataset.listid,
+        evtId = e.currentTarget.id,
+        nameTags = list[listId].tagEvt,
+        nameTag = nameTags[evtId];
+
+      this.listId = listId;
+    }
+    // case: 新增记录
+    else {
+
+    }
+    // 显示ActionSheet
+    wx.lin.showActionSheet({
+      itemList: sheetList,
+      title: "修改事件标签"
+    });
+    //this.sheetList=sheetList;
+    this.tagType = "evt";
+  },
+
+  // 选择时间标签
+  onTimeTagTap(e) {
+    let id = e.currentTarget.dataset.listid,
+      tagsTime = this.data.tagsTime,
+      sheetList = [],
+      lenTags = tagsTime.length;
+    for (var i = 0; i < lenTags; i++) {
+      let item = {
+        name: tagsTime[i].name
+      };
+      if (i == this.data.list[id].tagTimeId)
+        item.color = "rgb(24,104,233)";
+      sheetList.push(item);
+    }
+    wx.lin.showActionSheet({
+      itemList: sheetList,
+      title: "修改时间标签"
+    });
+    //this.sheetList=sheetList;
+    this.listId = id;
+    this.tagType = "time";
+  },
+
+  // 选择标签（ActionSheet）
+  selectTag(e) {
+    let id = e.detail.index,
+      list = this.data.list;
+    if (this.tagType == "time") {
+      list[this.listId].tagTimeId = id;
+    } else if (this.tagType == "evt") {
+      //list[this.listId].tagEvt = id;
+    }
+    this.setData({
+      list: list
+    });
   },
 
   // 选择日期
@@ -73,8 +136,8 @@ Page({
 
   // 新增记录
   onAddTap(e) {
-    this.data.tagTimeId = e.detail.index;
     this.setData({
+      tagTimeId: e.detail.index,
       showPopup: true,
     });
   },
@@ -128,6 +191,22 @@ Page({
       });
     }
   },
+
+  inputRecord(e) {
+    this.setData({
+      record: e.detail.detail.value
+    });
+  },
+
+  onBgTap(e) {
+    // 判断记录的信息是否填完全。若是，增添记录。
+    // 
+    this.setData({
+      showPopup: false
+    });
+  },
+
+
 
   //////////////////////
   /// 页面隐藏
@@ -202,8 +281,7 @@ Page({
       tagsTimeColor.push("rgba(63,149,0," + num + ")");
     }
     // 初始化事件标签渲染用到的数据
-    // this.setEvtColor(tagsEvtColor, tagsEvent, ["rgb(214,133,234)", "rgb(29,114,200)", "rgb(114,0,255)"]);
-    this.setEvtColor(tagsEvtColor, tagsEvent, ["rgb(214,133,234)", false, "rgb(114,0,255)"]);
+    this.setEvtColor(tagsEvtColor, tagsEvent);
     // 数据绑定
     this.setData({
       tagsTime: tagsTime, //时间标签名称和描述
@@ -214,19 +292,19 @@ Page({
     });
   },
 
-  // 遍历tagsEvent字典，为事件标签赋arrStrColor中的颜色，存储到tagsEvtColor字典中。
-  // 每一层级的颜色相同，arrStrColor的长度决定遍历到哪一层级。
-  setEvtColor(tagsEvtColor, tagsEvent, arrStrColor, level) {
+  // 遍历tagsEvent字典，为事件标签赋EvtColors中的颜色，存储到tagsEvtColor字典中。
+  // 每一类别的颜色相同，EvtColors的长度==类别的个数。
+  setEvtColor(tagsEvtColor, tagsEvent, color) {
     let evtLevel = level;
     if (!evtLevel) {
-      evtLevel = 0; //第0层标签（输入、输出、休闲）
-    } else if (arrStrColor.length < evtLevel + 1)
+      evtLevel = 0; //第0类标签（"输入"）
+    } else if (EvtColors.length < evtLevel + 1)
       return;
     let len = tagsEvent.length;
     for (var i = 0; i < len; i++) {
-      tagsEvtColor[tagsEvent[i].name] = arrStrColor[evtLevel];
+      tagsEvtColor[tagsEvent[i].name] = EvtColors[i];
       if (tagsEvent[i].list) {
-        this.setEvtColor(tagsEvtColor, tagsEvent[i].list, arrStrColor, evtLevel + 1);
+        this.setEvtColor(tagsEvtColor, tagsEvent[i].list, evtLevel + 1);
       }
     }
   },

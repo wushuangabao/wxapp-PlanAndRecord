@@ -34,7 +34,7 @@ Page({
     subObjId: null, //当前子标签id
     // 事务管理
     evtTabNames: [],
-    lists: [],
+    lists: [[],[],[],[]],
     // 弹出层
     showPopup: false,
     inputTag: false,
