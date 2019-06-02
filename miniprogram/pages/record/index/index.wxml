@@ -1,7 +1,12 @@
 <!--miniprogram/pages/record/index/index.wxml-->
 
 <view class="record-list" style="min-height:{{vHeight-300}}rpx;" animation="{{animation}}">
-  <l-list l-class-desc="record-desc" l-class-content="time-long" wx:for="{{list}}" wx:key="{{index}}" title="{{item.fLong}}" desc="{{item.content}}" is-link="{{false}}" />
+  <l-list l-class-desc="record-desc" l-class-content="time-long" wx:for="{{list}}" wx:for-index="lid" wx:key="{{lid}}" title="{{item.fLong}}" desc="{{item.content}}" is-link="{{false}}">
+    <view slot="right-section">
+      <l-tag wx:for="{{item.tagEvt}}" wx:key="{{index}}" wx:for-item="tag" wx:if="{{tagsEvtColor[tag]}}" shape="square" bg-color="{{tagsEvtColor[tag]}}" class="list-tag" id="{{index}}" data-listId="{{lid}}" catch:tap="onEvtTagTap">{{tag}}</l-tag>
+      <l-tag class="list-tag" shape="circle" bg-color="{{tagsTimeColor[item.tagTimeId]}}" data-listId="{{lid}}" catch:tap="onTimeTagTap">{{tagsTimeOneChar[item.tagTimeId]}}</l-tag>
+    </view>
+  </l-list>
 </view>
 
 <view class="page-btn page-pre" bindtap='onPagePreTap'>
@@ -39,15 +44,6 @@
 <l-popup show="{{showPopup}}" content-align="center" bind:lintap="onBgTap">
   <view class="popup">
 
-    <!-- <view style="display:flex;">
-      <l-button wx:if="{{currentItem!=-1}}" l-class="button deleteBtn" size="medium" bind:lintap="onDeleteTap">
-        删除
-      </l-button>
-      <l-button l-class="button" style="margin-left:{{currentItem==-1?500:40}}rpx;" size="medium" bind:lintap="onConfirmTap">
-        {{currentItem==-1?"确认":"修改"}}
-      </l-button>
-    </view> -->
-
     <view class="time-selector">
       <l-count-selector count="0" min="0" max="12" />
       <view class="time-unit">小时</view>
@@ -57,7 +53,7 @@
 
 
 
-    <l-input label="记录" placeholder="请记录你做了什么事情" value="{{evtName}}" bind:linchange="inputRecord" clear="{{true}}" />
+    <l-input label="记录" placeholder="请记录你做了什么事情" value="{{evtName}}" bind:linchange="inputRecord" clear="{{true}}" maxlength="{{14}}" />
 
 
 

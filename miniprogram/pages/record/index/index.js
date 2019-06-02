@@ -16,26 +16,50 @@ Page({
     tagEvtId: [0],
     // 记录列表
     list: [{
-        content: "一条记录",
+        content: "一条记录最多能写几个字",
         long: 65,
         fLong: "1h 5min",
-        tagTime: "深度工作",
+        tagTimeId: 0,
         tagEvt: ["输入", "音频", "听得到"]
       },
       {
         content: "一条记录",
         long: 10,
         fLong: "10min",
-        tagTime: "深度工作",
-        tagEvt: ["输入", "音频", "听得到"]
+        tagTimeId: 1,
+        tagEvt: ["输出", "编程", "做应用"]
+      },
+      {
+        content: "一条记录",
+        long: 10,
+        fLong: "10min",
+        tagTimeId: 2,
+        tagEvt: ["输出", "编程", "做游戏"]
+      },
+      {
+        content: "一条记录",
+        long: 10,
+        fLong: "10min",
+        tagTimeId: 3,
+        tagEvt: ["休闲", "运动", "健身运动"]
       }
     ],
     currentItem: -1,
   },
 
-  /////////////////////
-  /// 点击，选择日期
-  /////////////////////
+
+  /////////////////////////
+  ///
+  /// 操作反馈
+  ///
+  /////////////////////////
+
+  // 选择事件标签
+  onEvtTagTap(e) {
+    console.log(e);
+  },
+
+  // 选择日期
   selectDate(e) {
     let strDate = e.detail.value,
       arrDate = strDate.split("-");
@@ -47,9 +71,7 @@ Page({
     });
   },
 
-  /////////////////////
-  /// 点击，新增记录
-  /////////////////////
+  // 新增记录
   onAddTap(e) {
     this.data.tagTimeId = e.detail.index;
     this.setData({
@@ -57,9 +79,7 @@ Page({
     });
   },
 
-  /////////////////////
-  /// 向前翻页
-  /////////////////////
+  // 向前翻页
   onPagePreTap() {
     if (!this.canChangePage)
       return;
@@ -84,9 +104,7 @@ Page({
     }
   },
 
-  /////////////////////
-  /// 向后翻页
-  /////////////////////
+  // 向后翻页
   onPageNextTap() {
     if (!this.canChangePage)
       return;
@@ -119,12 +137,37 @@ Page({
       wx.setStorageSync("record", this.data.list);
   },
 
-  //////////////////////
+
+
+  ///////////////////////////////
+  ///
   /// 页面初始化
-  //////////////////////
+  ///
+  ///////////////////////////////
+
   onLoad: function(options) {
+    // 初始化翻页动画效果
+    this.initAnimation();
+    // 设置屏幕高度(rpx)
+    this.setVHeight();
+    // 初始化标签
+    this.initTags();
+    // 初始化日期
+    let date = this.getNowFormatDate();
+    this.setData({
+      today: date
+    });
+    this.selectDate({
+      detail: {
+        value: date
+      }
+    });
+    // 初始化记录列表
+    this.initRecordList();
+  },
+
+  initAnimation() {
     this.canChangePage = true,
-      // 初始化动画效果
       this.timeAnim = 200;
     this.animLeft = wx.createAnimation({
       timingFunction: "ease-in",
@@ -142,7 +185,54 @@ Page({
     this.animRight.translate(0, 0).step({
       duration: 1
     });
-    // 初始化记录列表
+  },
+
+  initTags() {
+    let tagsEvent = getApp().globalData.eventTag,
+      tagsTime = getApp().globalData.timeTag,
+      tagsTimeOneChar = [],
+      tagsTimeColor = [],
+      tagsEvtColor = {};
+    // 初始化时间标签渲染用到的数据
+    let len = tagsTime.length,
+      step = 0.5 / len;
+    for (var i = 0; i < len; i++) {
+      tagsTimeOneChar.push(tagsTime[i].name.slice(0, 1));
+      let num = (0.5 + i * step).toString();
+      tagsTimeColor.push("rgba(63,149,0," + num + ")");
+    }
+    // 初始化事件标签渲染用到的数据
+    // this.setEvtColor(tagsEvtColor, tagsEvent, ["rgb(214,133,234)", "rgb(29,114,200)", "rgb(114,0,255)"]);
+    this.setEvtColor(tagsEvtColor, tagsEvent, ["rgb(214,133,234)", false, "rgb(114,0,255)"]);
+    // 数据绑定
+    this.setData({
+      tagsTime: tagsTime, //时间标签名称和描述
+      tagsTimeOneChar: tagsTimeOneChar, //时间标签首字符
+      tagsTimeColor: tagsTimeColor, //时间标签颜色
+      tagsEvent: tagsEvent, //事件标签名称和描述
+      tagsEvtColor: tagsEvtColor //事件标签颜色
+    });
+  },
+
+  // 遍历tagsEvent字典，为事件标签赋arrStrColor中的颜色，存储到tagsEvtColor字典中。
+  // 每一层级的颜色相同，arrStrColor的长度决定遍历到哪一层级。
+  setEvtColor(tagsEvtColor, tagsEvent, arrStrColor, level) {
+    let evtLevel = level;
+    if (!evtLevel) {
+      evtLevel = 0; //第0层标签（输入、输出、休闲）
+    } else if (arrStrColor.length < evtLevel + 1)
+      return;
+    let len = tagsEvent.length;
+    for (var i = 0; i < len; i++) {
+      tagsEvtColor[tagsEvent[i].name] = arrStrColor[evtLevel];
+      if (tagsEvent[i].list) {
+        this.setEvtColor(tagsEvtColor, tagsEvent[i].list, arrStrColor, evtLevel + 1);
+      }
+    }
+  },
+
+  // 初始化记录列表
+  initRecordList() {
     let record = wx.getStorageSync("record");
     if (record) {
       this.setData({
@@ -151,7 +241,9 @@ Page({
     } else {
       // todo:从leancloud查询
     }
-    // 获取屏幕高度(rpx)
+  },
+
+  setVHeight() {
     let that = this;
     wx.getSystemInfo({
       success: function(res) {
@@ -164,20 +256,9 @@ Page({
         });
       }
     });
-    // 初始化日期和标签
-    let globalData = getApp().globalData,
-      date = this.getNowFormatDate();
-    this.setData({
-      tagsTime: globalData.timeTag,
-      tagsEvent: globalData.eventTag,
-      today: date
-    });
-    this.selectDate({
-      detail: {
-        value: date
-      }
-    });
   },
+
+
 
   //////////////////////////
   /// 格式化时长
