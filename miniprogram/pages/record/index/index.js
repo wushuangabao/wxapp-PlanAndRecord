@@ -76,6 +76,10 @@ Page({
     else {
 
     }
+    sheetList.push({
+      name: "新增标签",
+      color: "rgb(24,104,233)"
+    });
     // 显示ActionSheet
     wx.lin.showActionSheet({
       itemList: sheetList,
@@ -274,11 +278,11 @@ Page({
       tagsEvtColor = {};
     // 初始化时间标签渲染用到的数据
     let len = tagsTime.length,
-      step = 0.5 / len;
+      step = 0.4 / len;
     for (var i = 0; i < len; i++) {
       tagsTimeOneChar.push(tagsTime[i].name.slice(0, 1));
-      let num = (0.5 + i * step).toString();
-      tagsTimeColor.push("rgba(63,149,0," + num + ")");
+      let num = (0.6 + i * step).toString();
+      tagsTimeColor.push("rgba(53,139,40," + num + ")");
     }
     // 初始化事件标签渲染用到的数据
     this.setEvtColor(tagsEvtColor, tagsEvent);
