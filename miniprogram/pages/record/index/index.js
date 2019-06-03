@@ -1,5 +1,9 @@
 // miniprogram/pages/record/index/index.js
 
+// TODO:
+// 自定义标签
+// 服务器数据交互
+
 // 不同类别的事件标签的标识（颜色）
 const EvtColors = ["rgb(235,103,204)", "rgb(29,114,200)", "rgb(114,0,255)"];
 
@@ -30,34 +34,12 @@ Page({
     tagEvt: [],
     // 记录列表-----------------------
     list: [{
-        content: "一条记录最多能写几个字三四五六",
-        long: 65,
-        fLong: "1h 5min",
-        tagTimeId: 0,
-        tagEvt: ["输入", "音频", "听得到"]
-      },
-      {
-        content: "一条记录",
-        long: 10,
-        fLong: "10min",
-        tagTimeId: 1,
-        tagEvt: ["输出", "编程", "做应用"]
-      },
-      {
-        content: "一条记录",
-        long: 10,
-        fLong: "10min",
-        tagTimeId: 2,
-        tagEvt: ["输出", "画画"]
-      },
-      {
-        content: "一条记录",
-        long: 10,
-        fLong: "10min",
-        tagTimeId: 3,
-        tagEvt: ["休闲", "运动", "健身运动"]
-      }
-    ],
+      content: "一条记录最多能写几个字三四五六",
+      long: 65,
+      fLong: "1h 5min",
+      tagTimeId: 0,
+      tagEvt: ["输入", "音频", "听得到"]
+    }],
   },
 
 
@@ -79,6 +61,39 @@ Page({
     this.setData({
       tagEvt: tagEvt
     });
+    if (this.setRecord())
+      this.setData({
+        showPopup: false
+      });
+  },
+
+  // 设置（新增或更新）一条记录
+  setRecord() {
+    let content = this.data.record,
+      long = this.data.min + this.data.hour * 60,
+      tagEvt = this.data.tagEvt;
+    if (content && long > 0 && tagEvt.length > 0) {
+      let list = this.data.list,
+        fLong = long >= 60 ? this.data.hour + "h " : "";
+      if (this.data.min > 0)
+        fLong = fLong + this.data.min + "min";
+      let item = {
+        content: content,
+        long: long,
+        fLong: fLong,
+        tagTimeId: this.data.tagTimeId,
+        tagEvt: tagEvt
+      };
+      if (this.listId == list.length)
+        list.push(item);
+      else
+        list[this.listId] = item;
+      this.setData({
+        list: list
+      });
+      return true;
+    } else
+      return false;
   },
 
   // 多项选择器某列改变
@@ -218,8 +233,11 @@ Page({
     this.setData({
       tagTimeId: e.detail.index,
       showPopup: true,
+      hour: 0,
+      min: 0,
+      record: ""
     });
-    this.listId = this.list.length;
+    this.listId = this.data.list.length;
   },
 
   // 向前翻页
@@ -236,7 +254,7 @@ Page({
       setTimeout(() => {
         this.canChangePage = true;
       }, this.timeAnim + 100);
-      // 设置日期
+      // 设置日期和记录列表
       setTimeout(() => {
         this.setDate(arrDate[0], arrDate[1], arrDate[2]);
       }, this.timeAnim - 100);
@@ -261,7 +279,7 @@ Page({
       setTimeout(() => {
         this.canChangePage = true;
       }, this.timeAnim + 100);
-      // 设置日期
+      // 设置日期和记录列表
       setTimeout(() => {
         this.setDate(arrDate[0], arrDate[1], arrDate[2]);
       }, this.timeAnim - 100);
@@ -294,6 +312,7 @@ Page({
     this.setData({
       showPopup: false
     });
+    this.setRecord();
   },
 
   // 选择事件标签
@@ -324,7 +343,8 @@ Page({
   //////////////////////
   onHide() {
     if (this.data.date === this.data.today)
-      wx.setStorageSync("record", this.data.list);
+      wx.setStorageSync("record" + this.data.today, this.data.list);
+    // todo:上传到云端
   },
 
 
@@ -426,7 +446,8 @@ Page({
     this.traverseTags(this.data.tagsEvent, function(obj) {
       for (var i = 0; i < 3; i++)
         if (obj.level == i)
-          multiArray[i].push(obj.name);
+          if (i == 0 || obj.parentName == multiArray[i - 1][0])
+            multiArray[i].push(obj.name);
     });
     this.setData({
       multiArray: multiArray
@@ -435,7 +456,7 @@ Page({
 
   // 初始化记录列表
   initRecordList() {
-    let record = wx.getStorageSync("record");
+    let record = wx.getStorageSync("record" + this.data.today);
     if (record) {
       this.setData({
         list: record
@@ -487,6 +508,7 @@ Page({
       if (obj.list)
         for (var i = 0; i < obj.list.length; i++) {
           obj.list[i].level = level + 1;
+          obj.list[i].parentName = obj.name;
           queue.push(obj.list[i]);
         }
     }
@@ -531,21 +553,28 @@ Page({
     return s;
   },
 
-  //////////////////////
-  /// 设置日期数据
-  //////////////////////
+  ///////////////////////////////
+  /// 设置日期，刷新记录列表
+  ///////////////////////////////
   setDate(year, month, day) {
+    wx.setStorageSync("record" + this.data.date, this.data.list);
+    // todo: 数据库操作
     if (month >= 1 && month <= 9) {
       month = "0" + month;
     }
     if (day >= 0 && day <= 9) {
       day = "0" + day;
     }
+    let date = year + "-" + month + "-" + day,
+      record = wx.getStorageSync("record" + date);
+    if (!record)
+      record = [];
     this.setData({
-      date: year + "-" + month + "-" + day,
+      date: date,
       year: year.toString(),
       month: month.toString(),
-      day: day.toString()
+      day: day.toString(),
+      list: record
     });
   },
 
