@@ -8,9 +8,9 @@ Page({
   data: {
     // 事件标签选择的MultiPicker-------
     multiArray: [
-      ['输入', '输出'],
-      ['阅读', '视频', '音频'],
-      ['微信号', '专业书', '小说', '其他书']
+      [],
+      [],
+      []
     ],
     multiIndex: [0, 0, 0],
     // 时间标签选择的ActionSheet-------
@@ -67,87 +67,51 @@ Page({
   ///
   /////////////////////////////////////////
 
+  // 多列选择器选定->事件标签改变
   bindMultiPickerChange: function(e) {
     let arrId = e.detail.value,
-      arrEvt = thia.data.multiArray,
+      arrEvt = this.data.multiArray,
       len = arrEvt.length,
       tagEvt = [];
-    for (var i = 0; i < len; i++) {
-      tagEvt.push(arrEvt[i][arrId[i]]);
-    }
+    for (var i = 0; i < len; i++)
+      if (arrEvt[i][arrId[i]])
+        tagEvt.push(arrEvt[i][arrId[i]]);
     this.setData({
       tagEvt: tagEvt
     });
   },
 
+  // 多项选择器某列改变
   bindMultiPickerColumnChange: function(e) {
     var data = {
-      multiArray: this.data.multiArray,
-      multiIndex: this.data.multiIndex
-    };
+        multiArray: this.data.multiArray,
+        multiIndex: this.data.multiIndex
+      },
+      events = this.data.tagsEvent;
     data.multiIndex[e.detail.column] = e.detail.value;
     switch (e.detail.column) {
-      // 修改第1列
       case 0:
-        switch (data.multiIndex[0]) {
-          // 改为第1类
-          case 0:
-            data.multiArray[1] = ['扁性动物', '线形动物', '环节动物', '软体动物', '节肢动物'];
-            data.multiArray[2] = ['猪肉绦虫', '吸血虫'];
-            break;
-            // 改为第2类
-          case 1:
-            data.multiArray[1] = ['鱼', '两栖动物', '爬行动物'];
-            data.multiArray[2] = ['鲫鱼', '带鱼'];
-            break;
+        // 第1列改变->2、3列改变
+        for (var i = 0; i < events.length; i++) {
+          if (data.multiIndex[0] == i) {
+            data.multiArray[1] = this.getArrEvt(events[i].list);
+            data.multiArray[2] = this.getArrEvt(events[i].list[0].list);
+          }
         }
         data.multiIndex[1] = 0;
         data.multiIndex[2] = 0;
         break;
-        // 修改第2列
       case 1:
-        switch (data.multiIndex[0]) {
-          // 改为第1类中的...
-          case 0:
-            switch (data.multiIndex[1]) {
-              // 改为第1类中的第1类
-              case 0:
-                data.multiArray[2] = ['猪肉绦虫', '吸血虫'];
-                break;
-                // 改为第1类中的第2类
-              case 1:
-                data.multiArray[2] = ['蛔虫'];
-                break;
-              case 2:
-                data.multiArray[2] = ['蚂蚁', '蚂蟥'];
-                break;
-              case 3:
-                data.multiArray[2] = ['河蚌', '蜗牛', '蛞蝓'];
-                break;
-              case 4:
-                data.multiArray[2] = ['昆虫', '甲壳动物', '蛛形动物', '多足动物'];
-                break;
-            }
-            break;
-            // 改为第1类中的...
-          case 1:
-            switch (data.multiIndex[1]) {
-              case 0:
-                data.multiArray[2] = ['鲫鱼', '带鱼'];
-                break;
-              case 1:
-                data.multiArray[2] = ['青蛙', '娃娃鱼'];
-                break;
-              case 2:
-                data.multiArray[2] = ['蜥蜴', '龟', '壁虎'];
-                break;
-            }
-            break;
+        // 第2列改变->第3列改变
+        for (var i = 0; i < events[data.multiIndex[0]].list.length; i++) {
+          if (data.multiIndex[1] == i) {
+            data.multiArray[2] = this.getArrEvt(events[data.multiIndex[0]].list[i].list);
+          }
         }
         data.multiIndex[2] = 0;
         break;
     }
-    console.log(data.multiIndex);
+    // console.log(data.multiIndex);
     this.setData(data);
   },
 
@@ -255,6 +219,7 @@ Page({
       tagTimeId: e.detail.index,
       showPopup: true,
     });
+    this.listId = this.list.length;
   },
 
   // 向前翻页
@@ -389,6 +354,8 @@ Page({
     });
     // 初始化记录列表
     this.initRecordList();
+    // 初始化MultiPicker渲染用到的数据
+    this.initMultiArray();
   },
 
   initAnimation() {
@@ -453,6 +420,19 @@ Page({
     }
   },
 
+  // 初始化MultiPicker渲染用到的数据
+  initMultiArray() {
+    let multiArray = this.data.multiArray;
+    this.traverseTags(this.data.tagsEvent, function(obj) {
+      for (var i = 0; i < 3; i++)
+        if (obj.level == i)
+          multiArray[i].push(obj.name);
+    });
+    this.setData({
+      multiArray: multiArray
+    });
+  },
+
   // 初始化记录列表
   initRecordList() {
     let record = wx.getStorageSync("record");
@@ -480,17 +460,55 @@ Page({
     });
   },
 
-  /////////////////////////
-  /// 找到事件标签数组
-  /// 根据id数组
-  /////////////////////////
-  findEvts(arr) {
-    return evts;
+
+  /////////////////////////////////////
+  /// 层次遍历tagsEvent数组
+  /// 按遍历顺序，对每个事件标签执行func
+  /////////////////////////////////////
+  traverseTags(tagsEvent, func) {
+    let queue = [],
+      level = 0;
+    // 第1层（level==0）元素入队
+    for (var i = 0; i < tagsEvent.length; i++) {
+      tagsEvent[i].level = level;
+      queue.push(tagsEvent[i]);
+    }
+    while (queue.length > 0) {
+      // 取出队列头元素obj
+      let obj = queue.shift();
+      // 执行func
+      if (func)
+        func(obj);
+      // 判断本层级是否已经遍历完毕
+      if (obj.level > level) {
+        level++;
+      }
+      // 将obj的子元素加入队列
+      if (obj.list)
+        for (var i = 0; i < obj.list.length; i++) {
+          obj.list[i].level = level + 1;
+          queue.push(obj.list[i]);
+        }
+    }
   },
 
-  ////////////////////////
+  //////////////////////////////////////
+  /// 获取事件标签数组
+  /// 从[{name:"xx",...}]转换为["xx"]
+  //////////////////////////////////////
+  getArrEvt(list) {
+    if (!list || list.length == 0)
+      return [];
+    let arr = [];
+    for (var i = 0; i < list.length; i++) {
+      arr.push(list[i].name);
+    }
+    return arr;
+  },
+
+  //////////////////////////////
   /// 设置hour和min
-  ////////////////////////
+  //////////////////////////////
   setHourAndMin(l) {
     let h = Math.floor(l / 60),
       m = l - h * 60;
