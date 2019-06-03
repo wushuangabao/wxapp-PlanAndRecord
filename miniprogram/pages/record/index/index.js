@@ -6,20 +6,29 @@ const EvtColors = ["rgb(235,103,204)", "rgb(29,114,200)", "rgb(114,0,255)"];
 Page({
 
   data: {
-    // 日期
+    // 事件标签选择的MultiPicker-------
+    multiArray: [
+      ['输入', '输出'],
+      ['阅读', '视频', '音频'],
+      ['微信号', '专业书', '小说', '其他书']
+    ],
+    multiIndex: [0, 0, 0],
+    // 时间标签选择的ActionSheet-------
+    showTimeSheet: false,
+    // 日期---------------------------
     year: "",
     month: "",
     day: "",
     date: "", //选择的日期
     today: "", //当天的日期
-    // 弹出层
+    // 弹出层------------------------
     showPopup: false,
     record: "",
-    content: "",
-    long: 0, //以min为单位
+    min: 0,
+    hour: 0,
     tagTimeId: 0,
-    tagEvtId: [],
-    // 记录列表
+    tagEvt: [],
+    // 记录列表-----------------------
     list: [{
         content: "一条记录最多能写几个字三四五六",
         long: 65,
@@ -49,81 +58,183 @@ Page({
         tagEvt: ["休闲", "运动", "健身运动"]
       }
     ],
-    currentItem: -1,
   },
 
 
-  /////////////////////////
+  /////////////////////////////////////////
   ///
   /// 操作反馈
   ///
-  /////////////////////////
+  /////////////////////////////////////////
 
-  // 选择事件标签
-  onEvtTagTap(e) {
-    console.log(e);
-    let sheetList = [];
-    // case: 修改记录
-    if (e.type == "tap") {
-      let listId = e.currentTarget.dataset.listid,
-        evtId = e.currentTarget.id,
-        nameTags = list[listId].tagEvt,
-        nameTag = nameTags[evtId];
-
-      this.listId = listId;
+  bindMultiPickerChange: function(e) {
+    let arrId = e.detail.value,
+      arrEvt = thia.data.multiArray,
+      len = arrEvt.length,
+      tagEvt = [];
+    for (var i = 0; i < len; i++) {
+      tagEvt.push(arrEvt[i][arrId[i]]);
     }
-    // case: 新增记录
-    else {
-
-    }
-    sheetList.push({
-      name: "新增标签",
-      color: "rgb(24,104,233)"
+    this.setData({
+      tagEvt: tagEvt
     });
-    // 显示ActionSheet
+  },
+
+  bindMultiPickerColumnChange: function(e) {
+    var data = {
+      multiArray: this.data.multiArray,
+      multiIndex: this.data.multiIndex
+    };
+    data.multiIndex[e.detail.column] = e.detail.value;
+    switch (e.detail.column) {
+      // 修改第1列
+      case 0:
+        switch (data.multiIndex[0]) {
+          // 改为第1类
+          case 0:
+            data.multiArray[1] = ['扁性动物', '线形动物', '环节动物', '软体动物', '节肢动物'];
+            data.multiArray[2] = ['猪肉绦虫', '吸血虫'];
+            break;
+            // 改为第2类
+          case 1:
+            data.multiArray[1] = ['鱼', '两栖动物', '爬行动物'];
+            data.multiArray[2] = ['鲫鱼', '带鱼'];
+            break;
+        }
+        data.multiIndex[1] = 0;
+        data.multiIndex[2] = 0;
+        break;
+        // 修改第2列
+      case 1:
+        switch (data.multiIndex[0]) {
+          // 改为第1类中的...
+          case 0:
+            switch (data.multiIndex[1]) {
+              // 改为第1类中的第1类
+              case 0:
+                data.multiArray[2] = ['猪肉绦虫', '吸血虫'];
+                break;
+                // 改为第1类中的第2类
+              case 1:
+                data.multiArray[2] = ['蛔虫'];
+                break;
+              case 2:
+                data.multiArray[2] = ['蚂蚁', '蚂蟥'];
+                break;
+              case 3:
+                data.multiArray[2] = ['河蚌', '蜗牛', '蛞蝓'];
+                break;
+              case 4:
+                data.multiArray[2] = ['昆虫', '甲壳动物', '蛛形动物', '多足动物'];
+                break;
+            }
+            break;
+            // 改为第1类中的...
+          case 1:
+            switch (data.multiIndex[1]) {
+              case 0:
+                data.multiArray[2] = ['鲫鱼', '带鱼'];
+                break;
+              case 1:
+                data.multiArray[2] = ['青蛙', '娃娃鱼'];
+                break;
+              case 2:
+                data.multiArray[2] = ['蜥蜴', '龟', '壁虎'];
+                break;
+            }
+            break;
+        }
+        data.multiIndex[2] = 0;
+        break;
+    }
+    console.log(data.multiIndex);
+    this.setData(data);
+  },
+
+  // 选择一条记录
+  onRecordTap(e) {
+    this.tagType = "record";
+    this.listId = Number(e.currentTarget.id);
     wx.lin.showActionSheet({
-      itemList: sheetList,
-      title: "修改事件标签"
+      itemList: [{
+        name: "修改记录内容"
+      }, {
+        name: "修改时间标签"
+      }, {
+        name: "删除记录"
+      }],
     });
-    //this.sheetList=sheetList;
-    this.tagType = "evt";
   },
 
   // 选择时间标签
   onTimeTagTap(e) {
-    let id = e.currentTarget.dataset.listid,
-      tagsTime = this.data.tagsTime,
+    this.listId = e.currentTarget.dataset.listid;
+    this.startChangeTagTime();
+  },
+
+  // 开始修改时间标签
+  startChangeTagTime() {
+    this.tagType = "time";
+    let tagsTime = this.data.tagsTime,
       sheetList = [],
       lenTags = tagsTime.length;
     for (var i = 0; i < lenTags; i++) {
       let item = {
         name: tagsTime[i].name
       };
-      if (i == this.data.list[id].tagTimeId)
+      if (i == this.data.list[this.listId].tagTimeId)
         item.color = "rgb(24,104,233)";
       sheetList.push(item);
     }
-    wx.lin.showActionSheet({
-      itemList: sheetList,
-      title: "修改时间标签"
+    this.setData({
+      showTimeSheet: true,
+      timeSheetList: sheetList
     });
-    //this.sheetList=sheetList;
-    this.listId = id;
-    this.tagType = "time";
   },
 
-  // 选择标签（ActionSheet）
+  // 选择ActionSheet某项
   selectTag(e) {
-    let id = e.detail.index,
-      list = this.data.list;
+    let id = e.detail.index;
     if (this.tagType == "time") {
+      // 修改时间标签
+      let list = this.data.list;
       list[this.listId].tagTimeId = id;
-    } else if (this.tagType == "evt") {
-      //list[this.listId].tagEvt = id;
+      this.setData({
+        list: list
+      });
+    } else if (this.tagType == "record") {
+      // 修改记录内容
+      if (id == 0) {
+        let listItem = this.data.list[this.listId];
+        this.setHourAndMin(listItem.long);
+        this.setData({
+          tagTimeId: listItem.tagTimeId,
+          record: listItem.content,
+          tagEvt: listItem.tagEvt,
+          showPopup: true,
+        });
+      }
+      // 准备修改时间标签
+      else if (id == 1) {
+        this.startChangeTagTime();
+      }
+      // 删除记录
+      else if (id == 2) {
+        let list = this.data.list;
+        list.splice(this.listId, 1);
+        this.setData({
+          list: list
+        });
+      }
     }
-    this.setData({
-      list: list
-    });
+    // else if (this.tagType == "evt") {
+    //   // 重新选择标签
+    //   if(id==0){
+    //   }
+    //   // 创建新的标签
+    //   else if(id==1){
+    //   }
+    // }
   },
 
   // 选择日期
@@ -202,13 +313,44 @@ Page({
     });
   },
 
+  onHourChange(e) {
+    this.setData({
+      hour: e.detail.count
+    });
+  },
+
+  onMinChange(e) {
+    this.setData({
+      min: e.detail.count
+    });
+  },
+
   onBgTap(e) {
-    // 判断记录的信息是否填完全。若是，增添记录。
-    // 
     this.setData({
       showPopup: false
     });
   },
+
+  // 选择事件标签
+  // onEvtTagTap(e) {
+  // console.log(e);
+  // let sheetList = [{
+  //   name: "重新选择标签"
+  // }, {
+  //   name: "创建新的标签"
+  // }];
+  // // let listId = e.currentTarget.dataset.listid,
+  // //   evtId = e.currentTarget.id,
+  // //   nameTags = list[listId].tagEvt,
+  // //   nameTag = nameTags[evtId];
+  // wx.lin.showActionSheet({
+  //   itemList: sheetList,
+  //   title: "事件标签操作"
+  // });
+  // //this.sheetList=sheetList;
+  // this.tagType = "evt";
+  // this.listId = e.currentTarget.dataset.listid;
+  // },
 
 
 
@@ -338,7 +480,25 @@ Page({
     });
   },
 
+  /////////////////////////
+  /// 找到事件标签数组
+  /// 根据id数组
+  /////////////////////////
+  findEvts(arr) {
+    return evts;
+  },
 
+  ////////////////////////
+  /// 设置hour和min
+  ////////////////////////
+  setHourAndMin(l) {
+    let h = Math.floor(l / 60),
+      m = l - h * 60;
+    this.setData({
+      hour: h,
+      min: m
+    });
+  },
 
   //////////////////////////
   /// 格式化时长

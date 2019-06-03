@@ -51,31 +51,24 @@ App({
           list: [{
               name: "阅读",
               list: [{
-                  name: "读微信公号"
+                  name: "微信号"
                 },
                 {
-                  name: "读IT类书籍"
+                  name: "专业书"
                 }, {
-                  name: "读非虚构书籍"
+                  name: "小说"
                 }, {
-                  name: "读小说"
+                  name: "其他书"
                 }
               ]
             },
             {
               name: "视频",
               list: [{
-                  name: "学习类"
+                  name: "学视频"
                 },
                 {
-                  name: "休闲类",
-                  list: [{
-                    name: "看动漫"
-                  }, {
-                    name: "看电影"
-                  }, {
-                    name: "看连续剧"
-                  }]
+                  name: "影剧漫",
                 }
               ]
             },
@@ -96,7 +89,7 @@ App({
                   name: "写自媒体"
                 },
                 {
-                  name: "写学习笔记",
+                  name: "写笔记",
                 }
               ]
             },

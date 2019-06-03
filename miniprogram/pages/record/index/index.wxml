@@ -1,9 +1,10 @@
 <!--miniprogram/pages/record/index/index.wxml-->
 
 <view class="record-list" style="min-height:{{vHeight-300}}rpx;" animation="{{animation}}">
-  <l-list l-class-desc="record-desc" l-class-content="time-long" wx:for="{{list}}" wx:for-index="lid" wx:key="{{lid}}" title="{{item.fLong}}" desc="{{item.content}}" is-link="{{false}}">
+  <l-list l-class-desc="record-desc" l-class-content="time-long" wx:for="{{list}}" wx:for-index="lid" wx:key="{{lid}}" title="{{item.fLong}}" desc="{{item.content}}" is-link="{{false}}" id="{{lid}}" bind:lintap="onRecordTap">
     <view slot="right-section">
-      <l-tag wx:for="{{item.tagEvt}}" wx:key="{{index}}" wx:for-item="tag" wx:if="{{index==0||item.tagEvt.length-1==index}}" shape="square" bg-color="{{tagsEvtColor[tag]}}" class="list-tag" id="{{index}}" data-listId="{{lid}}" catch:tap="onEvtTagTap">{{tag}}</l-tag>
+      <l-tag wx:for="{{item.tagEvt}}" wx:key="{{index}}" wx:for-item="tag" wx:if="{{index==0||item.tagEvt.length-1==index}}" shape="square" bg-color="{{tagsEvtColor[tag]}}" class="list-tag" id="{{index}}" data-listId="{{lid}}">{{tag}}</l-tag>
+      <!-- ↑↑↑暂时不开发catch:tap="onEvtTagTap"功能↑↑↑ -->
       <l-tag class="list-tag" shape="circle" bg-color="{{tagsTimeColor[item.tagTimeId]}}" data-listId="{{lid}}" catch:tap="onTimeTagTap">{{tagsTimeOneChar[item.tagTimeId]}}</l-tag>
     </view>
   </l-list>
@@ -46,17 +47,22 @@
 
     <view class="time-selector">
       <view class="tag-time time-unit">{{tagsTime[tagTimeId].name}}</view>
-      <l-count-selector count="0" min="0" max="12" />
+      <l-count-selector count="{{hour}}" min="0" max="12" bind:lintap="onHourChange" />
       <view class="time-unit">小时</view>
-      <l-count-selector count="0" min="0" max="55" step="5" />
+      <l-count-selector count="{{min}}" min="0" max="55" step="5" bind:lintap="onMinChange" />
       <view class="time-unit">分钟</view>
     </view>
 
     <l-input label="记录：" label-layout="right" label-width="{{160}}" placeholder="请记录你做了什么事情|15字内" value="{{record}}" bind:linchange="inputRecord" clear="{{true}}" maxlength="{{15}}">
-      <l-button slot="right" l-class="button" size="mini" bind:lintap="onEvtTagTap">选择标签</l-button>
+      <picker slot="right" mode="multiSelector" bindchange="bindMultiPickerChange" bindcolumnchange="bindMultiPickerColumnChange" value="{{multiIndex}}" range="{{multiArray}}">
+        <!-- 当前选择：{{multiArray[0][multiIndex[0]]}}，{{multiArray[1][multiIndex[1]]}}，{{multiArray[2][multiIndex[2]]}} -->
+        <l-button l-class="button" size="mini">选择标签</l-button>
+        <!-- ↑↑↑暂时不开发catch:tap="onEvtTagTap"功能↑↑↑ -->
+      </picker>
     </l-input>
 
   </view>
 </l-popup>
 
-<l-action-sheet l-class-title="action-title" bind:linitemtap="selectTag"/>
+<l-action-sheet l-class-title="action-title" bind:linitemtap="selectTag" />
+<l-action-sheet l-class-title="action-title" bind:linitemtap="selectTag" show="{{showTimeSheet}}" item-list="{{timeSheetList}}" title="修改时间标签" open-api="{{false}}" />
