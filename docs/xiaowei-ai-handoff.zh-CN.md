@@ -1,6 +1,8 @@
 # 小微 AI Handoff 模式开发规范
 
-本文件描述将微信小程序接入“小微 AI Agent + AI Handoff”的标准流程，并约束后续在本仓库新增或修改 AI 能力时的实现方式。本规范自包含，不依赖仓库中的 README、示例 Skill 或既有业务页面。
+本文件描述将微信小程序接入微信开发工具“小微 AI Agent + AI Handoff”能力的标准流程，并约束后续新增或修改该开发工具能力时的实现方式。本规范自包含，不依赖仓库中的 README、示例 Skill 或既有业务页面。
+
+> **范围说明**：小微 AI Agent 与 AI Handoff 是微信开发工具提供的开发与接入能力，不等同于产品面向用户的 AI 功能。本文件不定义 Plan & Record 的产品功能或分期；产品范围仍以 `docs/product-design.zh-CN.md` 为准。
 
 ## 1. 先设计能力，再写页面
 
