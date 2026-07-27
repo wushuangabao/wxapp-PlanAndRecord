@@ -104,14 +104,16 @@ flowchart LR
 - `originRuleId?`、`originOccurrenceId?`、`originRuleSummarySnapshot?`
 - `tags[]?`
 
-允许时间重叠，但在保存时给出提醒；例如用户可能希望保留“通勤时听课程”这种双重归类。
+允许时间重叠，但在保存时给出提醒；例如用户可能希望保留“通勤时听课程”这种双重归类。分类、项目、总投入、容量和预测统计均直接累加每条纳入统计的日志 `durationMinutes`，不按墙钟区间去重，因此汇总时长可以大于真实经过的墙钟时长。
+
+用户视图中的统计页，在当前显示时间范围内发现两条或以上纳入当前统计口径的日志存在时间交集时，必须显示非阻断的“重叠时间”提示。提示列出每组重叠的两个任务及重叠分钟数。同一对日志在同一显示范围内只提示一次；相邻但不相交的时间区间不构成重叠。默认只检测 `confirmed` 日志，用户选择“包含候选估算”时一并检测 `candidate` 日志。
 
 首版所有日期、时间和重复规则均使用运行设备的默认时区解释和展示；实体、重复规则和实例标识中都不保存或传递独立时区字段。跨设备的时区一致性不属于首版范围，留待后续同步设计。
 
 ### 3.3 其他核心对象边界
 
 - `Category` 至少包含稳定 `id`、名称和 `active / archived` 状态。每个本地资料库都有不可删除的“未分类”；用户没有选择分类时使用它。已被日志引用的其他分类只能归档，归档后不再用于新记录；日志保留 `categoryNameSnapshot`。
-- `Project.status` 只使用 `active / archived`；归档是可恢复的状态转换，放弃是需要二次确认的删除操作，不增加第三种项目状态。首版活动项目上限由唯一的领域配置常量 `MAX_ACTIVE_PROJECTS = 5` 表示；新增项目和 Wish 转换都必须使用该常量校验，归档项目不计入上限。
+- `Project.status` 只使用 `active / archived`；项目即使长期没有进展或暂时搁置，仍保持 `active`。归档只用于已完成项目，且是可恢复的状态转换；放弃是需要二次确认的删除操作，不增加第三种项目状态。首版活动项目上限由唯一的领域配置常量 `MAX_ACTIVE_PROJECTS = 5` 表示；新增项目和 Wish 转换都必须使用该常量校验，归档项目不计入上限。
 - OKR 作为 `Project` 聚合内的值集合随项目保存和删除，不单独成为可脱离项目存在的顶层实体。
 - `Task` 至少包含稳定 `id`、不超过 25 个字符的标题、`status`、可选 `projectId`、`projectNameSnapshot` 和 `completedAt`。`status` 只使用 `inbox / todo / completed`：新备忘录为 `inbox`，整理后转为 `todo`，完成后转为 `completed`；完成任务可重新打开为 `todo`。
 - `CalendarEvent` 只表达计划时间块，至少包含稳定 `id`、开始/结束时间、可选任务/项目关联及其名称快照，以及可选重复规则关联和 `repeatRuleSummarySnapshot?`；它不承载 `TimeLog` 的事实状态。`TimeLog` 可以通过 `calendarEventId` 关联计划块，用于计算计划与实际偏差。
