@@ -7,7 +7,7 @@
 .section-title { margin-bottom: 20rpx; font-size: 32rpx; font-weight: 700; }
 .input { box-sizing: border-box; width: 100%; min-height: 74rpx; margin: 14rpx 0; padding: 16rpx; border: 1rpx solid #cbd5e1; border-radius: 12rpx; }
 .field-row { display: flex; gap: 16rpx; margin: 14rpx 0; }
-.field-row > * { flex: 1; padding: 16rpx; border-radius: 12rpx; background: #f8fafc; }
+.field-row > picker, .field-row > input { flex: 1; padding: 16rpx; border-radius: 12rpx; background: #f8fafc; }
 .field-row .input { margin: 0; background: #ffffff; }
 .primary, .secondary { margin-top: 12rpx; border-radius: 14rpx; font-size: 28rpx; }
 .primary { background: #22c55e; color: #052e16; font-weight: 700; }
