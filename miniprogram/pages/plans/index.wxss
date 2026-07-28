@@ -1,0 +1,23 @@
+.page { padding: 44rpx 32rpx 72rpx; }
+.hero { margin-bottom: 30rpx; }
+.eyebrow { color: #16a34a; font-size: 22rpx; font-weight: 700; letter-spacing: 3rpx; }
+.title { margin-top: 16rpx; font-size: 56rpx; font-weight: 700; }
+.subtitle, .muted, .empty { color: #64748b; font-size: 26rpx; line-height: 1.6; }
+.card { margin-top: 24rpx; padding: 30rpx; border-radius: 24rpx; background: #ffffff; }
+.section-title { margin-bottom: 20rpx; font-size: 32rpx; font-weight: 700; }
+.input { box-sizing: border-box; width: 100%; min-height: 74rpx; margin: 14rpx 0; padding: 16rpx; border: 1rpx solid #cbd5e1; border-radius: 12rpx; }
+.field-row { display: flex; gap: 16rpx; margin: 14rpx 0; }
+.field-row > * { flex: 1; padding: 16rpx; border-radius: 12rpx; background: #f8fafc; }
+.field-row .input { margin: 0; background: #ffffff; }
+.primary, .secondary { margin-top: 12rpx; border-radius: 14rpx; font-size: 28rpx; }
+.primary { background: #22c55e; color: #052e16; font-weight: 700; }
+.secondary { background: #dcfce7; color: #166534; }
+.item { padding: 24rpx 0; border-top: 1rpx solid #eef2f7; }
+.project-item:first-of-type { border-top: 0; }
+.item-title { font-size: 30rpx; font-weight: 600; }
+.actions { display: flex; gap: 22rpx; margin-top: 14rpx; }
+.text-button, .danger-button { display: inline; margin: 0; padding: 0; background: transparent; color: #15803d; font-size: 25rpx; text-align: left; }
+.danger-button { color: #dc2626; }
+.picker { margin: 18rpx 0; padding: 18rpx; border-radius: 12rpx; background: #f8fafc; color: #334155; }
+.okr { margin-top: 14rpx; padding: 16rpx; border-left: 6rpx solid #86efac; background: #f0fdf4; font-size: 26rpx; }
+.modal-mask { position: fixed; z-index: 9; top: 0; right: 0; bottom: 0; left: 0; display: flex; align-items: flex-end; background: rgba(15,23,42,.45); }.modal { box-sizing: border-box; width: 100%; padding: 36rpx 32rpx calc(36rpx + env(safe-area-inset-bottom)); border-radius: 30rpx 30rpx 0 0; background: #ffffff; }.modal-title { margin-bottom: 20rpx; font-size: 36rpx; font-weight: 700; }.modal .link { display: block; width: 100%; margin-top: 28rpx; text-align: center; }.link { display: inline; margin: 0; padding: 0; background: transparent; color: #15803d; font-size: 25rpx; }

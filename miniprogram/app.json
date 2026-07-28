@@ -1,0 +1,41 @@
+{
+  "pages": [
+    "pages/timer/index",
+    "pages/plans/index",
+    "pages/calendar/index",
+    "pages/profile/index"
+  ],
+  "window": {
+    "navigationBarTitleText": "Plan & Record",
+    "navigationBarBackgroundColor": "#f8fafc",
+    "navigationBarTextStyle": "black",
+    "backgroundColor": "#f8fafc",
+    "backgroundTextStyle": "light"
+  },
+  "tabBar": {
+    "color": "#64748b",
+    "selectedColor": "#2563eb",
+    "backgroundColor": "#ffffff",
+    "borderStyle": "white",
+    "list": [
+      {
+        "pagePath": "pages/timer/index",
+        "text": "记录"
+      },
+      {
+        "pagePath": "pages/plans/index",
+        "text": "计划"
+      },
+      {
+        "pagePath": "pages/calendar/index",
+        "text": "日历"
+      },
+      {
+        "pagePath": "pages/profile/index",
+        "text": "我的"
+      }
+    ]
+  },
+  "style": "v2",
+  "sitemapLocation": "sitemap.json"
+}

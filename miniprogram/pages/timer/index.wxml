@@ -1,0 +1,44 @@
+<view class="page">
+  <view class="eyebrow">PLAN &amp; RECORD</view>
+  <view class="timer-card">
+    <view class="status">{{statusLabel}}</view>
+    <view class="elapsed">{{elapsed}}</view>
+    <view class="unit">时 : 分</view>
+    <button class="primary" bindtap="onPrimary">{{primaryLabel}}</button>
+    <button wx:if="{{timer.status !== 'idle' && timer.status !== 'ended'}}" class="secondary" bindtap="onFinishTimer">结束计时</button>
+  </view>
+
+  <view class="section">
+    <view class="section-title">本次记录</view>
+    <input class="text-input" placeholder="备注（可稍后补充）" value="{{note}}" bindinput="onNoteInput" />
+    <view class="picker-row">
+      <picker range="{{categories}}" range-key="name" value="{{categoryIndex}}" data-key="categoryIndex" bindchange="onPickerChange"><view>分类：{{categories[categoryIndex].name || '未分类'}}</view></picker>
+      <picker range="{{projects}}" range-key="title" value="{{projectIndex}}" data-key="projectIndex" bindchange="onPickerChange"><view>项目：{{projects[projectIndex].title || '未选择'}}</view></picker>
+      <picker range="{{tasks}}" range-key="title" value="{{taskIndex}}" data-key="taskIndex" bindchange="onPickerChange"><view>任务：{{tasks[taskIndex].title || '未选择'}}</view></picker>
+      <picker range="{{events}}" range-key="title" value="{{eventIndex}}" data-key="eventIndex" bindchange="onPickerChange"><view>计划块：{{events[eventIndex].title || '未关联'}}</view></picker>
+    </view>
+    <button wx:if="{{timer.status !== 'idle'}}" class="link-button" bindtap="onSaveTimerDraft">保存本次字段</button>
+  </view>
+
+  <button class="outline-button" bindtap="openManual">手工补录</button>
+
+  <view class="section">
+    <view class="section-title">最近记录</view>
+    <view wx:if="{{!recentLogs.length}}" class="empty">还没有记录。开始一次计时，或补录过去的时间。</view>
+    <view wx:for="{{recentLogs}}" wx:key="id" class="log-row">
+      <view>{{item.displayTitle}}</view>
+      <view class="muted">{{item.displayTime}} · {{item.status === 'candidate' ? '候选' : '实际'}}</view>
+    </view>
+  </view>
+
+  <view wx:if="{{showManual}}" class="modal-mask">
+    <view class="modal" catchtap="noop">
+      <view class="modal-title">手工补录</view>
+      <picker mode="date" value="{{manualDate}}" data-key="manualDate" bindchange="onManualField"><view class="picker-field">日期：{{manualDate}}</view></picker>
+      <picker mode="time" value="{{manualStartTime}}" data-key="manualStartTime" bindchange="onManualField"><view class="picker-field">开始：{{manualStartTime}}</view></picker>
+      <picker mode="time" value="{{manualEndTime}}" data-key="manualEndTime" bindchange="onManualField"><view class="picker-field">结束：{{manualEndTime}}</view></picker>
+      <input class="text-input" placeholder="备注（可选）" value="{{manualNote}}" data-key="manualNote" bindinput="onManualField" />
+      <view class="modal-actions"><button class="secondary" bindtap="closeManual">取消</button><button class="primary small" bindtap="onManualSave">保存记录</button></view>
+    </view>
+  </view>
+</view>

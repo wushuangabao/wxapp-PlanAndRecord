@@ -116,7 +116,9 @@ flowchart LR
 - `Project.status` 只使用 `active / archived`；项目即使长期没有进展或暂时搁置，仍保持 `active`。归档只用于已完成项目，且是可恢复的状态转换；放弃是需要二次确认的删除操作，不增加第三种项目状态。首版活动项目上限由唯一的领域配置常量 `MAX_ACTIVE_PROJECTS = 5` 表示；新增项目和 Wish 转换都必须使用该常量校验，归档项目不计入上限。
 - OKR 作为 `Project` 聚合内的值集合随项目保存和删除，不单独成为可脱离项目存在的顶层实体。
 - `Task` 至少包含稳定 `id`、不超过 25 个字符的标题、`status`、可选 `projectId`、`projectNameSnapshot` 和 `completedAt`。`status` 只使用 `inbox / todo / completed`：新备忘录为 `inbox`，整理后转为 `todo`，完成后转为 `completed`；完成任务可重新打开为 `todo`。
-- `CalendarEvent` 只表达计划时间块，至少包含稳定 `id`、开始/结束时间、可选任务/项目关联及其名称快照，以及可选重复规则关联和 `repeatRuleSummarySnapshot?`；它不承载 `TimeLog` 的事实状态。`TimeLog` 可以通过 `calendarEventId` 关联计划块，用于计算计划与实际偏差。
+- `OKR` 的关键结果只包含标题、当前值与目标值；当前值和目标值均为 `[0, 100]` 范围内的整数，界面以百分号展示。关键结果不保存单位字段。
+- `CalendarEvent` 只表达计划时间块，至少包含稳定 `id`、开始/结束时间、可选任务/项目关联及其名称快照，以及可选重复规则关联和 `repeatRuleSummarySnapshot?`；它不承载 `TimeLog` 的事实状态。计划块可选优先级为整数 `1` 到 `MAX_PLAN_PRIORITY = 3`，界面仅以由浅到深的绿色表示优先级，禁止显示数值或优先级文字。`TimeLog` 可以通过 `calendarEventId` 关联计划块，用于计算计划与实际偏差。
+- 首版重复规则支持每日、每周（指定星期）和每月（按日期），均可设置正整数间隔值。
 
 ## 4. 首版体验设计
 

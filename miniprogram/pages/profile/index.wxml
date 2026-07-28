@@ -1,0 +1,20 @@
+<view class="page">
+  <view class="hero"><view class="eyebrow">LOCAL PROFILE</view><view class="title">我的</view><view class="subtitle">不登录、不上传；数据只保存在当前设备。</view></view>
+
+  <view class="risk">清理微信缓存、卸载微信或更换设备可能导致本地数据丢失。首版没有云端恢复，JSON 仅供主动导出查看，暂不支持导入恢复。</view>
+
+  <view class="card">
+    <view class="section-title">本周复盘</view>
+    <view wx:if="{{review}}" class="review-grid"><view><text class="metric">{{review.totalMinutes}}</text><text>投入分钟</text></view><view><text class="metric">{{review.logCount}}</text><text>记录数</text></view><view><text class="metric">{{review.completedTaskCount}}</text><text>完成任务</text></view><view><text class="metric">{{review.nonPlannedMinutes}}</text><text>非计划实际</text></view></view>
+    <view class="switch-row"><view>包含候选估算</view><switch checked="{{includeCandidates}}" color="#16a34a" bindchange="onCandidatesChange" /></view>
+  </view>
+
+  <view class="card"><view class="section-title">分类投入</view><view wx:if="{{!categoryStats.length}}" class="empty">本周还没有纳入统计的实际记录。</view><view wx:for="{{categoryStats}}" wx:key="id" class="stat-row"><view>{{item.name}}</view><view>{{item.durationMinutes}} 分钟</view></view></view>
+  <view class="card"><view class="section-title">项目投入</view><view wx:if="{{!projectStats.length}}" class="empty">暂无项目投入。</view><view wx:for="{{projectStats}}" wx:key="id" class="stat-row"><view>{{item.name}}</view><view>{{item.durationMinutes}} 分钟</view></view></view>
+  <view class="card"><view class="section-title">计划与实际偏差</view><view wx:if="{{!variance.length}}" class="empty">本周没有计划块。</view><view wx:for="{{variance}}" wx:key="eventId" class="stat-row"><view>{{item.title}}</view><view>计划 {{item.plannedMinutes}} / 实际 {{item.actualMinutes}} / 偏差 {{item.varianceMinutes}} 分钟</view></view></view>
+  <view wx:if="{{overlaps.length}}" class="warning"><view>发现重叠时间（不阻断保存）</view><view wx:for="{{overlaps}}" wx:key="firstLogId" class="warning-detail">{{item.firstTitle}} 与 {{item.secondTitle}} 重叠 {{item.minutes}} 分钟</view></view>
+
+  <view class="card"><view class="section-title">分类管理</view><input class="input" placeholder="新分类名称" value="{{categoryName}}" data-key="categoryName" bindinput="onField" /><button class="secondary" bindtap="addCategory">新增分类</button><view wx:for="{{categories}}" wx:key="id" class="category-row"><view wx:if="{{renameId !== item.id}}"><view>{{item.name}}</view><view class="muted">{{item.status === 'active' ? '可用于新记录' : '已归档'}}</view><view class="actions"><button class="text-button" data-item="{{item}}" bindtap="startRename">重命名</button><button wx:if="{{!item.isSystem && item.status === 'active'}}" class="text-button" data-id="{{item.id}}" bindtap="archiveCategory">归档</button></view></view><view wx:else><input class="input" value="{{renameValue}}" data-key="renameValue" bindinput="onField" /><button class="secondary" bindtap="saveRename">保存名称</button></view></view></view>
+
+  <view class="card"><view class="section-title">主动导出</view><view class="muted">导出文件包含项目、记录、备注和标签等本地数据。请自行妥善保管；首版不能导入或恢复。</view><button class="primary" bindtap="exportJson">导出 JSON 全量数据</button><button class="secondary" bindtap="exportCsv">导出 CSV 日志</button></view>
+</view>

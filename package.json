@@ -1,0 +1,9 @@
+{
+  "name": "plan-and-record",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Plan & Record 第一阶段本地微信小程序",
+  "scripts": {
+    "test": "node --test"
+  }
+}
