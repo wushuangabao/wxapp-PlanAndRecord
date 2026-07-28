@@ -15,3 +15,14 @@ test('M0：源码保持纯本地架构，不声明云端依赖', () => {
 
   assert.deepEqual(Object.keys(packageConfig.dependencies || {}), []);
 });
+
+test('M0：sitemap 允许微信搜索收录所有页面', () => {
+  const sitemap = require('../miniprogram/sitemap.json');
+
+  assert.deepEqual(sitemap.rules, [
+    {
+      action: 'allow',
+      page: '*'
+    }
+  ]);
+});
