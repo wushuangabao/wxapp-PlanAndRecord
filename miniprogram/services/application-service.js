@@ -13,7 +13,7 @@ const { createId } = require('../domain/id');
 const { clone, createCalendarEvent, createIdleTimer, createRepeatRule, createTimeLog } = require('../domain/entities');
 const { createOccurrenceException, projectRule } = require('../domain/recurrence');
 const { buildStatistics } = require('../domain/statistics');
-const { calculateDurationMinutes, isFiniteTimestamp } = require('../domain/time');
+const { calculateDurationMinutes, calculateTimerDurationMinutes, isFiniteTimestamp } = require('../domain/time');
 const { requiredTitle, validInterval, validPercentage, validPriority, validRepeatFrequency, validTimeRange } = require('../domain/validation');
 const {
   ENTITY_COLLECTIONS,
@@ -849,10 +849,7 @@ class ApplicationService {
       if (timer.status !== TIMER_STATUS.ENDED) {
         throw new DomainError('TIMER_NOT_ENDED', '请先结束计时，再生成记录');
       }
-      const durationMinutes = calculateDurationMinutes(timer.startedAt, timer.endedAt, timer.pauses);
-      if (durationMinutes <= 0) {
-        throw new DomainError('TIMER_DURATION_INVALID', '计时时长无效，请改为手工补录');
-      }
+      const durationMinutes = calculateTimerDurationMinutes(timer.startedAt, timer.endedAt, timer.pauses);
       const log = createTimeLog({
         ...timer.draft,
         startedAt: timer.startedAt,
@@ -864,6 +861,39 @@ class ApplicationService {
       database.timeLogs.push(log);
       database.timer = createIdleTimer();
       return { log, hasOverlap: this.hasOverlap(database.timeLogs, log) };
+    }).result;
+  }
+
+  createRecoveryCandidate(input) {
+    const now = this.now();
+    const startedAt = Number(input.startedAt);
+    const endedAt = Number(input.endedAt);
+    validTimeRange(startedAt, endedAt, '恢复记录时间');
+    return this.repository.transaction((database) => {
+      const recoveryDraft = database.recoveryDraft;
+      if (!recoveryDraft || !recoveryDraft.timer) {
+        throw new DomainError('RECOVERY_DRAFT_NOT_FOUND', '没有需要修正的恢复草稿');
+      }
+      const originalDraft = recoveryDraft.timer.draft || {};
+      const association = this.resolveAssociations(database, {
+        projectId: input.projectId === undefined ? originalDraft.projectId : input.projectId,
+        taskId: input.taskId === undefined ? originalDraft.taskId : input.taskId,
+        calendarEventId: input.calendarEventId === undefined ? originalDraft.calendarEventId : input.calendarEventId,
+        categoryId: input.categoryId === undefined ? originalDraft.categoryId : input.categoryId
+      });
+      const log = createTimeLog({
+        ...association,
+        startedAt,
+        endedAt,
+        durationMinutes: calculateDurationMinutes(startedAt, endedAt, []),
+        note: input.note === undefined ? (originalDraft.note || '') : input.note,
+        tags: input.tags === undefined ? (originalDraft.tags || []) : input.tags,
+        status: LOG_STATUS.CANDIDATE,
+        source: LOG_SOURCE.TIMER
+      }, now);
+      database.timeLogs.push(log);
+      database.recoveryDraft = null;
+      return log;
     }).result;
   }
 

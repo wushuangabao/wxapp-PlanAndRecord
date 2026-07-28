@@ -1,5 +1,6 @@
 <view class="page">
-  <view class="hero"><view class="eyebrow">FOCUS ON WHAT MATTERS</view><view class="title">愿望与项目</view><view class="subtitle">先收集想法，再用项目和实际投入兑现承诺。</view></view>
+  <view class="eyebrow">FOCUS ON WHAT MATTERS</view>
+  <view class="hero"><view class="title">愿望与项目</view><view class="subtitle">先收集想法，再用项目和实际投入兑现承诺。</view></view>
 
   <view class="card form-card">
     <view class="section-title">新建项目</view>
@@ -18,6 +19,15 @@
       <view class="item-title">{{item.title}}</view><view class="muted">截止：{{item.deadlineText}} · {{item.objectives.length}} 个目标</view>
       <view wx:for="{{item.objectives}}" wx:for-item="objective" wx:key="id" class="okr"><view>{{objective.title}}</view><view wx:for="{{objective.keyResults}}" wx:for-item="kr" wx:key="id" class="muted">{{kr.title}} {{kr.currentValue}}%</view></view>
       <view class="actions"><button class="text-button" data-item="{{item}}" bindtap="openProjectEditor">编辑</button><button class="text-button" data-id="{{item.id}}" bindtap="archiveProject">归档</button><button class="danger-button" data-id="{{item.id}}" bindtap="abandonProject">放弃</button></view>
+    </view>
+  </view>
+
+  <view wx:if="{{archivedProjects.length}}" class="card">
+    <view class="section-title">已归档项目</view>
+    <view wx:for="{{archivedProjects}}" wx:key="id" class="item project-item">
+      <view class="item-title">{{item.title}}</view>
+      <view class="muted">截止：{{item.deadlineText}} · 已归档</view>
+      <view class="actions"><button class="text-button" data-id="{{item.id}}" bindtap="restoreProject">恢复项目</button></view>
     </view>
   </view>
 

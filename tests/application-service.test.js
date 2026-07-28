@@ -151,6 +151,48 @@ test('M2：计时暂停、恢复、结束后只在生成记录时写入 confirme
   assert.equal(service.snapshot().timer.status, TIMER_STATUS.IDLE);
 });
 
+test('M2：短时计时生成的已确认记录至少计为一分钟', () => {
+  const { service, setNow, now } = createHarness();
+  service.startTimer({ note: '快速记录' });
+  setNow(now() + 5_000);
+  service.finishTimer();
+
+  const { log } = service.generateTimerRecord();
+  assert.equal(log.durationMinutes, 1);
+  assert.equal(log.status, LOG_STATUS.CONFIRMED);
+  assert.equal(log.note, '快速记录');
+});
+
+test('M2：计时记录超过整分钟后向上取整', () => {
+  for (const [elapsedMilliseconds, expectedMinutes] of [[60_000, 1], [60_001, 2], [119_999, 2]]) {
+    const { service, setNow, now } = createHarness();
+    service.startTimer({ note: '向上取整' });
+    setNow(now() + elapsedMilliseconds);
+    service.finishTimer();
+    assert.equal(service.generateTimerRecord().log.durationMinutes, expectedMinutes);
+  }
+});
+
+test('M2：恢复草稿经用户修正后创建候选记录并清除草稿', () => {
+  const { service, setNow, now } = createHarness();
+  const startedAt = now();
+  service.startTimer({ note: '需修正的计时' });
+  setNow(startedAt - 1_000);
+  const recovered = service.recoverTimer(now());
+  assert.equal(recovered.state, 'draft');
+
+  setNow(startedAt + 60_000);
+  const log = service.createRecoveryCandidate({
+    startedAt,
+    endedAt: now(),
+    note: '已修正的计时'
+  });
+  assert.equal(log.status, LOG_STATUS.CANDIDATE);
+  assert.equal(log.source, LOG_SOURCE.TIMER);
+  assert.equal(log.note, '已修正的计时');
+  assert.equal(service.snapshot().recoveryDraft, null);
+});
+
 test('M2：超过 24 小时的计时恢复为候选记录', () => {
   const { service, setNow, now } = createHarness();
   service.startTimer({ note: '异常恢复' });

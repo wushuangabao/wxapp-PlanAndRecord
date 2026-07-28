@@ -12,7 +12,7 @@ const {
 } = require('../domain/constants');
 const { clone } = require('../domain/entities');
 const { DomainError } = require('../domain/errors');
-const { calculateDurationMinutes, isFiniteTimestamp } = require('../domain/time');
+const { calculateDurationMinutes, calculateTimerDurationMinutes, isFiniteTimestamp } = require('../domain/time');
 
 const ROOT_COLLECTIONS = [
   'categories',
@@ -338,10 +338,13 @@ function validateOccurrenceException(exception, ids) {
 
 function validateTimeLog(log, ids) {
   const nullableFields = ['projectId', 'projectNameSnapshot', 'taskId', 'taskNameSnapshot', 'calendarEventId', 'calendarEventSummarySnapshot', 'originRuleId', 'originOccurrenceId', 'originRuleSummarySnapshot'];
+  const maximumDurationMinutes = log.source === LOG_SOURCE.TIMER
+    ? calculateTimerDurationMinutes(log.startedAt, log.endedAt, [])
+    : calculateDurationMinutes(log.startedAt, log.endedAt, []);
   if (!requireFields(log, ['id', 'schemaVersion', 'startedAt', 'endedAt', 'durationMinutes', 'categoryId', 'categoryNameSnapshot', ...nullableFields, 'note', 'status', 'source', 'tags', 'createdAt', 'updatedAt'])
     || !requiredString(log.id) || log.schemaVersion !== APP_SCHEMA_VERSION || !validTimeRange(log.startedAt, log.endedAt)
     || !Number.isInteger(log.durationMinutes) || log.durationMinutes < 0
-    || log.durationMinutes > calculateDurationMinutes(log.startedAt, log.endedAt, []) || !requiredString(log.categoryId)
+    || log.durationMinutes > maximumDurationMinutes || !requiredString(log.categoryId)
     || typeof log.categoryNameSnapshot !== 'string' || !nullableFields.every((field) => nullableString(log[field]))
     || typeof log.note !== 'string' || !validEnum(log.status, LOG_STATUS) || !validEnum(log.source, LOG_SOURCE)
     || !Array.isArray(log.tags) || !log.tags.every((tag) => typeof tag === 'string') || !validateTimestamps(log)) invalidSchema();

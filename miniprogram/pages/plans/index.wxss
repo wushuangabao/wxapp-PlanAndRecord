@@ -1,6 +1,6 @@
 .page { padding: 44rpx 32rpx 72rpx; }
 .hero { margin-bottom: 30rpx; }
-.eyebrow { color: #16a34a; font-size: 22rpx; font-weight: 700; letter-spacing: 3rpx; }
+.eyebrow { position: sticky; z-index: 8; top: 0; padding: 14rpx 0; background: #f8fafc; color: #16a34a; font-size: 22rpx; font-weight: 700; letter-spacing: 3rpx; }
 .title { margin-top: 16rpx; font-size: 56rpx; font-weight: 700; }
 .subtitle, .muted, .empty { color: #64748b; font-size: 26rpx; line-height: 1.6; }
 .card { margin-top: 24rpx; padding: 30rpx; border-radius: 24rpx; background: #ffffff; }

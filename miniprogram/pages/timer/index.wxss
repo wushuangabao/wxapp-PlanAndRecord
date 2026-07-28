@@ -1,5 +1,5 @@
 .page { padding: 44rpx 32rpx 72rpx; }
-.eyebrow { color: #16a34a; font-size: 22rpx; font-weight: 700; letter-spacing: 3rpx; }
+.eyebrow { position: sticky; z-index: 8; top: 0; padding: 14rpx 0; background: #f8fafc; color: #16a34a; font-size: 22rpx; font-weight: 700; letter-spacing: 3rpx; }
 .timer-card { margin-top: 24rpx; padding: 48rpx; border-radius: 32rpx; background: #14532d; color: #ffffff; text-align: center; }
 .status { color: #bbf7d0; font-size: 26rpx; }
 .elapsed { margin-top: 20rpx; font-size: 96rpx; font-family: monospace; font-weight: 700; }
@@ -8,6 +8,7 @@
 .primary { background: #22c55e; color: #052e16; font-weight: 700; }
 .secondary { margin-top: 18rpx; background: #e2e8f0; color: #334155; }
 .timer-card .secondary { background: #166534; color: #dcfce7; }
+.recovery-draft { margin-top: 28rpx; padding: 32rpx; border: 1rpx solid #f59e0b; border-radius: 24rpx; background: #fffbeb; }
 .section { margin-top: 40rpx; padding: 32rpx; border-radius: 24rpx; background: #ffffff; }
 .section-title { margin-bottom: 20rpx; font-size: 32rpx; font-weight: 700; }
 .text-input { box-sizing: border-box; width: 100%; min-height: 76rpx; padding: 16rpx; border: 1rpx solid #cbd5e1; border-radius: 12rpx; background: #ffffff; }

@@ -37,6 +37,15 @@ Page({
     logStart: '',
     logEnd: '',
     logNote: '',
+    planEditor: null,
+    planTitle: '',
+    planStartDate: '',
+    planStartTime: '',
+    planEndDate: '',
+    planEndTime: '',
+    planPriority: 1,
+    planProjectIndex: 0,
+    planTaskIndex: 0,
     views: ['day', 'week', 'month', 'year'],
     frequencyLabels: FREQUENCY_LABELS,
     weekdayLabels: ['日', '一', '二', '三', '四', '五', '六']
@@ -66,7 +75,9 @@ Page({
       this.setData({
         ...selectorData(snapshot),
         timeline,
-        rangeLabel: `${formatDateTime(range.start).slice(0, 10)} ～ ${formatDateTime(range.end).slice(0, 10)}`
+        rangeLabel: this.data.view === 'day'
+          ? formatDateTime(range.start).slice(0, 10)
+          : `${formatDateTime(range.start).slice(0, 10)} ～ ${formatDateTime(range.end).slice(0, 10)}`
       });
     } catch (error) {
       showError(error);
@@ -162,6 +173,66 @@ Page({
     } });
   },
 
+  openPlanEditor(event) {
+    const item = event.currentTarget.dataset.item;
+    const start = defaultDateTime(item.startedAt);
+    const end = defaultDateTime(item.endedAt);
+    const projectIndex = Math.max(0, this.data.projects.findIndex((project) => project.id === item.projectId));
+    const taskIndex = Math.max(0, this.data.tasks.findIndex((task) => task.id === item.taskId));
+    this.setData({
+      planEditor: item,
+      planTitle: item.title,
+      planStartDate: start.date,
+      planStartTime: start.time,
+      planEndDate: end.date,
+      planEndTime: end.time,
+      planPriority: item.priority,
+      planProjectIndex: projectIndex,
+      planTaskIndex: taskIndex
+    });
+  },
+
+  closePlanEditor() {
+    this.setData({ planEditor: null });
+  },
+
+  savePlanEditor() {
+    try {
+      const item = this.data.planEditor;
+      const project = this.data.projects[this.data.planProjectIndex];
+      const task = this.data.tasks[this.data.planTaskIndex];
+      getService().updateCalendarEvent(item.id, {
+        title: this.data.planTitle,
+        startedAt: parseLocalDateTime(this.data.planStartDate, this.data.planStartTime),
+        endedAt: parseLocalDateTime(this.data.planEndDate, this.data.planEndTime),
+        priority: this.data.planPriority,
+        projectId: project && project.id,
+        taskId: task && task.id
+      });
+      this.closePlanEditor();
+      showSaved('计划块已更新');
+      this.refresh();
+    } catch (error) { showError(error); }
+  },
+
+  deletePlan(event) {
+    const item = event.currentTarget.dataset.item;
+    wx.showModal({
+      title: '删除计划块',
+      content: '会解除现有时间记录与该计划的关联，但会保留计划标题摘要用于复盘。',
+      confirmText: '删除计划',
+      confirmColor: '#dc2626',
+      success: (result) => {
+        if (!result.confirm) return;
+        try {
+          getService().deleteCalendarEvent(item.id, true);
+          showSaved('计划块已删除');
+          this.refresh();
+        } catch (error) { showError(error); }
+      }
+    });
+  },
+
   openOccurrenceEditor(event) {
     const item = event.currentTarget.dataset.item;
     const start = defaultDateTime(item.startedAt);
@@ -186,6 +257,10 @@ Page({
 
   chooseEditorPriority(event) {
     this.setData({ editorPriority: Number(event.currentTarget.dataset.priority) });
+  },
+
+  choosePlanPriority(event) {
+    this.setData({ planPriority: Number(event.currentTarget.dataset.priority) });
   },
 
   saveOccurrenceOverride() {

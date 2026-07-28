@@ -3,9 +3,15 @@
   <view class="timer-card">
     <view class="status">{{statusLabel}}</view>
     <view class="elapsed">{{elapsed}}</view>
-    <view class="unit">时 : 分</view>
+    <view class="unit">时 : 分 : 秒 · 记录时长 {{elapsedMinutes}} 分钟</view>
     <button class="primary" bindtap="onPrimary">{{primaryLabel}}</button>
     <button wx:if="{{timer.status !== 'idle' && timer.status !== 'ended'}}" class="secondary" bindtap="onFinishTimer">结束计时</button>
+  </view>
+
+  <view wx:if="{{recoveryDraft}}" class="recovery-draft">
+    <view class="section-title">有一条待修正的恢复草稿</view>
+    <view class="muted">{{recoveryDraft.reason}}</view>
+    <button class="secondary" bindtap="openRecoveryManual">修正并创建候选记录</button>
   </view>
 
   <view class="section">
@@ -33,12 +39,13 @@
 
   <view wx:if="{{showManual}}" class="modal-mask">
     <view class="modal" catchtap="noop">
-      <view class="modal-title">手工补录</view>
-      <picker mode="date" value="{{manualDate}}" data-key="manualDate" bindchange="onManualField"><view class="picker-field">日期：{{manualDate}}</view></picker>
+      <view class="modal-title">{{manualMode === 'recovery' ? '修正恢复草稿' : '手工补录'}}</view>
+      <picker mode="date" value="{{manualStartDate}}" data-key="manualStartDate" bindchange="onManualField"><view class="picker-field">开始日期：{{manualStartDate}}</view></picker>
       <picker mode="time" value="{{manualStartTime}}" data-key="manualStartTime" bindchange="onManualField"><view class="picker-field">开始：{{manualStartTime}}</view></picker>
+      <picker mode="date" value="{{manualEndDate}}" data-key="manualEndDate" bindchange="onManualField"><view class="picker-field">结束日期：{{manualEndDate}}</view></picker>
       <picker mode="time" value="{{manualEndTime}}" data-key="manualEndTime" bindchange="onManualField"><view class="picker-field">结束：{{manualEndTime}}</view></picker>
       <input class="text-input" placeholder="备注（可选）" value="{{manualNote}}" data-key="manualNote" bindinput="onManualField" />
-      <view class="modal-actions"><button class="secondary" bindtap="closeManual">取消</button><button class="primary small" bindtap="onManualSave">保存记录</button></view>
+      <view class="modal-actions"><button class="secondary" bindtap="closeManual">取消</button><button class="primary small" bindtap="onManualSave">{{manualMode === 'recovery' ? '创建候选记录' : '保存记录'}}</button></view>
     </view>
   </view>
 </view>

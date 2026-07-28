@@ -1,5 +1,6 @@
 <view class="page">
-  <view class="hero"><view class="eyebrow">LOCAL PROFILE</view><view class="title">我的</view><view class="subtitle">不登录、不自动上传；数据默认只保存在当前设备。</view></view>
+  <view class="eyebrow">LOCAL PROFILE</view>
+  <view class="hero"><view class="title">我的</view><view class="subtitle">不登录、不自动上传；数据默认只保存在当前设备。</view></view>
 
   <view class="risk">清理微信缓存、卸载微信或更换设备可能导致本地数据丢失；首版不提供云端自动备份或同步。</view>
 

@@ -1,17 +1,30 @@
 const { TIMER_STATUS } = require('../../domain/constants');
-const { calculateDurationMinutes, parseLocalDateTime } = require('../../domain/time');
+const { calculateTimerDurationMinutes, parseLocalDateTime, sumPausedMilliseconds } = require('../../domain/time');
 const { defaultDateTime, formatDateTime, getService, selectorData, showError, showSaved } = require('../../utils/page');
 
-function formatDuration(minutes) {
-  const hours = Math.floor(minutes / 60);
-  const rest = minutes % 60;
-  return `${String(hours).padStart(2, '0')}:${String(rest).padStart(2, '0')}`;
+function formatDuration(seconds) {
+  const hours = Math.floor(seconds / 3_600);
+  const minutes = Math.floor((seconds % 3_600) / 60);
+  const rest = seconds % 60;
+  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(rest).padStart(2, '0')}`;
+}
+
+function elapsedSeconds(timer, now) {
+  if (!timer || !Number.isFinite(timer.startedAt) || timer.startedAt <= 0) {
+    return 0;
+  }
+  const pauses = (timer.pauses || []).slice();
+  if (timer.status === TIMER_STATUS.PAUSED && timer.pausedAt) {
+    pauses.push({ startedAt: timer.pausedAt, endedAt: now });
+  }
+  return Math.max(0, Math.floor((now - timer.startedAt - sumPausedMilliseconds(pauses, now)) / 1_000));
 }
 
 Page({
   data: {
     timer: { status: TIMER_STATUS.IDLE },
-    elapsed: '00:00',
+    elapsed: '00:00:00',
+    elapsedMinutes: 0,
     statusLabel: '准备开始',
     primaryLabel: '开始记录',
     categories: [],
@@ -24,22 +37,29 @@ Page({
     eventIndex: 0,
     note: '',
     showManual: false,
-    manualDate: '',
+    manualStartDate: '',
     manualStartTime: '',
+    manualEndDate: '',
     manualEndTime: '',
     manualNote: '',
+    manualMode: 'manual',
+    recoveryDraft: null,
     recentLogs: []
   },
 
   onLoad() {
     const end = defaultDateTime();
     const start = defaultDateTime(Date.now() - 60 * 60 * 1000);
-    this.setData({ manualDate: end.date, manualStartTime: start.time, manualEndTime: end.time });
+    this.setData({
+      manualStartDate: start.date,
+      manualStartTime: start.time,
+      manualEndDate: end.date,
+      manualEndTime: end.time
+    });
   },
 
   onShow() {
     this.refresh();
-    this.startTicker();
   },
 
   onHide() {
@@ -52,7 +72,9 @@ Page({
 
   startTicker() {
     this.stopTicker();
-    this.ticker = setInterval(() => this.updateElapsed(), 30 * 1000);
+    if (this.data.timer && this.data.timer.status === TIMER_STATUS.RUNNING) {
+      this.ticker = setInterval(() => this.updateElapsed(), 1_000);
+    }
   },
 
   stopTicker() {
@@ -74,11 +96,14 @@ Page({
       }));
       this.setData({
         timer: snapshot.timer,
+        recoveryDraft: snapshot.recoveryDraft,
         ...selectors,
         recentLogs,
         note: snapshot.timer.draft && snapshot.timer.draft.note ? snapshot.timer.draft.note : this.data.note
+      }, () => {
+        this.updateElapsed();
+        this.startTicker();
       });
-      this.updateElapsed();
     } catch (error) {
       showError(error);
     }
@@ -87,18 +112,18 @@ Page({
   updateElapsed() {
     const timer = this.data.timer;
     if (!timer || !timer.startedAt || timer.status === TIMER_STATUS.IDLE) {
-      this.setData({ elapsed: '00:00', statusLabel: '准备开始', primaryLabel: '开始记录' });
+      this.setData({ elapsed: '00:00:00', elapsedMinutes: 0, statusLabel: '准备开始', primaryLabel: '开始记录' });
       return;
     }
     const endedAt = timer.status === TIMER_STATUS.ENDED ? timer.endedAt : Date.now();
-    const pauses = (timer.pauses || []).slice();
-    if (timer.status === TIMER_STATUS.PAUSED && timer.pausedAt) {
-      pauses.push({ startedAt: timer.pausedAt, endedAt });
-    }
-    const duration = calculateDurationMinutes(timer.startedAt, endedAt, pauses);
+    const pauses = timer.status === TIMER_STATUS.PAUSED && timer.pausedAt
+      ? (timer.pauses || []).concat({ startedAt: timer.pausedAt, endedAt })
+      : timer.pauses;
+    const seconds = elapsedSeconds(timer, endedAt);
+    const duration = calculateTimerDurationMinutes(timer.startedAt, endedAt, pauses);
     const primaryLabel = timer.status === TIMER_STATUS.RUNNING ? '暂停' : timer.status === TIMER_STATUS.PAUSED ? '继续' : '生成记录';
     const statusLabel = timer.status === TIMER_STATUS.RUNNING ? '计时中' : timer.status === TIMER_STATUS.PAUSED ? '已暂停' : '已结束，等待确认';
-    this.setData({ elapsed: formatDuration(duration), statusLabel, primaryLabel });
+    this.setData({ elapsed: formatDuration(seconds), elapsedMinutes: duration, statusLabel, primaryLabel });
   },
 
   onNoteInput(event) {
@@ -157,7 +182,24 @@ Page({
   },
 
   openManual() {
-    this.setData({ showManual: true });
+    this.setData({ showManual: true, manualMode: 'manual' });
+  },
+
+  openRecoveryManual() {
+    const timer = this.data.recoveryDraft && this.data.recoveryDraft.timer ? this.data.recoveryDraft.timer : {};
+    const startedAt = Number.isFinite(timer.startedAt) && timer.startedAt > 0 ? timer.startedAt : Date.now() - 60 * 60 * 1_000;
+    const endedAt = Number.isFinite(timer.endedAt) && timer.endedAt > startedAt ? timer.endedAt : startedAt + 60 * 60 * 1_000;
+    const start = defaultDateTime(startedAt);
+    const end = defaultDateTime(endedAt);
+    this.setData({
+      showManual: true,
+      manualMode: 'recovery',
+      manualStartDate: start.date,
+      manualStartTime: start.time,
+      manualEndDate: end.date,
+      manualEndTime: end.time,
+      manualNote: timer.draft && timer.draft.note ? timer.draft.note : ''
+    });
   },
 
   closeManual() {
@@ -170,11 +212,15 @@ Page({
 
   onManualSave() {
     try {
-      const startedAt = parseLocalDateTime(this.data.manualDate, this.data.manualStartTime);
-      const endedAt = parseLocalDateTime(this.data.manualDate, this.data.manualEndTime);
-      const result = getService().createManualLog({ ...this.selectedInput(), startedAt, endedAt, note: this.data.manualNote });
-      this.setData({ showManual: false, manualNote: '' });
-      showSaved(result.hasOverlap ? '已保存：存在重叠时间' : '补录已保存');
+      const startedAt = parseLocalDateTime(this.data.manualStartDate, this.data.manualStartTime);
+      const endedAt = parseLocalDateTime(this.data.manualEndDate, this.data.manualEndTime);
+      const input = { ...this.selectedInput(), startedAt, endedAt, note: this.data.manualNote };
+      const result = this.data.manualMode === 'recovery'
+        ? { log: getService().createRecoveryCandidate(input), hasOverlap: false }
+        : getService().createManualLog(input);
+      const wasRecovery = this.data.manualMode === 'recovery';
+      this.setData({ showManual: false, manualMode: 'manual', manualNote: '' });
+      showSaved(wasRecovery ? '已创建待核实的恢复记录' : (result.hasOverlap ? '已保存：存在重叠时间' : '补录已保存'));
       this.refresh();
     } catch (error) {
       showError(error);

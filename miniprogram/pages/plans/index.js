@@ -8,6 +8,7 @@ Page({
     wishes: [],
     tasks: [],
     activeProjects: [],
+    archivedProjects: [],
     projectTitle: '',
     projectDate: '',
     projectTime: '',
@@ -45,6 +46,7 @@ Page({
       this.setData({
         projects,
         activeProjects: projects.filter((project) => project.status === 'active'),
+        archivedProjects: projects.filter((project) => project.status === 'archived'),
         wishes: snapshot.wishes,
         tasks: snapshot.tasks
       });
@@ -201,6 +203,15 @@ Page({
         this.refresh();
       } catch (error) { showError(error); }
     } });
+  },
+
+  restoreProject(event) {
+    const id = event.currentTarget.dataset.id;
+    try {
+      getService().setProjectArchived(id, false);
+      showSaved('项目已恢复为活动状态');
+      this.refresh();
+    } catch (error) { showError(error); }
   },
 
   abandonProject(event) {

@@ -8,6 +8,13 @@ function toMinutes(milliseconds) {
   return Math.max(0, Math.round(milliseconds / MINUTE_MS));
 }
 
+function toTimerMinutes(milliseconds) {
+  if (!Number.isFinite(milliseconds) || milliseconds < 0) {
+    return 0;
+  }
+  return Math.max(1, Math.ceil(milliseconds / MINUTE_MS));
+}
+
 function sumPausedMilliseconds(pauses, now) {
   return (pauses || []).reduce((total, pause) => {
     if (!isFiniteTimestamp(pause.startedAt)) {
@@ -23,6 +30,13 @@ function calculateDurationMinutes(startedAt, endedAt, pauses) {
     return 0;
   }
   return toMinutes(Math.max(0, endedAt - startedAt - sumPausedMilliseconds(pauses, endedAt)));
+}
+
+function calculateTimerDurationMinutes(startedAt, endedAt, pauses) {
+  if (!isFiniteTimestamp(startedAt) || !isFiniteTimestamp(endedAt) || endedAt <= startedAt) {
+    return 0;
+  }
+  return toTimerMinutes(Math.max(0, endedAt - startedAt - sumPausedMilliseconds(pauses, endedAt)));
 }
 
 function localDateKey(timestamp) {
@@ -83,8 +97,10 @@ module.exports = {
   MINUTE_MS,
   isFiniteTimestamp,
   toMinutes,
+  toTimerMinutes,
   sumPausedMilliseconds,
   calculateDurationMinutes,
+  calculateTimerDurationMinutes,
   localDateKey,
   formatDateTime,
   startOfLocalDay,
