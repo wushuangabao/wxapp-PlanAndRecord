@@ -4,5 +4,5 @@
 # 日志
 *.log
 
-# 本机微信开发者工具安装目录（仅用于本地自动化，不纳入版本控制）
-wechatide-path.local.txt
+# 本地配置
+.local/

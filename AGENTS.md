@@ -18,14 +18,19 @@
 ## 开发规范
 
 - 修改页面时同步检查对应的 `.js`、`.wxml`、`.wxss`、`.json` 与 `app.json`；不得覆盖既有页面、分包或配置。
-- 本机微信开发者工具安装目录写入仓库根目录的 `wechatide-path.local.txt`；该文件仅供本地工具定位安装目录，已由 `.gitignore` 忽略。执行依赖微信开发者工具的操作前，如发现该文件不存在、为空或未填写有效路径，应提醒用户创建或补全路径后再继续。
+- 本机微信开发者工具安装目录写入 `.local/wechatide-path.txt`；该文件仅供本地工具定位安装目录，已由 `.gitignore` 忽略。执行依赖微信开发者工具的操作前，如发现该文件不存在、为空或未填写有效路径，应提醒用户创建或补全路径后再继续。
+- 接入微信开发者生态的小微 AI Agent 时，除了要先阅读 `docs/xiaowei-ai-handoff.zh-CN.md`，还可以参考 `.local/aimodedemo-path.txt` 中指向的官方 demo 项目。
 - 有副作用的 AI/API 操作必须校验登录态、资源归属、参数合法性与幂等性；Agent 不得猜测 ID、权限或业务数据。
 - 密钥、支付签名和敏感个人信息不得进入小程序代码、Skill 文件、日志、query 或 Handoff payload。
 - Handoff payload 仅用于首屏预置；接力页必须能在 payload 缺失时，依据可信 ID 重新查询并安全降级。
 
-## 已踩坑
+## 常见坑点/注意事项
+
+若开发中遇到今后容易踩的坑，排查出原因后经用户同意，可以将情况记录在本节。
 
 - 微信开发者工具安装路径含空格时，安装诊断脚本与 CLI 调用必须使用带引号的绝对路径，并将路径作为单一参数传递；否则路径会被截断，导致“CLI 不可用”的误判。
+- WXML 文件中的 `&` 不需要转义为 `&amp;` 就能显示，写成 `&amp;` 反而会显示错误内容。
+- `wx.shareFileMessage` 必须由用户点击手势直接触发，不要在 `writeFile`、`downloadFile`、Promise 或定时器等异步回调中直接调用，否则可能返回 `shareFileMessage:fail can only be invoked by user TAP gesture.`。若必须异步，可以在回调中让用户再次点击确认，并在该点击的回调中调用 `wx.shareFileMessage`。
 
 ## 验证与交付
 
