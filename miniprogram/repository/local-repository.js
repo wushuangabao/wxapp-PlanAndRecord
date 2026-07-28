@@ -1,6 +1,7 @@
 const { APP_SCHEMA_VERSION } = require('../domain/constants');
 const { StorageError } = require('../domain/errors');
 const { createInitialDatabase, clone } = require('../domain/entities');
+const { validateJsonSnapshot } = require('./json-snapshot');
 
 const STORAGE_KEY = 'plan-and-record.database';
 const BACKUP_KEY = 'plan-and-record.database.pre-migration';
@@ -42,9 +43,49 @@ class LocalRepository {
     };
   }
 
-  replace(next) {
-    this.write(next);
-    return this.read();
+  replace(next, { clearMigrationBackup = false } = {}) {
+    const candidate = clone(next);
+    validateJsonSnapshot(candidate);
+
+    const oldCache = this.cache === null ? null : clone(this.cache);
+    let oldMain;
+    let oldBackup;
+    try {
+      oldMain = this.storage.get(STORAGE_KEY);
+      oldBackup = this.storage.get(BACKUP_KEY);
+    } catch (error) {
+      throw new StorageError('WRITE_FAILED', '无法读取本地保存状态，未执行数据替换，请重新进入后重试');
+    }
+
+    let mainWriteAttempted = false;
+
+    try {
+      mainWriteAttempted = true;
+      this.storage.set(STORAGE_KEY, clone(candidate));
+      if (clearMigrationBackup) {
+        this.storage.remove(BACKUP_KEY);
+      }
+      this.cache = clone(candidate);
+      return clone(this.cache);
+    } catch (error) {
+      let restorationComplete = true;
+      if (mainWriteAttempted) {
+        const mainRestored = this.restoreStoredValue(STORAGE_KEY, oldMain);
+        const backupRestored = this.restoreStoredValue(BACKUP_KEY, oldBackup);
+        restorationComplete = mainRestored && backupRestored;
+      }
+      this.cache = oldCache;
+      const message = restorationComplete
+        ? '本地保存失败，已保留当前数据，请重试或导出已有数据'
+        : '本地保存失败，无法确认原数据是否完整保留，请重新进入核对并尽快导出';
+      throw new StorageError('WRITE_FAILED', message);
+    }
+  }
+
+  reset() {
+    return this.replace(createInitialDatabase(this.now()), {
+      clearMigrationBackup: true
+    });
   }
 
   exportSnapshot() {
@@ -92,6 +133,20 @@ class LocalRepository {
       this.cache = clone(next);
     } catch (error) {
       throw new StorageError('WRITE_FAILED', '本地保存失败，已保留当前表单内容，请重试或导出已有数据');
+    }
+  }
+
+  restoreStoredValue(key, value) {
+    try {
+      if (value === undefined) {
+        this.storage.remove(key);
+      } else {
+        this.storage.set(key, clone(value));
+      }
+      return true;
+    } catch (error) {
+      // 写入失败后的补偿必须尽力而为，不能泄露原始数据内容。
+      return false;
     }
   }
 }

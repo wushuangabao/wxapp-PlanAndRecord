@@ -14,7 +14,6 @@ Page({
     projectObjective: '',
     projectKeyResult: '',
     projectCurrent: '',
-    projectTarget: '',
     wishTitle: '',
     taskTitle: '',
     taskProjectIndex: 0,
@@ -22,7 +21,6 @@ Page({
     objectiveTitle: '',
     keyResultTitle: '',
     currentValue: '',
-    targetValue: '',
     editWishId: '',
     editWishTitle: '',
     projectEditor: null,
@@ -82,10 +80,10 @@ Page({
         deadlineAt,
         objectives: [{
           title: this.data.projectObjective,
-          keyResults: [{ title: this.data.projectKeyResult, currentValue: Number(this.data.projectCurrent), targetValue: Number(this.data.projectTarget) }]
+          keyResults: [{ title: this.data.projectKeyResult, currentValue: Number(this.data.projectCurrent) }]
         }]
       });
-      this.setData({ projectTitle: '', projectObjective: '', projectKeyResult: '', projectCurrent: '', projectTarget: '' });
+      this.setData({ projectTitle: '', projectObjective: '', projectKeyResult: '', projectCurrent: '' });
       showSaved('项目已创建');
       this.refresh();
     } catch (error) {
@@ -180,13 +178,12 @@ Page({
       const existing = objectives.find((item) => item.title === this.data.objectiveTitle.trim());
       const keyResult = {
         title: this.data.keyResultTitle,
-        currentValue: Number(this.data.currentValue),
-        targetValue: Number(this.data.targetValue)
+        currentValue: Number(this.data.currentValue)
       };
       if (existing) existing.keyResults.push(keyResult);
       else objectives.push({ title: this.data.objectiveTitle, keyResults: [keyResult] });
       getService().updateProject(project.id, { objectives });
-      this.setData({ objectiveTitle: '', keyResultTitle: '', currentValue: '', targetValue: '' });
+      this.setData({ objectiveTitle: '', keyResultTitle: '', currentValue: '' });
       showSaved('关键结果已保存');
       this.refresh();
     } catch (error) {

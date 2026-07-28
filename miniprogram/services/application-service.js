@@ -1,6 +1,5 @@
 const {
   DEFAULT_CATEGORY_ID,
-  DEFAULT_CATEGORY_NAME,
   LOG_SOURCE,
   LOG_STATUS,
   MAX_ACTIVE_PROJECTS,
@@ -11,17 +10,25 @@ const {
 } = require('../domain/constants');
 const { DomainError } = require('../domain/errors');
 const { createId } = require('../domain/id');
-const { createCalendarEvent, createIdleTimer, createRepeatRule, createTimeLog } = require('../domain/entities');
+const { clone, createCalendarEvent, createIdleTimer, createRepeatRule, createTimeLog } = require('../domain/entities');
 const { createOccurrenceException, projectRule } = require('../domain/recurrence');
 const { buildStatistics } = require('../domain/statistics');
 const { calculateDurationMinutes, isFiniteTimestamp } = require('../domain/time');
 const { requiredTitle, validInterval, validPercentage, validPriority, validRepeatFrequency, validTimeRange } = require('../domain/validation');
-const { exportJson, exportLogsCsv } = require('./export-service');
+const {
+  ENTITY_COLLECTIONS,
+  IMPORT_MODE,
+  createImportAnalysis,
+  resolveImportAnalysis
+} = require('../repository/json-import');
+const { normalizeJsonSnapshot, parseJsonSnapshot, persistedValueEquals } = require('../repository/json-snapshot');
+const { exportJson } = require('./export-service');
 
 class ApplicationService {
   constructor(repository, options = {}) {
     this.repository = repository;
     this.now = options.now || Date.now;
+    this.pendingJsonImport = null;
   }
 
   initialize() {
@@ -31,6 +38,110 @@ class ApplicationService {
 
   snapshot() {
     return this.repository.read();
+  }
+
+  requirePendingJsonImport(token) {
+    if (!this.pendingJsonImport || this.pendingJsonImport.token !== token) {
+      throw new DomainError('IMPORT_PREVIEW_NOT_FOUND', '导入预览已失效，请重新选择文件');
+    }
+    return this.pendingJsonImport;
+  }
+
+  prepareJsonImport(jsonText) {
+    const importedDatabase = parseJsonSnapshot(jsonText);
+    const token = createId('import', this.now());
+    this.pendingJsonImport = {
+      token,
+      importedDatabase,
+      baselineDatabase: normalizeJsonSnapshot(this.snapshot()),
+      analysis: null,
+      resolved: null,
+      preview: null
+    };
+    const sourceCounts = ENTITY_COLLECTIONS.reduce((counts, collection) => {
+      counts[collection] = importedDatabase[collection].length;
+      return counts;
+    }, {});
+    return {
+      token,
+      schemaVersion: importedDatabase.schemaVersion,
+      sourceCounts
+    };
+  }
+
+  previewJsonImport(token, options = {}) {
+    const pending = this.requirePendingJsonImport(token);
+    const analysis = createImportAnalysis(
+      pending.baselineDatabase,
+      pending.importedDatabase,
+      { mode: options.mode, now: this.now() }
+    );
+    pending.analysis = analysis;
+    pending.resolved = null;
+
+    if (analysis.conflictCount && !options.conflictPolicy) {
+      pending.preview = {
+        mode: analysis.mode,
+        conflictPolicy: null,
+        conflictCount: analysis.conflictCount,
+        identicalCount: analysis.identicalCount,
+        addedCounts: clone(analysis.addedCounts),
+        requiresConflictPolicy: true
+      };
+      return clone(pending.preview);
+    }
+
+    const resolved = resolveImportAnalysis(analysis, options.conflictPolicy);
+    pending.resolved = resolved;
+    pending.preview = {
+      ...clone(resolved.summary),
+      requiresConflictPolicy: false
+    };
+    return clone(pending.preview);
+  }
+
+  commitJsonImport(token) {
+    const pending = this.requirePendingJsonImport(token);
+    if (!pending.resolved || !pending.preview || pending.preview.requiresConflictPolicy) {
+      throw new DomainError('IMPORT_PREVIEW_REQUIRED', '请先完成导入预览和冲突选择');
+    }
+
+    const current = normalizeJsonSnapshot(this.snapshot());
+    if (!persistedValueEquals(current, pending.baselineDatabase)) {
+      throw new DomainError('IMPORT_PREVIEW_STALE', '本地数据已变化，请重新预览后再导入');
+    }
+
+    const mode = pending.analysis.mode;
+    const conflictPolicy = pending.preview.conflictPolicy;
+    const analysis = createImportAnalysis(
+      current,
+      pending.importedDatabase,
+      { mode, now: this.now() }
+    );
+    const resolved = resolveImportAnalysis(analysis, conflictPolicy);
+    this.repository.replace(resolved.database, {
+      clearMigrationBackup: mode === IMPORT_MODE.REPLACE
+    });
+    this.pendingJsonImport = null;
+    return clone(resolved.summary);
+  }
+
+  cancelJsonImport(token) {
+    if (this.pendingJsonImport && this.pendingJsonImport.token === token) {
+      this.pendingJsonImport = null;
+    }
+  }
+
+  clearAllData(confirmed) {
+    if (confirmed !== true) {
+      throw new DomainError('CLEAR_CONFIRMATION_REQUIRED', '清空全部本地数据需要明确确认');
+    }
+    this.pendingJsonImport = null;
+    const database = this.repository.reset();
+    return {
+      cleared: true,
+      localProfileId: database.localProfile.id
+    };
   }
 
   activeProjects(database) {
@@ -226,8 +337,7 @@ class ApplicationService {
       keyResults: (objective.keyResults || []).map((keyResult) => ({
         id: keyResult.id || createId('key-result', now),
         title: requiredTitle(keyResult.title, '关键结果标题'),
-        currentValue: validPercentage(keyResult.currentValue, '关键结果当前值'),
-        targetValue: validPercentage(keyResult.targetValue, '关键结果目标值')
+        currentValue: validPercentage(keyResult.currentValue, '关键结果当前值')
       }))
     }));
   }
@@ -412,9 +522,16 @@ class ApplicationService {
     if (!confirmed) {
       throw new DomainError('DELETE_CONFIRMATION_REQUIRED', '删除计划块需要二次确认');
     }
+    const now = this.now();
     return this.repository.transaction((database) => {
-      this.requireEntity(database.calendarEvents, id, '计划块');
+      const event = this.requireEntity(database.calendarEvents, id, '计划块');
       database.calendarEvents = database.calendarEvents.filter((item) => item.id !== id);
+      database.timeLogs.forEach((log) => {
+        if (log.calendarEventId !== id) return;
+        log.calendarEventSummarySnapshot = log.calendarEventSummarySnapshot || event.title;
+        log.calendarEventId = null;
+        log.updatedAt = now;
+      });
       return { id };
     }).result;
   }
@@ -468,11 +585,17 @@ class ApplicationService {
       const originalDuration = activeRevision.endedAt - activeRevision.startedAt;
       const endedAt = input.endedAt === undefined ? startedAt + originalDuration : Number(input.endedAt);
       validTimeRange(startedAt, endedAt, '重复规则时间');
-      activeRevision.effectiveUntil = occurrenceStart - 1;
+      const replaceActiveRevision = occurrenceStart === activeRevision.effectiveFrom;
+      const nextRevision = Math.max(...rule.revisions.map((item) => item.revision)) + 1;
+      if (replaceActiveRevision) {
+        rule.revisions = rule.revisions.filter((item) => item.id !== activeRevision.id);
+      } else {
+        activeRevision.effectiveUntil = occurrenceStart - 1;
+      }
       const revision = {
         ...activeRevision,
         id: createId('revision', now),
-        revision: Math.max(...rule.revisions.map((item) => item.revision)) + 1,
+        revision: nextRevision,
         effectiveFrom: occurrenceStart,
         effectiveUntil: null,
         frequency: input.frequency === undefined ? activeRevision.frequency : validRepeatFrequency(input.frequency),
@@ -794,10 +917,6 @@ class ApplicationService {
 
   exportJson() {
     return exportJson(this.snapshot());
-  }
-
-  exportLogsCsv() {
-    return exportLogsCsv(this.snapshot());
   }
 }
 

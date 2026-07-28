@@ -1,5 +1,5 @@
 <view class="page">
-  <view class="hero"><view class="eyebrow">COMMIT WHAT MATTERS</view><view class="title">愿望与项目</view><view class="subtitle">先收集想法，再用项目和实际投入兑现承诺。</view></view>
+  <view class="hero"><view class="eyebrow">FOCUS ON WHAT MATTERS</view><view class="title">愿望与项目</view><view class="subtitle">先收集想法，再用项目和实际投入兑现承诺。</view></view>
 
   <view class="card form-card">
     <view class="section-title">新建项目</view>
@@ -7,7 +7,7 @@
     <view class="field-row"><picker mode="date" value="{{projectDate}}" data-key="projectDate" bindchange="onField"><view>{{projectDate}}</view></picker><picker mode="time" value="{{projectTime}}" data-key="projectTime" bindchange="onField"><view>{{projectTime}}</view></picker></view>
     <input class="input" placeholder="首个目标名称" value="{{projectObjective}}" data-key="projectObjective" bindinput="onField" />
     <input class="input" placeholder="首个关键结果标题" value="{{projectKeyResult}}" data-key="projectKeyResult" bindinput="onField" />
-    <view class="field-row"><input class="input" type="number" placeholder="当前值 0–100" value="{{projectCurrent}}" data-key="projectCurrent" bindinput="onField" /><input class="input" type="number" placeholder="目标值 0–100" value="{{projectTarget}}" data-key="projectTarget" bindinput="onField" /></view>
+    <input class="input" type="number" placeholder="当前值 0–100" value="{{projectCurrent}}" data-key="projectCurrent" bindinput="onField" />
     <button class="primary" bindtap="addProject">创建项目</button>
   </view>
 
@@ -16,7 +16,7 @@
     <view wx:if="{{!activeProjects.length}}" class="empty">还没有活动项目。</view>
     <view wx:for="{{activeProjects}}" wx:key="id" class="item project-item">
       <view class="item-title">{{item.title}}</view><view class="muted">截止：{{item.deadlineText}} · {{item.objectives.length}} 个目标</view>
-      <view wx:for="{{item.objectives}}" wx:for-item="objective" wx:key="id" class="okr"><view>{{objective.title}}</view><view wx:for="{{objective.keyResults}}" wx:for-item="kr" wx:key="id" class="muted">{{kr.title}} {{kr.currentValue}}% / {{kr.targetValue}}%</view></view>
+      <view wx:for="{{item.objectives}}" wx:for-item="objective" wx:key="id" class="okr"><view>{{objective.title}}</view><view wx:for="{{objective.keyResults}}" wx:for-item="kr" wx:key="id" class="muted">{{kr.title}} {{kr.currentValue}}%</view></view>
       <view class="actions"><button class="text-button" data-item="{{item}}" bindtap="openProjectEditor">编辑</button><button class="text-button" data-id="{{item.id}}" bindtap="archiveProject">归档</button><button class="danger-button" data-id="{{item.id}}" bindtap="abandonProject">放弃</button></view>
     </view>
   </view>
@@ -26,7 +26,7 @@
     <picker range="{{activeProjects}}" range-key="title" value="{{okrProjectIndex}}" data-key="okrProjectIndex" bindchange="onPicker"><view class="picker">项目：{{activeProjects[okrProjectIndex].title || '请先创建项目'}}</view></picker>
     <input class="input" placeholder="目标名称" value="{{objectiveTitle}}" data-key="objectiveTitle" bindinput="onField" />
     <input class="input" placeholder="关键结果标题" value="{{keyResultTitle}}" data-key="keyResultTitle" bindinput="onField" />
-    <view class="field-row"><input class="input" type="number" placeholder="当前值 0–100" value="{{currentValue}}" data-key="currentValue" bindinput="onField" /><input class="input" type="number" placeholder="目标值 0–100" value="{{targetValue}}" data-key="targetValue" bindinput="onField" /></view>
+    <input class="input" type="number" placeholder="当前值 0–100" value="{{currentValue}}" data-key="currentValue" bindinput="onField" />
     <button class="primary" bindtap="addKeyResult">保存关键结果</button>
   </view>
 

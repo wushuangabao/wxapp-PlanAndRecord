@@ -1,7 +1,7 @@
 <view class="page">
-  <view class="hero"><view class="eyebrow">LOCAL PROFILE</view><view class="title">我的</view><view class="subtitle">不登录、不上传；数据只保存在当前设备。</view></view>
+  <view class="hero"><view class="eyebrow">LOCAL PROFILE</view><view class="title">我的</view><view class="subtitle">不登录、不自动上传；数据默认只保存在当前设备。</view></view>
 
-  <view class="risk">清理微信缓存、卸载微信或更换设备可能导致本地数据丢失。首版没有云端恢复，JSON 仅供主动导出查看，暂不支持导入恢复。</view>
+  <view class="risk">清理微信缓存、卸载微信或更换设备可能导致本地数据丢失；首版不提供云端自动备份或同步。</view>
 
   <view class="card">
     <view class="section-title">本周复盘</view>
@@ -16,5 +16,5 @@
 
   <view class="card"><view class="section-title">分类管理</view><input class="input" placeholder="新分类名称" value="{{categoryName}}" data-key="categoryName" bindinput="onField" /><button class="secondary" bindtap="addCategory">新增分类</button><view wx:for="{{categories}}" wx:key="id" class="category-row"><view wx:if="{{renameId !== item.id}}"><view>{{item.name}}</view><view class="muted">{{item.status === 'active' ? '可用于新记录' : '已归档'}}</view><view class="actions"><button class="text-button" data-item="{{item}}" bindtap="startRename">重命名</button><button wx:if="{{!item.isSystem && item.status === 'active'}}" class="text-button" data-id="{{item.id}}" bindtap="archiveCategory">归档</button></view></view><view wx:else><input class="input" value="{{renameValue}}" data-key="renameValue" bindinput="onField" /><button class="secondary" bindtap="saveRename">保存名称</button></view></view></view>
 
-  <view class="card"><view class="section-title">主动导出</view><view class="muted">导出文件包含项目、记录、备注和标签等本地数据。请自行妥善保管；首版不能导入或恢复。</view><button class="primary" bindtap="exportJson">导出 JSON 全量数据</button><button class="secondary" bindtap="exportCsv">导出 CSV 日志</button></view>
+  <view class="card"><view class="section-title">数据管理</view><button class="primary" disabled="{{dataOperationInProgress}}" bindtap="exportJson">导出 JSON</button><button class="secondary" disabled="{{dataOperationInProgress}}" bindtap="importJson">导入 JSON</button><button class="danger" disabled="{{dataOperationInProgress}}" bindtap="clearData">清空数据</button></view>
 </view>

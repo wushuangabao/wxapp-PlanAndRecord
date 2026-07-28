@@ -1,0 +1,464 @@
+const {
+  APP_SCHEMA_VERSION,
+  DEFAULT_CATEGORY_ID,
+  DEFAULT_CATEGORY_NAME,
+  LOG_SOURCE,
+  LOG_STATUS,
+  MAX_PLAN_PRIORITY,
+  PROJECT_STATUS,
+  REPEAT_FREQUENCY,
+  TASK_STATUS,
+  TIMER_STATUS
+} = require('../domain/constants');
+const { clone } = require('../domain/entities');
+const { DomainError } = require('../domain/errors');
+const { calculateDurationMinutes, isFiniteTimestamp } = require('../domain/time');
+
+const ROOT_COLLECTIONS = [
+  'categories',
+  'wishes',
+  'projects',
+  'tasks',
+  'calendarEvents',
+  'repeatRules',
+  'occurrenceExceptions',
+  'timeLogs'
+];
+
+const ROOT_FIELDS = [
+  'schemaVersion', 'localProfile', ...ROOT_COLLECTIONS, 'timer', 'recoveryDraft', 'createdAt', 'updatedAt'
+];
+
+function invalidSchema() {
+  throw new DomainError('IMPORT_SCHEMA_INVALID', '导入文件的数据结构无效');
+}
+
+function unsupportedSchema() {
+  throw new DomainError('IMPORT_SCHEMA_UNSUPPORTED', '导入文件的数据版本暂不支持');
+}
+
+function duplicateId() {
+  throw new DomainError('IMPORT_DUPLICATE_ID', '导入文件包含重复的实体标识');
+}
+
+function isPlainObject(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+function hasOwn(object, key) {
+  return Object.prototype.hasOwnProperty.call(object, key);
+}
+
+function requiredString(value) {
+  return typeof value === 'string' && value.length > 0;
+}
+
+function nullableString(value) {
+  return value === null || typeof value === 'string';
+}
+
+function nullableTimestamp(value) {
+  return value === null || isFiniteTimestamp(value);
+}
+
+function validEnum(value, values) {
+  return Object.values(values).includes(value);
+}
+
+function validPriority(value) {
+  return Number.isInteger(value) && value >= 1 && value <= MAX_PLAN_PRIORITY;
+}
+
+function validTimeRange(startedAt, endedAt) {
+  return isFiniteTimestamp(startedAt) && isFiniteTimestamp(endedAt) && endedAt > startedAt;
+}
+
+function validPauseRange(startedAt, endedAt) {
+  return isFiniteTimestamp(startedAt) && isFiniteTimestamp(endedAt) && endedAt >= startedAt;
+}
+
+function requireFields(object, fields) {
+  return isPlainObject(object) && fields.every((field) => hasOwn(object, field));
+}
+
+function pickKnownFields(object, fields) {
+  if (!isPlainObject(object)) return object;
+  return fields.reduce((result, field) => {
+    if (hasOwn(object, field)) result[field] = object[field];
+    return result;
+  }, {});
+}
+
+function normalizeCollection(items, normalizeItem) {
+  return Array.isArray(items) ? items.map(normalizeItem) : items;
+}
+
+function normalizeLocalProfile(profile) {
+  return pickKnownFields(profile, ['id', 'createdAt', 'updatedAt']);
+}
+
+function normalizeCategory(category) {
+  return pickKnownFields(category, ['id', 'name', 'status', 'isSystem', 'createdAt', 'updatedAt']);
+}
+
+function normalizeWish(wish) {
+  return pickKnownFields(wish, ['id', 'title', 'createdAt', 'updatedAt']);
+}
+
+function normalizeObjective(objective) {
+  const normalized = pickKnownFields(objective, ['id', 'title', 'keyResults']);
+  if (isPlainObject(normalized) && hasOwn(normalized, 'keyResults')) {
+    normalized.keyResults = normalizeCollection(normalized.keyResults, (keyResult) => (
+      pickKnownFields(keyResult, ['id', 'title', 'currentValue'])
+    ));
+  }
+  return normalized;
+}
+
+function normalizeProject(project) {
+  const normalized = pickKnownFields(project, ['id', 'title', 'deadlineAt', 'status', 'objectives', 'createdAt', 'updatedAt']);
+  if (isPlainObject(normalized) && hasOwn(normalized, 'objectives')) {
+    normalized.objectives = normalizeCollection(normalized.objectives, normalizeObjective);
+  }
+  return normalized;
+}
+
+function normalizeTask(task) {
+  return pickKnownFields(task, ['id', 'title', 'status', 'projectId', 'projectNameSnapshot', 'completedAt', 'createdAt', 'updatedAt']);
+}
+
+function normalizeCalendarEvent(event) {
+  return pickKnownFields(event, [
+    'id', 'title', 'startedAt', 'endedAt', 'priority', 'projectId', 'projectNameSnapshot',
+    'taskId', 'taskNameSnapshot', 'repeatRuleId', 'repeatRuleSummarySnapshot', 'createdAt', 'updatedAt'
+  ]);
+}
+
+function normalizeRevision(revision) {
+  return pickKnownFields(revision, [
+    'id', 'revision', 'effectiveFrom', 'effectiveUntil', 'frequency', 'interval', 'weekdays',
+    'monthDay', 'startedAt', 'endedAt', 'priority', 'projectId', 'projectNameSnapshot', 'taskId', 'taskNameSnapshot'
+  ]);
+}
+
+function normalizeRepeatRule(rule) {
+  const normalized = pickKnownFields(rule, ['id', 'title', 'revisions', 'createdAt', 'updatedAt']);
+  if (isPlainObject(normalized) && hasOwn(normalized, 'revisions')) {
+    normalized.revisions = normalizeCollection(normalized.revisions, normalizeRevision);
+  }
+  return normalized;
+}
+
+function normalizeOverride(override) {
+  return pickKnownFields(override, [
+    'title', 'projectId', 'projectNameSnapshot', 'taskId', 'taskNameSnapshot', 'startedAt', 'endedAt', 'priority'
+  ]);
+}
+
+function normalizeOccurrenceException(exception) {
+  const normalized = pickKnownFields(exception, ['id', 'ruleId', 'occurrenceStart', 'kind', 'override', 'createdAt', 'updatedAt']);
+  if (isPlainObject(normalized) && hasOwn(normalized, 'override')) {
+    normalized.override = normalizeOverride(normalized.override);
+  }
+  return normalized;
+}
+
+function normalizeTimeLog(log) {
+  return pickKnownFields(log, [
+    'id', 'schemaVersion', 'startedAt', 'endedAt', 'durationMinutes', 'categoryId', 'categoryNameSnapshot',
+    'projectId', 'projectNameSnapshot', 'taskId', 'taskNameSnapshot', 'calendarEventId', 'calendarEventSummarySnapshot',
+    'note', 'status', 'source', 'originRuleId', 'originOccurrenceId', 'originRuleSummarySnapshot', 'tags', 'createdAt', 'updatedAt'
+  ]);
+}
+
+function normalizeTimerDraft(draft) {
+  return pickKnownFields(draft, [
+    'categoryId', 'categoryNameSnapshot', 'projectId', 'projectNameSnapshot',
+    'taskId', 'taskNameSnapshot', 'calendarEventId', 'calendarEventSummarySnapshot', 'note', 'tags'
+  ]);
+}
+
+function normalizeTimer(timer) {
+  const normalized = pickKnownFields(timer, ['status', 'startedAt', 'endedAt', 'pausedAt', 'pauses', 'draft']);
+  if (isPlainObject(normalized) && hasOwn(normalized, 'pauses')) {
+    normalized.pauses = normalizeCollection(normalized.pauses, (pause) => pickKnownFields(pause, ['startedAt', 'endedAt']));
+  }
+  if (isPlainObject(normalized) && hasOwn(normalized, 'draft')) {
+    normalized.draft = normalizeTimerDraft(normalized.draft);
+  }
+  return normalized;
+}
+
+function normalizeRecoveryDraft(recoveryDraft) {
+  const normalized = pickKnownFields(recoveryDraft, ['reason', 'timer', 'createdAt']);
+  if (isPlainObject(normalized) && hasOwn(normalized, 'timer')) {
+    normalized.timer = normalizeTimer(normalized.timer);
+  }
+  return normalized;
+}
+
+const COLLECTION_NORMALIZERS = {
+  categories: normalizeCategory,
+  wishes: normalizeWish,
+  projects: normalizeProject,
+  tasks: normalizeTask,
+  calendarEvents: normalizeCalendarEvent,
+  repeatRules: normalizeRepeatRule,
+  occurrenceExceptions: normalizeOccurrenceException,
+  timeLogs: normalizeTimeLog
+};
+
+function normalizeJsonSnapshot(database) {
+  const normalized = pickKnownFields(database, ROOT_FIELDS);
+  if (!isPlainObject(normalized)) return normalized;
+
+  if (hasOwn(normalized, 'localProfile')) normalized.localProfile = normalizeLocalProfile(normalized.localProfile);
+  ROOT_COLLECTIONS.forEach((collection) => {
+    if (hasOwn(normalized, collection)) {
+      normalized[collection] = normalizeCollection(normalized[collection], COLLECTION_NORMALIZERS[collection]);
+    }
+  });
+  if (hasOwn(normalized, 'timer')) normalized.timer = normalizeTimer(normalized.timer);
+  if (hasOwn(normalized, 'recoveryDraft') && normalized.recoveryDraft !== null) {
+    normalized.recoveryDraft = normalizeRecoveryDraft(normalized.recoveryDraft);
+  }
+  return normalized;
+}
+
+function validateTimestamps(object) {
+  return isFiniteTimestamp(object.createdAt) && isFiniteTimestamp(object.updatedAt);
+}
+
+function collectId(ids, id) {
+  if (!requiredString(id)) invalidSchema();
+  if (ids.has(id)) duplicateId();
+  ids.add(id);
+}
+
+function validateLocalProfile(profile, ids) {
+  if (!requireFields(profile, ['id', 'createdAt', 'updatedAt']) || !requiredString(profile.id) || !validateTimestamps(profile)) invalidSchema();
+  collectId(ids, profile.id);
+}
+
+function validateCategory(category, ids) {
+  if (!requireFields(category, ['id', 'name', 'status', 'isSystem', 'createdAt', 'updatedAt'])
+    || !requiredString(category.id) || !requiredString(category.name)
+    || !['active', 'archived'].includes(category.status) || typeof category.isSystem !== 'boolean'
+    || !validateTimestamps(category)) invalidSchema();
+  collectId(ids, category.id);
+}
+
+function validateWish(wish, ids) {
+  if (!requireFields(wish, ['id', 'title', 'createdAt', 'updatedAt'])
+    || !requiredString(wish.id) || !requiredString(wish.title) || !validateTimestamps(wish)) invalidSchema();
+  collectId(ids, wish.id);
+}
+
+function validateObjective(objective, ids) {
+  if (!requireFields(objective, ['id', 'title', 'keyResults'])
+    || !requiredString(objective.id) || !requiredString(objective.title) || !Array.isArray(objective.keyResults)) invalidSchema();
+  collectId(ids, objective.id);
+  objective.keyResults.forEach((keyResult) => {
+    if (!requireFields(keyResult, ['id', 'title', 'currentValue'])
+      || !requiredString(keyResult.id) || !requiredString(keyResult.title)
+      || !Number.isInteger(keyResult.currentValue) || keyResult.currentValue < 0 || keyResult.currentValue > 100) invalidSchema();
+    collectId(ids, keyResult.id);
+  });
+}
+
+function validateProject(project, ids) {
+  if (!requireFields(project, ['id', 'title', 'deadlineAt', 'status', 'objectives', 'createdAt', 'updatedAt'])
+    || !requiredString(project.id) || !requiredString(project.title) || !isFiniteTimestamp(project.deadlineAt)
+    || !validEnum(project.status, PROJECT_STATUS) || !Array.isArray(project.objectives) || !validateTimestamps(project)) invalidSchema();
+  collectId(ids, project.id);
+  project.objectives.forEach((objective) => validateObjective(objective, ids));
+}
+
+function validateTask(task, ids) {
+  if (!requireFields(task, ['id', 'title', 'status', 'projectId', 'projectNameSnapshot', 'completedAt', 'createdAt', 'updatedAt'])
+    || !requiredString(task.id) || !requiredString(task.title) || !validEnum(task.status, TASK_STATUS)
+    || !nullableString(task.projectId) || !nullableString(task.projectNameSnapshot) || !nullableTimestamp(task.completedAt)
+    || !validateTimestamps(task)) invalidSchema();
+  collectId(ids, task.id);
+}
+
+function validateCalendarEvent(event, ids) {
+  const references = ['projectId', 'projectNameSnapshot', 'taskId', 'taskNameSnapshot', 'repeatRuleId', 'repeatRuleSummarySnapshot'];
+  if (!requireFields(event, ['id', 'title', 'startedAt', 'endedAt', 'priority', ...references, 'createdAt', 'updatedAt'])
+    || !requiredString(event.id) || !requiredString(event.title) || !validTimeRange(event.startedAt, event.endedAt)
+    || !validPriority(event.priority) || !references.every((field) => nullableString(event[field])) || !validateTimestamps(event)) invalidSchema();
+  collectId(ids, event.id);
+}
+
+function validateRevision(revision, ids, revisions) {
+  const references = ['projectId', 'projectNameSnapshot', 'taskId', 'taskNameSnapshot'];
+  if (!requireFields(revision, ['id', 'revision', 'effectiveFrom', 'effectiveUntil', 'frequency', 'interval', 'weekdays', 'monthDay', 'startedAt', 'endedAt', 'priority', ...references])
+    || !requiredString(revision.id) || !Number.isInteger(revision.revision) || revision.revision < 1
+    || revisions.has(revision.revision) || !isFiniteTimestamp(revision.effectiveFrom)
+    || !nullableTimestamp(revision.effectiveUntil) || (revision.effectiveUntil !== null && revision.effectiveUntil < revision.effectiveFrom)
+    || !validEnum(revision.frequency, REPEAT_FREQUENCY) || !Number.isInteger(revision.interval) || revision.interval < 1
+    || !Array.isArray(revision.weekdays) || !revision.weekdays.every((weekday) => Number.isInteger(weekday) && weekday >= 0 && weekday <= 6)
+    || new Set(revision.weekdays).size !== revision.weekdays.length
+    || !(revision.monthDay === null || (Number.isInteger(revision.monthDay) && revision.monthDay >= 1 && revision.monthDay <= 31))
+    || !validTimeRange(revision.startedAt, revision.endedAt) || !validPriority(revision.priority)
+    || !references.every((field) => nullableString(revision[field]))) invalidSchema();
+  revisions.add(revision.revision);
+  collectId(ids, revision.id);
+}
+
+function validateRepeatRule(rule, ids) {
+  if (!requireFields(rule, ['id', 'title', 'revisions', 'createdAt', 'updatedAt'])
+    || !requiredString(rule.id) || !requiredString(rule.title) || !Array.isArray(rule.revisions) || !rule.revisions.length
+    || !validateTimestamps(rule)) invalidSchema();
+  collectId(ids, rule.id);
+  const revisions = new Set();
+  rule.revisions.forEach((revision) => validateRevision(revision, ids, revisions));
+}
+
+function validateOverride(override) {
+  if (!isPlainObject(override)) invalidSchema();
+  const optionalStringFields = ['title', 'projectId', 'projectNameSnapshot', 'taskId', 'taskNameSnapshot'];
+  if (!optionalStringFields.every((field) => !hasOwn(override, field) || (field === 'title' ? typeof override[field] === 'string' : nullableString(override[field])))
+    || (hasOwn(override, 'startedAt') && !isFiniteTimestamp(override.startedAt))
+    || (hasOwn(override, 'endedAt') && !isFiniteTimestamp(override.endedAt))
+    || (hasOwn(override, 'priority') && !validPriority(override.priority))
+    || (hasOwn(override, 'startedAt') && hasOwn(override, 'endedAt') && !validTimeRange(override.startedAt, override.endedAt))) invalidSchema();
+}
+
+function validateOccurrenceException(exception, ids) {
+  if (!requireFields(exception, ['id', 'ruleId', 'occurrenceStart', 'kind', 'override', 'createdAt', 'updatedAt'])
+    || !requiredString(exception.id) || !requiredString(exception.ruleId) || !isFiniteTimestamp(exception.occurrenceStart)
+    || !['skip', 'override'].includes(exception.kind) || !validateTimestamps(exception)) invalidSchema();
+  if (exception.kind === 'skip' && exception.override !== null) invalidSchema();
+  if (exception.kind === 'override') validateOverride(exception.override);
+  collectId(ids, exception.id);
+}
+
+function validateTimeLog(log, ids) {
+  const nullableFields = ['projectId', 'projectNameSnapshot', 'taskId', 'taskNameSnapshot', 'calendarEventId', 'calendarEventSummarySnapshot', 'originRuleId', 'originOccurrenceId', 'originRuleSummarySnapshot'];
+  if (!requireFields(log, ['id', 'schemaVersion', 'startedAt', 'endedAt', 'durationMinutes', 'categoryId', 'categoryNameSnapshot', ...nullableFields, 'note', 'status', 'source', 'tags', 'createdAt', 'updatedAt'])
+    || !requiredString(log.id) || log.schemaVersion !== APP_SCHEMA_VERSION || !validTimeRange(log.startedAt, log.endedAt)
+    || !Number.isInteger(log.durationMinutes) || log.durationMinutes < 0
+    || log.durationMinutes > calculateDurationMinutes(log.startedAt, log.endedAt, []) || !requiredString(log.categoryId)
+    || typeof log.categoryNameSnapshot !== 'string' || !nullableFields.every((field) => nullableString(log[field]))
+    || typeof log.note !== 'string' || !validEnum(log.status, LOG_STATUS) || !validEnum(log.source, LOG_SOURCE)
+    || !Array.isArray(log.tags) || !log.tags.every((tag) => typeof tag === 'string') || !validateTimestamps(log)) invalidSchema();
+  collectId(ids, log.id);
+}
+
+function validateTimerDraft(draft) {
+  if (!isPlainObject(draft)) invalidSchema();
+  const nullableFields = ['categoryId', 'categoryNameSnapshot', 'projectId', 'projectNameSnapshot', 'taskId', 'taskNameSnapshot', 'calendarEventId', 'calendarEventSummarySnapshot'];
+  if (!nullableFields.every((field) => !hasOwn(draft, field) || nullableString(draft[field]))
+    || (hasOwn(draft, 'note') && typeof draft.note !== 'string')
+    || (hasOwn(draft, 'tags') && (!Array.isArray(draft.tags) || !draft.tags.every((tag) => typeof tag === 'string')))) invalidSchema();
+}
+
+function validateTimerStructure(timer) {
+  if (!requireFields(timer, ['status', 'startedAt', 'endedAt', 'pausedAt', 'pauses', 'draft'])
+    || !validEnum(timer.status, TIMER_STATUS) || !nullableTimestamp(timer.startedAt)
+    || !nullableTimestamp(timer.endedAt) || !nullableTimestamp(timer.pausedAt) || !Array.isArray(timer.pauses)) invalidSchema();
+  timer.pauses.forEach((pause) => {
+    if (!requireFields(pause, ['startedAt', 'endedAt']) || !validPauseRange(pause.startedAt, pause.endedAt)) invalidSchema();
+  });
+  validateTimerDraft(timer.draft);
+}
+
+function validateTimer(timer) {
+  validateTimerStructure(timer);
+
+  if (timer.status === TIMER_STATUS.IDLE) {
+    if (timer.startedAt !== null || timer.endedAt !== null || timer.pausedAt !== null || timer.pauses.length) invalidSchema();
+    return;
+  }
+
+  if (!isFiniteTimestamp(timer.startedAt)) invalidSchema();
+  if (timer.status === TIMER_STATUS.RUNNING
+    && (timer.endedAt !== null || timer.pausedAt !== null)) invalidSchema();
+  if (timer.status === TIMER_STATUS.PAUSED
+    && (timer.endedAt !== null || !isFiniteTimestamp(timer.pausedAt) || timer.pausedAt < timer.startedAt)) invalidSchema();
+  if (timer.status === TIMER_STATUS.ENDED
+    && (!isFiniteTimestamp(timer.endedAt) || timer.endedAt < timer.startedAt || timer.pausedAt !== null)) invalidSchema();
+
+  let precedingEnd = timer.startedAt;
+  timer.pauses.forEach((pause) => {
+    if (pause.startedAt < precedingEnd) invalidSchema();
+    if (timer.status === TIMER_STATUS.PAUSED && pause.endedAt > timer.pausedAt) invalidSchema();
+    if (timer.status === TIMER_STATUS.ENDED && pause.endedAt > timer.endedAt) invalidSchema();
+    precedingEnd = pause.endedAt;
+  });
+  if (timer.status === TIMER_STATUS.PAUSED && timer.pausedAt < precedingEnd) invalidSchema();
+}
+
+function validateRecoveryDraft(recoveryDraft) {
+  if (recoveryDraft === null) return;
+  if (!requireFields(recoveryDraft, ['reason', 'timer', 'createdAt'])
+    || typeof recoveryDraft.reason !== 'string' || !isFiniteTimestamp(recoveryDraft.createdAt)) invalidSchema();
+  validateTimerStructure(recoveryDraft.timer);
+}
+
+function validateJsonSnapshot(database) {
+  if (!requireFields(database, ROOT_FIELDS)) invalidSchema();
+  if (!Number.isInteger(database.schemaVersion)) invalidSchema();
+  if (database.schemaVersion !== APP_SCHEMA_VERSION) unsupportedSchema();
+  if (!validateTimestamps(database)) invalidSchema();
+  if (!ROOT_COLLECTIONS.every((field) => Array.isArray(database[field]))) invalidSchema();
+
+  const ids = new Set();
+  validateLocalProfile(database.localProfile, ids);
+  database.categories.forEach((category) => validateCategory(category, ids));
+  database.wishes.forEach((wish) => validateWish(wish, ids));
+  database.projects.forEach((project) => validateProject(project, ids));
+  database.tasks.forEach((task) => validateTask(task, ids));
+  database.calendarEvents.forEach((event) => validateCalendarEvent(event, ids));
+  database.repeatRules.forEach((rule) => validateRepeatRule(rule, ids));
+  database.occurrenceExceptions.forEach((exception) => validateOccurrenceException(exception, ids));
+  database.timeLogs.forEach((log) => validateTimeLog(log, ids));
+  validateTimer(database.timer);
+  validateRecoveryDraft(database.recoveryDraft);
+
+  const systemCategories = database.categories.filter((category) => category.id === DEFAULT_CATEGORY_ID
+    && category.name === DEFAULT_CATEGORY_NAME && category.status === 'active' && category.isSystem === true);
+  if (systemCategories.length !== 1 || database.categories.filter((category) => category.isSystem).length !== 1) invalidSchema();
+}
+
+function parseJsonSnapshot(jsonText) {
+  if (typeof jsonText !== 'string') {
+    throw new DomainError('IMPORT_JSON_INVALID', '导入文件不是有效的 JSON 文本');
+  }
+  let database;
+  try {
+    database = JSON.parse(jsonText);
+  } catch (error) {
+    throw new DomainError('IMPORT_JSON_INVALID', 'JSON 文件无法解析，请检查文件是否完整');
+  }
+  const normalized = normalizeJsonSnapshot(database);
+  validateJsonSnapshot(normalized);
+  return clone(normalized);
+}
+
+function persistedValueEquals(first, second) {
+  if (Object.is(first, second)) return true;
+  if (Array.isArray(first) || Array.isArray(second)) {
+    return Array.isArray(first)
+      && Array.isArray(second)
+      && first.length === second.length
+      && first.every((value, index) => persistedValueEquals(value, second[index]));
+  }
+  if (first && second && typeof first === 'object' && typeof second === 'object') {
+    const firstKeys = Object.keys(first).sort();
+    const secondKeys = Object.keys(second).sort();
+    return persistedValueEquals(firstKeys, secondKeys)
+      && firstKeys.every((key) => persistedValueEquals(first[key], second[key]));
+  }
+  return false;
+}
+
+module.exports = {
+  normalizeJsonSnapshot,
+  parseJsonSnapshot,
+  validateJsonSnapshot,
+  persistedValueEquals
+};

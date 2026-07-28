@@ -1,0 +1,402 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+
+const { createInitialDatabase, clone } = require('../miniprogram/domain/entities');
+const { DomainError, StorageError } = require('../miniprogram/domain/errors');
+const {
+  LocalRepository,
+  STORAGE_KEY,
+  BACKUP_KEY
+} = require('../miniprogram/repository/local-repository');
+const {
+  MemoryStorageAdapter,
+  WxStorageAdapter
+} = require('../miniprogram/repository/storage-adapter');
+
+class FaultStorage {
+  constructor() {
+    this.values = new Map();
+    this.failGetKey = null;
+    this.failSet = false;
+    this.failSetAfterWriteOnce = false;
+    this.failSetOnCall = null;
+    this.failRemove = false;
+    this.failRemoveAfterDelete = false;
+    this.setCalls = [];
+    this.removeCalls = [];
+  }
+
+  get(key) {
+    if (this.failGetKey === key) throw new Error(`get failed: ${key}`);
+    const value = this.values.get(key);
+    return value === undefined ? undefined : structuredClone(value);
+  }
+
+  set(key, value) {
+    this.setCalls.push(key);
+    if (this.failSet || this.setCalls.length === this.failSetOnCall) {
+      throw new Error('set failed');
+    }
+    this.values.set(key, structuredClone(value));
+    if (this.failSetAfterWriteOnce) {
+      this.failSetAfterWriteOnce = false;
+      throw new Error('set failed after write');
+    }
+  }
+
+  remove(key) {
+    this.removeCalls.push(key);
+    if (this.failRemoveAfterDelete) {
+      this.failRemoveAfterDelete = false;
+      this.values.delete(key);
+      throw new Error('remove failed after delete');
+    }
+    if (this.failRemove) throw new Error('remove failed');
+    this.values.delete(key);
+  }
+}
+
+function createRepository(storage, start = 1_700_000_000_000) {
+  let now = start;
+  const repository = new LocalRepository(storage, { now: () => now });
+  repository.initialize();
+  return {
+    repository,
+    setNow(value) { now = value; }
+  };
+}
+
+function changedSnapshot(database, updatedAt = 1_700_000_000_100) {
+  const next = clone(database);
+  next.localProfile.updatedAt = updatedAt;
+  next.updatedAt = updatedAt;
+  return next;
+}
+
+function captureThrown(action) {
+  try {
+    action();
+  } catch (error) {
+    return error;
+  }
+  assert.fail('预期操作抛出异常');
+}
+
+test('MemoryStorageAdapter.remove 只删除指定键', () => {
+  const storage = new MemoryStorageAdapter();
+  storage.set('keep', { value: 1 });
+  storage.set('remove', { value: 2 });
+
+  storage.remove('remove');
+
+  assert.deepEqual(storage.get('keep'), { value: 1 });
+  assert.equal(storage.get('remove'), undefined);
+});
+
+test('replace 在候选快照校验失败时不写入且不改变缓存', () => {
+  const storage = new FaultStorage();
+  const { repository } = createRepository(storage);
+  const oldSnapshot = repository.read();
+  const invalid = changedSnapshot(oldSnapshot);
+  invalid.localProfile.createdAt = 'not-a-timestamp';
+  storage.setCalls.length = 0;
+
+  assert.throws(
+    () => repository.replace(invalid, { clearMigrationBackup: true }),
+    (error) => error instanceof DomainError && error.code === 'IMPORT_SCHEMA_INVALID'
+  );
+
+  assert.deepEqual(storage.get(STORAGE_KEY), oldSnapshot);
+  assert.deepEqual(repository.cache, oldSnapshot);
+  assert.deepEqual(storage.setCalls, []);
+  assert.deepEqual(storage.removeCalls, []);
+});
+
+test('replace 主快照写入失败时保留存储和缓存', () => {
+  const storage = new FaultStorage();
+  const { repository } = createRepository(storage);
+  const oldSnapshot = repository.read();
+  storage.setCalls.length = 0;
+  storage.failSet = true;
+
+  assert.throws(
+    () => repository.replace(changedSnapshot(oldSnapshot)),
+    (error) => error instanceof StorageError && error.code === 'WRITE_FAILED'
+  );
+
+  assert.deepEqual(storage.get(STORAGE_KEY), oldSnapshot);
+  assert.deepEqual(repository.cache, oldSnapshot);
+  assert.deepEqual(storage.setCalls, [STORAGE_KEY, STORAGE_KEY]);
+  assert.deepEqual(storage.removeCalls, [BACKUP_KEY]);
+});
+
+test('普通 replace 主快照已写入后抛错会恢复旧存储和旧缓存', () => {
+  const storage = new FaultStorage();
+  const { repository } = createRepository(storage);
+  const oldSnapshot = repository.read();
+  const backup = { schemaVersion: 0, sentinel: 'ordinary-after-write-backup' };
+  storage.set(BACKUP_KEY, backup);
+  storage.setCalls.length = 0;
+  storage.failSetAfterWriteOnce = true;
+
+  assert.throws(
+    () => repository.replace(changedSnapshot(oldSnapshot)),
+    (error) => error instanceof StorageError
+      && error.code === 'WRITE_FAILED'
+      && /已保留/.test(error.message)
+  );
+
+  assert.deepEqual(storage.get(STORAGE_KEY), oldSnapshot);
+  assert.deepEqual(storage.get(BACKUP_KEY), backup);
+  assert.deepEqual(repository.cache, oldSnapshot);
+  assert.deepEqual(storage.setCalls, [STORAGE_KEY, STORAGE_KEY, BACKUP_KEY]);
+  assert.deepEqual(storage.removeCalls, []);
+});
+
+test('replace 仅在有效候选快照写入成功后清理迁移备份', () => {
+  const storage = new FaultStorage();
+  const { repository } = createRepository(storage);
+  const oldSnapshot = repository.read();
+  const backup = { schemaVersion: 0, sentinel: 'old-backup' };
+  storage.set(BACKUP_KEY, backup);
+  storage.setCalls.length = 0;
+
+  repository.replace(changedSnapshot(oldSnapshot), { clearMigrationBackup: true });
+
+  assert.equal(storage.get(BACKUP_KEY), undefined);
+  assert.deepEqual(storage.setCalls, [STORAGE_KEY]);
+  assert.deepEqual(storage.removeCalls, [BACKUP_KEY]);
+});
+
+test('replace 清理备份失败时恢复旧主快照和旧备份，并保持缓存', () => {
+  const storage = new FaultStorage();
+  const { repository } = createRepository(storage);
+  const oldSnapshot = repository.read();
+  const backup = { schemaVersion: 0, sentinel: 'old-backup' };
+  storage.set(BACKUP_KEY, backup);
+  storage.setCalls.length = 0;
+  storage.failRemoveAfterDelete = true;
+
+  assert.throws(
+    () => repository.replace(changedSnapshot(oldSnapshot), { clearMigrationBackup: true }),
+    (error) => error instanceof StorageError && error.code === 'WRITE_FAILED'
+  );
+
+  assert.deepEqual(storage.get(STORAGE_KEY), oldSnapshot);
+  assert.deepEqual(storage.get(BACKUP_KEY), backup);
+  assert.deepEqual(repository.cache, oldSnapshot);
+  assert.deepEqual(storage.setCalls, [STORAGE_KEY, STORAGE_KEY, BACKUP_KEY]);
+  assert.deepEqual(storage.removeCalls, [BACKUP_KEY]);
+});
+
+test('replace 清理不存在的旧备份失败时精确恢复为不存在', () => {
+  const storage = new FaultStorage();
+  const { repository } = createRepository(storage);
+  const oldSnapshot = repository.read();
+  storage.setCalls.length = 0;
+  storage.failRemoveAfterDelete = true;
+
+  assert.throws(
+    () => repository.replace(changedSnapshot(oldSnapshot), { clearMigrationBackup: true }),
+    (error) => error instanceof StorageError && error.code === 'WRITE_FAILED'
+  );
+
+  assert.deepEqual(storage.get(STORAGE_KEY), oldSnapshot);
+  assert.equal(storage.get(BACKUP_KEY), undefined);
+  assert.deepEqual(repository.cache, oldSnapshot);
+  assert.deepEqual(storage.setCalls, [STORAGE_KEY, STORAGE_KEY]);
+  assert.deepEqual(storage.removeCalls, [BACKUP_KEY, BACKUP_KEY]);
+});
+
+test('replace 补偿不完整时使用中性安全错误且不泄漏业务数据', () => {
+  const storage = new FaultStorage();
+  const { repository } = createRepository(storage);
+  const oldSnapshot = repository.read();
+  const backup = { schemaVersion: 0, sentinel: 'sensitive-business-sentinel' };
+  storage.set(BACKUP_KEY, backup);
+  storage.setCalls.length = 0;
+  storage.failRemoveAfterDelete = true;
+  storage.failSetOnCall = 2;
+
+  const error = captureThrown(
+    () => repository.replace(changedSnapshot(oldSnapshot), { clearMigrationBackup: true })
+  );
+
+  assert.equal(error instanceof StorageError, true);
+  assert.equal(error.code, 'WRITE_FAILED');
+  assert.match(error.message, /无法确认原数据是否完整保留/);
+  assert.doesNotMatch(error.message, /sensitive-business-sentinel/);
+  assert.notDeepEqual(storage.get(STORAGE_KEY), oldSnapshot);
+  assert.deepEqual(storage.get(BACKUP_KEY), backup);
+  assert.deepEqual(repository.cache, oldSnapshot);
+  assert.deepEqual(storage.setCalls, [STORAGE_KEY, STORAGE_KEY, BACKUP_KEY]);
+  assert.deepEqual(storage.removeCalls, [BACKUP_KEY]);
+});
+
+test('replace 读取旧主快照失败时零写入、零删除并保留缓存', () => {
+  const storage = new FaultStorage();
+  const { repository } = createRepository(storage);
+  const oldSnapshot = repository.read();
+  storage.setCalls.length = 0;
+  storage.failGetKey = STORAGE_KEY;
+
+  const error = captureThrown(() => repository.replace(changedSnapshot(oldSnapshot)));
+
+  assert.equal(error instanceof StorageError, true);
+  assert.equal(error.code, 'WRITE_FAILED');
+  assert.doesNotMatch(error.message, /get failed|plan-and-record|sensitive-business-sentinel/);
+  assert.deepEqual(repository.cache, oldSnapshot);
+  assert.deepEqual(storage.setCalls, []);
+  assert.deepEqual(storage.removeCalls, []);
+  storage.failGetKey = null;
+  assert.deepEqual(storage.get(STORAGE_KEY), oldSnapshot);
+});
+
+test('replace 读取旧迁移备份失败时零写入、零删除并保留缓存', () => {
+  const storage = new FaultStorage();
+  const { repository } = createRepository(storage);
+  const oldSnapshot = repository.read();
+  storage.set(BACKUP_KEY, { schemaVersion: 0, sentinel: 'sensitive-business-sentinel' });
+  storage.setCalls.length = 0;
+  storage.failGetKey = BACKUP_KEY;
+
+  const error = captureThrown(
+    () => repository.replace(changedSnapshot(oldSnapshot), { clearMigrationBackup: true })
+  );
+
+  assert.equal(error instanceof StorageError, true);
+  assert.equal(error.code, 'WRITE_FAILED');
+  assert.doesNotMatch(error.message, /get failed|plan-and-record|sensitive-business-sentinel/);
+  assert.deepEqual(repository.cache, oldSnapshot);
+  assert.deepEqual(storage.setCalls, []);
+  assert.deepEqual(storage.removeCalls, []);
+  storage.failGetKey = null;
+  assert.deepEqual(storage.get(STORAGE_KEY), oldSnapshot);
+});
+
+test('增量 replace 不删除迁移备份', () => {
+  const storage = new FaultStorage();
+  const { repository } = createRepository(storage);
+  const oldSnapshot = repository.read();
+  const backup = { schemaVersion: 0, sentinel: 'keep-backup' };
+  storage.set(BACKUP_KEY, backup);
+  storage.setCalls.length = 0;
+
+  repository.replace(changedSnapshot(oldSnapshot));
+
+  assert.deepEqual(storage.get(BACKUP_KEY), backup);
+  assert.deepEqual(storage.setCalls, [STORAGE_KEY]);
+  assert.deepEqual(storage.removeCalls, []);
+});
+
+test('reset 原子建立新资料库、唯一系统分类和空运行态', () => {
+  const storage = new FaultStorage();
+  const { repository, setNow } = createRepository(storage);
+  const oldSnapshot = repository.read();
+  storage.set(BACKUP_KEY, { schemaVersion: 0, sentinel: 'migration-backup' });
+  storage.setCalls.length = 0;
+  setNow(1_700_000_001_000);
+
+  const reset = repository.reset();
+
+  assert.notEqual(reset.localProfile.id, oldSnapshot.localProfile.id);
+  assert.equal(reset.localProfile.createdAt, 1_700_000_001_000);
+  assert.deepEqual(reset.categories.map((category) => ({
+    id: category.id,
+    name: category.name,
+    status: category.status,
+    isSystem: category.isSystem
+  })), [{ id: 'category_uncategorized', name: '未分类', status: 'active', isSystem: true }]);
+  for (const collection of ['wishes', 'projects', 'tasks', 'calendarEvents', 'repeatRules', 'occurrenceExceptions', 'timeLogs']) {
+    assert.deepEqual(reset[collection], []);
+  }
+  assert.deepEqual(reset.timer, { status: 'idle', startedAt: null, endedAt: null, pausedAt: null, pauses: [], draft: {} });
+  assert.equal(reset.recoveryDraft, null);
+  assert.equal(storage.get(BACKUP_KEY), undefined);
+  assert.deepEqual(storage.setCalls, [STORAGE_KEY]);
+  assert.deepEqual(storage.removeCalls, [BACKUP_KEY]);
+});
+
+test('reset 主快照写入失败时保留旧资料库', () => {
+  const storage = new FaultStorage();
+  const { repository } = createRepository(storage);
+  const oldSnapshot = repository.read();
+  storage.setCalls.length = 0;
+  storage.failSet = true;
+
+  assert.throws(
+    () => repository.reset(),
+    (error) => error instanceof StorageError && error.code === 'WRITE_FAILED'
+  );
+
+  assert.deepEqual(storage.get(STORAGE_KEY), oldSnapshot);
+  assert.deepEqual(repository.cache, oldSnapshot);
+  assert.deepEqual(storage.setCalls, [STORAGE_KEY, STORAGE_KEY]);
+  assert.deepEqual(storage.removeCalls, [BACKUP_KEY]);
+});
+
+test('reset 主快照已写入后抛错会恢复旧存储、旧备份和旧缓存', () => {
+  const storage = new FaultStorage();
+  const { repository, setNow } = createRepository(storage);
+  const oldSnapshot = repository.read();
+  const backup = { schemaVersion: 0, sentinel: 'reset-after-write-backup' };
+  storage.set(BACKUP_KEY, backup);
+  storage.setCalls.length = 0;
+  storage.failSetAfterWriteOnce = true;
+  setNow(1_700_000_001_000);
+
+  assert.throws(
+    () => repository.reset(),
+    (error) => error instanceof StorageError
+      && error.code === 'WRITE_FAILED'
+      && /已保留/.test(error.message)
+  );
+
+  assert.deepEqual(storage.get(STORAGE_KEY), oldSnapshot);
+  assert.deepEqual(storage.get(BACKUP_KEY), backup);
+  assert.deepEqual(repository.cache, oldSnapshot);
+  assert.deepEqual(storage.setCalls, [STORAGE_KEY, STORAGE_KEY, BACKUP_KEY]);
+  assert.deepEqual(storage.removeCalls, []);
+});
+
+test('仓储和存储适配器实现都不调用 wx.clearStorageSync', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const repositorySource = fs.readFileSync(
+    path.join(__dirname, '../miniprogram/repository/local-repository.js'),
+    'utf8'
+  );
+  const adapterSource = fs.readFileSync(
+    path.join(__dirname, '../miniprogram/repository/storage-adapter.js'),
+    'utf8'
+  );
+
+  assert.doesNotMatch(repositorySource, /wx\.clearStorageSync\s*\(/);
+  assert.doesNotMatch(adapterSource, /wx\.clearStorageSync\s*\(/);
+});
+
+test('WxStorageAdapter.remove 只调用目标键的 wx.removeStorageSync', () => {
+  const previousWx = global.wx;
+  const calls = [];
+  global.wx = {
+    removeStorageSync(key) {
+      calls.push(['removeStorageSync', key]);
+    },
+    clearStorageSync() {
+      calls.push(['clearStorageSync']);
+    }
+  };
+
+  try {
+    const storage = new WxStorageAdapter();
+    storage.remove('target-key');
+  } finally {
+    if (previousWx === undefined) {
+      delete global.wx;
+    } else {
+      global.wx = previousWx;
+    }
+  }
+
+  assert.deepEqual(calls, [['removeStorageSync', 'target-key']]);
+});

@@ -1,26 +1,108 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { LOG_STATUS, MAX_TIMER_SPAN_MS, TIMER_STATUS } = require('../miniprogram/domain/constants');
-const { LocalRepository } = require('../miniprogram/repository/local-repository');
+const { LOG_SOURCE, LOG_STATUS, MAX_TIMER_SPAN_MS, TIMER_STATUS } = require('../miniprogram/domain/constants');
+const { createInitialDatabase, clone } = require('../miniprogram/domain/entities');
+const {
+  CONFLICT_POLICY,
+  IMPORT_MODE
+} = require('../miniprogram/repository/json-import');
+const {
+  BACKUP_KEY,
+  LocalRepository,
+  STORAGE_KEY
+} = require('../miniprogram/repository/local-repository');
 const { MemoryStorageAdapter } = require('../miniprogram/repository/storage-adapter');
 const { ApplicationService } = require('../miniprogram/services/application-service');
 const { DomainError, StorageError } = require('../miniprogram/domain/errors');
 
-function createHarness(start = 1_700_000_000_000) {
+class TrackingStorage extends MemoryStorageAdapter {
+  constructor() {
+    super();
+    this.setCalls = [];
+    this.removeCalls = [];
+    this.failNextSet = false;
+  }
+
+  set(key, value) {
+    this.setCalls.push(key);
+    if (this.failNextSet) {
+      this.failNextSet = false;
+      throw new Error('disk full');
+    }
+    super.set(key, value);
+  }
+
+  remove(key) {
+    this.removeCalls.push(key);
+    super.remove(key);
+  }
+
+  resetCalls() {
+    this.setCalls = [];
+    this.removeCalls = [];
+  }
+}
+
+function createHarness(start = 1_700_000_000_000, storage = new TrackingStorage()) {
   let now = start;
-  const repository = new LocalRepository(new MemoryStorageAdapter(), { now: () => now });
+  const repository = new LocalRepository(storage, { now: () => now });
   const service = new ApplicationService(repository, { now: () => now });
   service.initialize();
   return {
     service,
+    repository,
+    storage,
     setNow(value) { now = value; },
     now() { return now; }
   };
 }
 
 function requiredObjectives() {
-  return [{ title: '完成目标', keyResults: [{ title: '整体进度', currentValue: 0, targetValue: 100 }] }];
+  return [{ title: '完成目标', keyResults: [{ title: '整体进度', currentValue: 0 }] }];
+}
+
+function importedWish(id, title, now) {
+  return { id, title, createdAt: now, updatedAt: now };
+}
+
+function importedProject(id, title, now) {
+  return {
+    id,
+    title,
+    deadlineAt: now + 86_400_000,
+    status: 'active',
+    objectives: [],
+    createdAt: now,
+    updatedAt: now
+  };
+}
+
+function importedLog(id, now) {
+  return {
+    id,
+    schemaVersion: 1,
+    startedAt: now - 3_600_000,
+    endedAt: now - 1_800_000,
+    durationMinutes: 30,
+    categoryId: 'category_uncategorized',
+    categoryNameSnapshot: '未分类',
+    projectId: null,
+    projectNameSnapshot: null,
+    taskId: null,
+    taskNameSnapshot: null,
+    calendarEventId: null,
+    calendarEventSummarySnapshot: null,
+    note: '导入候选',
+    status: LOG_STATUS.CANDIDATE,
+    source: LOG_SOURCE.FILE,
+    originRuleId: null,
+    originOccurrenceId: null,
+    originRuleSummarySnapshot: null,
+    tags: ['导入'],
+    createdAt: now,
+    updatedAt: now
+  };
 }
 
 test('M1：首次资料库生成匿名资料库和不可删除的未分类', () => {
@@ -38,17 +120,17 @@ test('M1/M3：关键结果只能记录百分比，活动项目不能超过五个
   const project = service.createProject({
     title: '学习项目',
     deadlineAt: now() + 86_400_000,
-    objectives: [{ title: '完成', keyResults: [{ title: '进度', currentValue: 20, targetValue: 100 }] }]
+    objectives: [{ title: '完成', keyResults: [{ title: '进度', currentValue: 20 }] }]
   });
-  assert.equal(project.objectives[0].keyResults[0].targetValue, 100);
+  assert.deepEqual(Object.keys(project.objectives[0].keyResults[0]).sort(), ['currentValue', 'id', 'title']);
   assert.throws(() => service.updateProject(project.id, {
-    objectives: [{ title: '错误', keyResults: [{ title: '超范围', currentValue: 101, targetValue: 100 }] }]
+    objectives: [{ title: '错误', keyResults: [{ title: '超范围', currentValue: 101 }] }]
   }), (error) => error instanceof DomainError && error.code === 'PERCENTAGE_INVALID');
 
   for (let index = 1; index < 5; index += 1) {
-    service.createProject({ title: `项目${index}`, deadlineAt: now() + 86_400_000, objectives: [{ title: '目标', keyResults: [{ title: '进度', currentValue: 0, targetValue: 100 }] }] });
+    service.createProject({ title: `项目${index}`, deadlineAt: now() + 86_400_000, objectives: requiredObjectives() });
   }
-  assert.throws(() => service.createProject({ title: '第六个项目', deadlineAt: now() + 86_400_000, objectives: [{ title: '目标', keyResults: [{ title: '进度', currentValue: 0, targetValue: 100 }] }] }), (error) => error.code === 'ACTIVE_PROJECT_LIMIT');
+  assert.throws(() => service.createProject({ title: '第六个项目', deadlineAt: now() + 86_400_000, objectives: requiredObjectives() }), (error) => error.code === 'ACTIVE_PROJECT_LIMIT');
 });
 
 test('M2：计时暂停、恢复、结束后只在生成记录时写入 confirmed', () => {
@@ -150,16 +232,352 @@ test('M4：跳过实例和后续修订都不会生成重复投影', () => {
   assert.equal(afterRevision.some((item) => item.virtual && item.priority === 3), true);
 });
 
-test('M5：JSON 和 CSV 导出保留日志状态、来源与关系', () => {
+test('M4：从首个实例修订后续会替换原修订，导出后仍可导入', () => {
+  const { service, now } = createHarness();
+  const start = now() + 60 * 60 * 1000;
+  const { rule } = service.createRecurringPlan({
+    title: '每日整理',
+    startedAt: start,
+    endedAt: start + 1_800_000,
+    frequency: 'daily',
+    interval: 1
+  });
+
+  service.reviseRuleFollowing(rule.id, rule.revisions[0].effectiveFrom, { priority: 2 });
+
+  const updatedRule = service.snapshot().repeatRules.find((item) => item.id === rule.id);
+  assert.equal(updatedRule.revisions.length, 1);
+  assert.equal(updatedRule.revisions[0].effectiveFrom, rule.revisions[0].effectiveFrom);
+  assert.equal(updatedRule.revisions[0].effectiveUntil, null);
+  assert.doesNotThrow(() => service.prepareJsonImport(service.exportJson()));
+});
+
+test('M5：JSON 导出保留日志状态、来源与关系且不再暴露 CSV API', () => {
   const { service, now } = createHarness();
   const log = service.createManualLog({ startedAt: now() - 3_600_000, endedAt: now() - 1_800_000, note: '含,逗号' }).log;
   const json = service.exportJson();
-  const csv = service.exportLogsCsv();
 
   assert.equal(JSON.parse(json).schemaVersion, 1);
   assert.match(json, new RegExp(log.id));
-  assert.match(csv, /"含,逗号"/);
-  assert.match(csv, /confirmed,manual/);
+  assert.equal(typeof service.exportLogsCsv, 'undefined');
+});
+
+test('M5：JSON 导出移除本地残留的 targetValue，并可被当前导入器读取', () => {
+  const { service, repository, now } = createHarness();
+  const project = service.createProject({
+    title: '历史项目',
+    deadlineAt: now() + 86_400_000,
+    objectives: requiredObjectives()
+  });
+  repository.transaction((database) => {
+    database.legacyRootField = 'ignored';
+    database.projects
+      .find((item) => item.id === project.id)
+      .legacyProjectField = 'ignored';
+    database.projects
+      .find((item) => item.id === project.id)
+      .objectives[0]
+      .keyResults[0]
+      .targetValue = 100;
+  });
+
+  const json = service.exportJson();
+  const exported = JSON.parse(json);
+  const exportedKeyResult = exported.projects[0].objectives[0].keyResults[0];
+
+  assert.equal(Object.prototype.hasOwnProperty.call(exported, 'legacyRootField'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(exported.projects[0], 'legacyProjectField'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(exportedKeyResult, 'targetValue'), false);
+  assert.doesNotThrow(() => service.prepareJsonImport(json));
+});
+
+test('M5：导入会忽略旧版和未知字段，不写入资料库或制造冲突', () => {
+  const { service, now } = createHarness();
+  const project = service.createProject({
+    title: '当前项目',
+    deadlineAt: now() + 86_400_000,
+    objectives: requiredObjectives()
+  });
+  const imported = service.snapshot();
+  const importedProject = imported.projects.find((item) => item.id === project.id);
+  imported.legacyRootField = 'ignored';
+  importedProject.legacyProjectField = 'ignored';
+  importedProject.objectives[0].keyResults[0].targetValue = 100;
+
+  const prepared = service.prepareJsonImport(JSON.stringify(imported));
+  const preview = service.previewJsonImport(prepared.token, { mode: IMPORT_MODE.INCREMENTAL });
+
+  assert.equal(preview.conflictCount, 0);
+  service.commitJsonImport(prepared.token);
+  const storedProject = service.snapshot().projects.find((item) => item.id === project.id);
+  assert.equal(Object.prototype.hasOwnProperty.call(storedProject, 'legacyProjectField'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(storedProject.objectives[0].keyResults[0], 'targetValue'), false);
+});
+
+test('M5：本地遗留的未知字段不影响导回刚导出的 JSON', () => {
+  const { service, repository, now } = createHarness();
+  const project = service.createProject({
+    title: '历史项目',
+    deadlineAt: now() + 86_400_000,
+    objectives: requiredObjectives()
+  });
+  repository.transaction((database) => {
+    database.projects
+      .find((item) => item.id === project.id)
+      .objectives[0]
+      .keyResults[0]
+      .targetValue = 100;
+  });
+
+  const prepared = service.prepareJsonImport(service.exportJson());
+  const preview = service.previewJsonImport(prepared.token, { mode: IMPORT_MODE.INCREMENTAL });
+
+  assert.equal(preview.conflictCount, 0);
+  service.commitJsonImport(prepared.token);
+  const storedProject = service.snapshot().projects.find((item) => item.id === project.id);
+  assert.equal(Object.prototype.hasOwnProperty.call(storedProject.objectives[0].keyResults[0], 'targetValue'), false);
+});
+
+test('导入准备和预览不写入，只有提交 token 才单次写入并保留日志事实字段', () => {
+  const { service, storage, now } = createHarness();
+  const before = service.snapshot();
+  const imported = clone(before);
+  imported.wishes.push(importedWish('wish_import', '导入愿望', now()));
+  imported.timeLogs.push(importedLog('log_import', now()));
+  storage.resetCalls();
+
+  const prepared = service.prepareJsonImport(JSON.stringify(imported));
+  assert.equal(prepared.schemaVersion, 1);
+  assert.equal(prepared.sourceCounts.wishes, 1);
+  assert.equal(prepared.sourceCounts.timeLogs, 1);
+  const preview = service.previewJsonImport(prepared.token, { mode: IMPORT_MODE.INCREMENTAL });
+
+  assert.deepEqual(service.snapshot(), before);
+  assert.equal(preview.addedCounts.wishes, 1);
+  assert.equal(preview.addedCounts.timeLogs, 1);
+  assert.equal(preview.requiresConflictPolicy, false);
+  assert.deepEqual(storage.setCalls, []);
+
+  const committed = service.commitJsonImport(prepared.token);
+  const snapshot = service.snapshot();
+  const log = snapshot.timeLogs.find((item) => item.id === 'log_import');
+  assert.equal(snapshot.wishes.some((item) => item.id === 'wish_import'), true);
+  assert.equal(log.status, LOG_STATUS.CANDIDATE);
+  assert.equal(log.source, LOG_SOURCE.FILE);
+  assert.equal(committed.addedCounts.timeLogs, 1);
+  assert.deepEqual(storage.setCalls, [STORAGE_KEY]);
+  assert.throws(
+    () => service.commitJsonImport(prepared.token),
+    (error) => error.code === 'IMPORT_PREVIEW_NOT_FOUND'
+  );
+});
+
+test('冲突必须先预览并对每个冲突统一应用所选策略', () => {
+  for (const [policy, expectedTitles] of [
+    [CONFLICT_POLICY.KEEP_LOCAL, ['本地甲', '本地乙']],
+    [CONFLICT_POLICY.USE_IMPORTED, ['导入甲', '导入乙']]
+  ]) {
+    const { service, now } = createHarness();
+    const first = service.createWish('本地甲');
+    const second = service.createWish('本地乙');
+    const imported = service.snapshot();
+    imported.wishes.find((item) => item.id === first.id).title = '导入甲';
+    imported.wishes.find((item) => item.id === first.id).updatedAt = now() + 1;
+    imported.wishes.find((item) => item.id === second.id).title = '导入乙';
+    imported.wishes.find((item) => item.id === second.id).updatedAt = now() + 1;
+
+    const prepared = service.prepareJsonImport(JSON.stringify(imported));
+    const unresolved = service.previewJsonImport(prepared.token, { mode: IMPORT_MODE.INCREMENTAL });
+    assert.equal(unresolved.conflictCount, 2);
+    assert.equal(unresolved.requiresConflictPolicy, true);
+    assert.throws(
+      () => service.commitJsonImport(prepared.token),
+      (error) => error.code === 'IMPORT_PREVIEW_REQUIRED'
+    );
+
+    const resolved = service.previewJsonImport(prepared.token, {
+      mode: IMPORT_MODE.INCREMENTAL,
+      conflictPolicy: policy
+    });
+    assert.equal(resolved.requiresConflictPolicy, false);
+    service.commitJsonImport(prepared.token);
+    assert.deepEqual(service.snapshot().wishes.map((item) => item.title), expectedTitles);
+  }
+});
+
+test('旧 token、错误 token 和已取消 token 都不能预览或提交', () => {
+  const { service } = createHarness();
+  const json = JSON.stringify(service.snapshot());
+  const first = service.prepareJsonImport(json);
+  const second = service.prepareJsonImport(json);
+
+  assert.throws(
+    () => service.previewJsonImport(first.token, { mode: IMPORT_MODE.INCREMENTAL }),
+    (error) => error.code === 'IMPORT_PREVIEW_NOT_FOUND'
+  );
+  assert.throws(
+    () => service.commitJsonImport('import_wrong'),
+    (error) => error.code === 'IMPORT_PREVIEW_NOT_FOUND'
+  );
+
+  service.cancelJsonImport(first.token);
+  assert.doesNotThrow(() => service.previewJsonImport(second.token, { mode: IMPORT_MODE.INCREMENTAL }));
+  service.cancelJsonImport(second.token);
+  assert.throws(
+    () => service.previewJsonImport(second.token, { mode: IMPORT_MODE.INCREMENTAL }),
+    (error) => error.code === 'IMPORT_PREVIEW_NOT_FOUND'
+  );
+});
+
+test('预览后本地快照变化会拒绝陈旧提交且保留新写入', () => {
+  const { service } = createHarness();
+  const imported = service.snapshot();
+  imported.wishes.push(importedWish('wish_import', '导入愿望', imported.updatedAt));
+  const prepared = service.prepareJsonImport(JSON.stringify(imported));
+  service.previewJsonImport(prepared.token, { mode: IMPORT_MODE.INCREMENTAL });
+  const lateWish = service.createWish('预览后的本地愿望');
+
+  assert.throws(
+    () => service.commitJsonImport(prepared.token),
+    (error) => error.code === 'IMPORT_PREVIEW_STALE'
+  );
+  const snapshot = service.snapshot();
+  assert.equal(snapshot.wishes.some((item) => item.id === lateWish.id), true);
+  assert.equal(snapshot.wishes.some((item) => item.id === 'wish_import'), false);
+});
+
+test('覆盖导入在提交时重建资料库时间，只写一次主快照并清理迁移备份', () => {
+  const { service, storage, setNow } = createHarness();
+  const oldProfileId = service.snapshot().localProfile.id;
+  const imported = createInitialDatabase(1_800_000_000_000);
+  imported.wishes.push(importedWish('wish_replace', '覆盖导入', 1_800_000_000_000));
+  storage.set(BACKUP_KEY, { schemaVersion: 0, sentinel: 'old-backup' });
+  storage.resetCalls();
+
+  const prepared = service.prepareJsonImport(JSON.stringify(imported));
+  service.previewJsonImport(prepared.token, { mode: IMPORT_MODE.REPLACE });
+  const commitNow = 1_900_000_000_000;
+  setNow(commitNow);
+  service.commitJsonImport(prepared.token);
+
+  const snapshot = service.snapshot();
+  assert.notEqual(snapshot.localProfile.id, oldProfileId);
+  assert.equal(snapshot.localProfile.createdAt, commitNow);
+  assert.equal(snapshot.createdAt, commitNow);
+  assert.equal(snapshot.updatedAt, commitNow);
+  assert.equal(snapshot.wishes[0].id, 'wish_replace');
+  assert.equal(storage.get(BACKUP_KEY), undefined);
+  assert.deepEqual(storage.setCalls, [STORAGE_KEY]);
+  assert.deepEqual(storage.removeCalls, [BACKUP_KEY]);
+});
+
+test('覆盖导入写入失败时完整保留旧资料库', () => {
+  const { service, storage } = createHarness();
+  service.createWish('本地保留');
+  const before = service.snapshot();
+  const imported = createInitialDatabase(1_800_000_000_000);
+  imported.wishes.push(importedWish('wish_replace', '不能落盘', 1_800_000_000_000));
+  const prepared = service.prepareJsonImport(JSON.stringify(imported));
+  service.previewJsonImport(prepared.token, { mode: IMPORT_MODE.REPLACE });
+  storage.failNextSet = true;
+
+  assert.throws(
+    () => service.commitJsonImport(prepared.token),
+    (error) => error instanceof StorageError && error.code === 'WRITE_FAILED'
+  );
+  assert.deepEqual(service.snapshot(), before);
+});
+
+test('清空必须确认，成功后重建空资料库、清除运行态和待处理导入', () => {
+  const { service, storage, setNow, now } = createHarness();
+  service.createWish('待清空');
+  service.startTimer({ note: '运行中' });
+  const before = service.snapshot();
+  const prepared = service.prepareJsonImport(JSON.stringify(before));
+  storage.set(BACKUP_KEY, { schemaVersion: 0, sentinel: 'old-backup' });
+
+  assert.throws(
+    () => service.clearAllData(false),
+    (error) => error.code === 'CLEAR_CONFIRMATION_REQUIRED'
+  );
+  assert.deepEqual(service.snapshot(), before);
+
+  setNow(now() + 10_000);
+  const result = service.clearAllData(true);
+  const snapshot = service.snapshot();
+  assert.equal(result.cleared, true);
+  assert.notEqual(snapshot.localProfile.id, before.localProfile.id);
+  assert.deepEqual(snapshot.wishes, []);
+  assert.equal(snapshot.timer.status, TIMER_STATUS.IDLE);
+  assert.equal(snapshot.recoveryDraft, null);
+  assert.equal(storage.get(BACKUP_KEY), undefined);
+  assert.throws(
+    () => service.previewJsonImport(prepared.token, { mode: IMPORT_MODE.INCREMENTAL }),
+    (error) => error.code === 'IMPORT_PREVIEW_NOT_FOUND'
+  );
+});
+
+test('清空写入失败时保留旧资料库', () => {
+  const { service, storage } = createHarness();
+  service.createWish('不能丢失');
+  const before = service.snapshot();
+  storage.failNextSet = true;
+
+  assert.throws(
+    () => service.clearAllData(true),
+    (error) => error instanceof StorageError && error.code === 'WRITE_FAILED'
+  );
+  assert.deepEqual(service.snapshot(), before);
+});
+
+test('导入允许活动项目暂时超过五个，但之后仍禁止新增项目', () => {
+  const { service, now } = createHarness();
+  const imported = service.snapshot();
+  for (let index = 0; index < 6; index += 1) {
+    imported.projects.push(importedProject(`project_import_${index}`, `导入项目${index}`, now()));
+  }
+
+  const prepared = service.prepareJsonImport(JSON.stringify(imported));
+  service.previewJsonImport(prepared.token, { mode: IMPORT_MODE.INCREMENTAL });
+  service.commitJsonImport(prepared.token);
+
+  assert.equal(service.snapshot().projects.length, 6);
+  assert.throws(
+    () => service.createProject({
+      title: '仍受上限约束',
+      deadlineAt: now() + 86_400_000,
+      objectives: requiredObjectives()
+    }),
+    (error) => error.code === 'ACTIVE_PROJECT_LIMIT'
+  );
+});
+
+test('删除计划块会在同一事务中清空全部日志引用并保留计划摘要', () => {
+  const { service, now } = createHarness();
+  const event = service.createCalendarEvent({
+    title: '待删除计划',
+    startedAt: now() + 3_600_000,
+    endedAt: now() + 7_200_000
+  });
+  const first = service.createManualLog({
+    startedAt: now() - 3_600_000,
+    endedAt: now() - 1_800_000,
+    calendarEventId: event.id
+  }).log;
+  const second = service.createManualLog({
+    startedAt: now() - 1_700_000,
+    endedAt: now() - 800_000,
+    calendarEventId: event.id
+  }).log;
+
+  service.deleteCalendarEvent(event.id, true);
+
+  for (const id of [first.id, second.id]) {
+    const log = service.snapshot().timeLogs.find((item) => item.id === id);
+    assert.equal(log.calendarEventId, null);
+    assert.equal(log.calendarEventSummarySnapshot, '待删除计划');
+    assert.equal(log.updatedAt, now());
+  }
 });
 
 test('M1：写入失败不会替换内存快照', () => {

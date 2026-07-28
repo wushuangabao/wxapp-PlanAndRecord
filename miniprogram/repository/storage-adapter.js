@@ -13,6 +13,10 @@ class MemoryStorageAdapter {
   set(key, value) {
     this.values.set(key, value);
   }
+
+  remove(key) {
+    this.values.delete(key);
+  }
 }
 
 class WxStorageAdapter {
@@ -22,6 +26,10 @@ class WxStorageAdapter {
 
   set(key, value) {
     wx.setStorageSync(key, value);
+  }
+
+  remove(key) {
+    wx.removeStorageSync(key);
   }
 }
 
