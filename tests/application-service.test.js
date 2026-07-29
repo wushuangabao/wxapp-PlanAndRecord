@@ -1,8 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { LOG_SOURCE, LOG_STATUS, MAX_TIMER_SPAN_MS, TIMER_STATUS } = require('../miniprogram/domain/constants');
-const { createInitialDatabase, clone } = require('../miniprogram/domain/entities');
+const { LOG_SOURCE, LOG_STATUS, MAX_TIMER_SPAN_MS, TASK_STATUS, TIMER_STATUS } = require('../miniprogram/domain/constants');
+const { createIdleTimer, createInitialDatabase, clone } = require('../miniprogram/domain/entities');
 const {
   CONFLICT_POLICY,
   IMPORT_MODE
@@ -133,6 +133,20 @@ test('M1/M3：关键结果只能记录百分比，活动项目不能超过五个
   assert.throws(() => service.createProject({ title: '第六个项目', deadlineAt: now() + 86_400_000, objectives: requiredObjectives() }), (error) => error.code === 'ACTIVE_PROJECT_LIMIT');
 });
 
+test('M3：新建任务插入开头，后续修改不重排保存顺序', () => {
+  const { service, setNow, now } = createHarness();
+  const first = service.createTask({ title: '先创建的任务' });
+  setNow(now() + 1);
+  const second = service.createTask({ title: '后创建的任务' });
+
+  assert.deepEqual(service.snapshot().tasks.map((task) => task.id), [second.id, first.id]);
+
+  setNow(now() + 1);
+  service.updateTask(first.id, { status: TASK_STATUS.COMPLETED });
+  service.updateTask(second.id, { title: '已修改的后创建任务' });
+  assert.deepEqual(service.snapshot().tasks.map((task) => task.id), [second.id, first.id]);
+});
+
 test('M2：计时暂停、恢复、结束后只在生成记录时写入 confirmed', () => {
   const { service, setNow, now } = createHarness();
   service.startTimer({ note: '专注' });
@@ -257,6 +271,77 @@ test('M3：放弃项目删除未来对象但保留已确认历史和快照', () 
   assert.equal(keptLog.projectId, null);
   assert.equal(keptLog.projectNameSnapshot, '待放弃项目');
   assert.equal(keptLog.taskId, null);
+});
+
+test('M3：删除任务清除未结束计划并保留历史计划和计时记录', () => {
+  const { service, repository, now } = createHarness();
+  const project = service.createProject({ title: '关联项目', deadlineAt: now() + 86_400_000, objectives: requiredObjectives() });
+  const task = service.createTask({ title: '待删除任务', projectId: project.id });
+  const historicalEvent = service.createCalendarEvent({ title: '历史任务计划', startedAt: now() - 3_600_000, endedAt: now() - 1_800_000, projectId: project.id, taskId: task.id });
+  const start = now() + 3_600_000;
+  const futureEvent = service.createCalendarEvent({ title: '未来任务计划', startedAt: start, endedAt: start + 1_800_000, projectId: project.id, taskId: task.id });
+  const { rule } = service.createRecurringPlan({
+    title: '任务重复计划',
+    startedAt: start,
+    endedAt: start + 1_800_000,
+    frequency: 'daily',
+    interval: 1,
+    projectId: project.id,
+    taskId: task.id
+  });
+  service.overrideOccurrence(rule.id, start, {
+    title: '任务重复计划（临时）',
+    startedAt: start,
+    endedAt: start + 1_800_000,
+    priority: 1,
+    projectId: project.id,
+    projectNameSnapshot: project.title,
+    taskId: task.id,
+    taskNameSnapshot: task.title
+  });
+  const { log } = service.createManualLog({
+    startedAt: now() - 3_600_000,
+    endedAt: now() - 1_800_000,
+    projectId: project.id,
+    taskId: task.id,
+    calendarEventId: futureEvent.id,
+    note: '任务实际记录'
+  });
+  service.startTimer({ projectId: project.id, taskId: task.id });
+  repository.transaction((database) => {
+    database.recoveryDraft = {
+      reason: '恢复任务',
+      timer: {
+        ...createIdleTimer(),
+        draft: {
+          projectId: project.id,
+          projectNameSnapshot: project.title,
+          taskId: task.id,
+          taskNameSnapshot: task.title
+        }
+      },
+      createdAt: now()
+    };
+  });
+
+  assert.equal(task.status, TASK_STATUS.TODO);
+  assert.throws(() => service.updateTask(task.id, { status: 'inbox' }), (error) => error.code === 'TASK_STATUS_INVALID');
+  assert.throws(() => service.deleteTask(task.id, false), (error) => error.code === 'TASK_DELETE_CONFIRMATION_REQUIRED');
+
+  assert.deepEqual(service.deleteTask(task.id, true), { id: task.id, title: task.title });
+  const snapshot = service.snapshot();
+  const keptEvent = snapshot.calendarEvents.find((item) => item.id === historicalEvent.id);
+  const keptLog = snapshot.timeLogs.find((item) => item.id === log.id);
+
+  assert.equal(snapshot.tasks.some((item) => item.id === task.id), false);
+  assert.deepEqual([keptEvent.taskId, keptEvent.taskNameSnapshot, keptEvent.projectId], [null, task.title, project.id]);
+  assert.equal(snapshot.calendarEvents.some((item) => item.id === futureEvent.id), false);
+  assert.equal(snapshot.repeatRules.some((item) => item.id === rule.id), false);
+  assert.equal(snapshot.occurrenceExceptions.length, 0);
+  assert.deepEqual([keptLog.taskId, keptLog.taskNameSnapshot], [null, task.title]);
+  assert.deepEqual([keptLog.calendarEventId, keptLog.calendarEventSummarySnapshot], [null, futureEvent.title]);
+  assert.deepEqual([snapshot.timer.draft.taskId, snapshot.timer.draft.taskNameSnapshot], [null, task.title]);
+  assert.deepEqual([snapshot.recoveryDraft.timer.draft.taskId, snapshot.recoveryDraft.timer.draft.taskNameSnapshot], [null, task.title]);
 });
 
 test('M4：跳过实例和后续修订都不会生成重复投影', () => {

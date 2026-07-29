@@ -226,6 +226,7 @@ test('分类、愿望、项目、目标和关键结果字段类型严格校验',
 
 test('任务、日历事件和重复规则字段类型与枚举严格校验', () => {
   expectSchemaInvalid((database) => { database.tasks.push({ ...validTask(), status: 'active' }); });
+  expectSchemaInvalid((database) => { database.tasks.push({ ...validTask(), status: 'inbox' }); });
   expectSchemaInvalid((database) => { database.tasks.push({ ...validTask(), completedAt: String(NOW) }); });
   expectSchemaInvalid((database) => { database.calendarEvents.push({ ...validEvent(), endedAt: NOW }); });
   expectSchemaInvalid((database) => { database.calendarEvents.push({ ...validEvent(), priority: 4 }); });

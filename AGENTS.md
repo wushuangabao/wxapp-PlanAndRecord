@@ -17,7 +17,9 @@
 
 ## 开发规范
 
+- 使用 superpower 技能前先判断任务的复杂度：如果是不需要 plan 的简单任务，就禁止使用 superpower 技能。
 - 修改页面时同步检查对应的 `.js`、`.wxml`、`.wxss`、`.json` 与 `app.json`；不得覆盖既有页面、分包或配置。
+- 若任务涉及 UI、页面组件、样式、布局，使用技能 `ui-style`。
 - 本机微信开发者工具安装目录写入 `.local/wechatide-path.txt`；该文件仅供本地工具定位安装目录，已由 `.gitignore` 忽略。执行依赖微信开发者工具的操作前，如发现该文件不存在、为空或未填写有效路径，应提醒用户创建或补全路径后再继续。
 - 接入微信开发者生态的小微 AI Agent 时，除了要先阅读 `docs/xiaowei-ai-handoff.zh-CN.md`，还可以参考 `.local/aimodedemo-path.txt` 中指向的官方 demo 项目。
 - 有副作用的 AI/API 操作必须校验登录态、资源归属、参数合法性与幂等性；Agent 不得猜测 ID、权限或业务数据。

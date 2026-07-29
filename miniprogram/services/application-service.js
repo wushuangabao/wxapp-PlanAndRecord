@@ -156,6 +156,20 @@ class ApplicationService {
     return entity;
   }
 
+  requireTaskStatus(status) {
+    if (!Object.values(TASK_STATUS).includes(status)) {
+      throw new DomainError('TASK_STATUS_INVALID', '任务状态无效');
+    }
+    return status;
+  }
+
+  detachTaskReference(target, task) {
+    if (!target || target.taskId !== task.id) return false;
+    target.taskId = null;
+    target.taskNameSnapshot = target.taskNameSnapshot || task.title;
+    return true;
+  }
+
   resolveAssociations(database, input = {}) {
     let project = null;
     let task = null;
@@ -440,19 +454,20 @@ class ApplicationService {
   createTask(input) {
     const now = this.now();
     const title = requiredTitle(input.title, '任务标题');
+    const status = input.status === undefined ? TASK_STATUS.TODO : this.requireTaskStatus(input.status);
     return this.repository.transaction((database) => {
       const association = input.projectId ? this.resolveAssociations(database, input) : {};
       const task = {
         id: createId('task', now),
         title,
-        status: input.status || TASK_STATUS.INBOX,
+        status,
         projectId: association.projectId || null,
         projectNameSnapshot: association.projectNameSnapshot || null,
         completedAt: null,
         createdAt: now,
         updatedAt: now
       };
-      database.tasks.push(task);
+      database.tasks.unshift(task);
       return task;
     }).result;
   }
@@ -469,12 +484,62 @@ class ApplicationService {
         task.projectId = association.projectId;
         task.projectNameSnapshot = association.projectNameSnapshot;
       }
-      if (input.status) {
-        task.status = input.status;
-        task.completedAt = input.status === TASK_STATUS.COMPLETED ? now : null;
+      if (input.status !== undefined) {
+        task.status = this.requireTaskStatus(input.status);
+        task.completedAt = task.status === TASK_STATUS.COMPLETED ? now : null;
       }
       task.updatedAt = now;
       return task;
+    }).result;
+  }
+
+  deleteTask(id, confirmed) {
+    if (confirmed !== true) {
+      throw new DomainError('TASK_DELETE_CONFIRMATION_REQUIRED', '删除任务需要二次确认');
+    }
+    const now = this.now();
+    return this.repository.transaction((database) => {
+      const task = this.requireEntity(database.tasks, id, '任务');
+      const deletedEventIds = database.calendarEvents
+        .filter((event) => event.taskId === id && event.endedAt > now)
+        .map((event) => event.id);
+      const deletedRuleIds = database.repeatRules
+        .filter((rule) => rule.revisions.some((revision) => revision.taskId === id))
+        .map((rule) => rule.id);
+
+      database.calendarEvents = database.calendarEvents.filter((event) => {
+        if (deletedEventIds.includes(event.id)) return false;
+        let changed = this.detachTaskReference(event, task);
+        if (event.repeatRuleId && deletedRuleIds.includes(event.repeatRuleId)) {
+          event.repeatRuleSummarySnapshot = event.repeatRuleSummarySnapshot || '已删除重复规则';
+          event.repeatRuleId = null;
+          changed = true;
+        }
+        if (changed) event.updatedAt = now;
+        return true;
+      });
+      database.repeatRules = database.repeatRules.filter((rule) => !deletedRuleIds.includes(rule.id));
+      database.occurrenceExceptions = database.occurrenceExceptions.filter((exception) => !deletedRuleIds.includes(exception.ruleId));
+      database.timeLogs.forEach((log) => {
+        let changed = this.detachTaskReference(log, task);
+        if (log.calendarEventId && deletedEventIds.includes(log.calendarEventId)) {
+          log.calendarEventSummarySnapshot = log.calendarEventSummarySnapshot || '已删除计划';
+          log.calendarEventId = null;
+          changed = true;
+        }
+        if (log.originRuleId && deletedRuleIds.includes(log.originRuleId)) {
+          log.originRuleSummarySnapshot = log.originRuleSummarySnapshot || '已删除重复规则';
+          log.originRuleId = null;
+          changed = true;
+        }
+        if (changed) log.updatedAt = now;
+      });
+      this.detachTaskReference(database.timer.draft, task);
+      if (database.recoveryDraft && database.recoveryDraft.timer) {
+        this.detachTaskReference(database.recoveryDraft.timer.draft, task);
+      }
+      database.tasks = database.tasks.filter((item) => item.id !== id);
+      return { id: task.id, title: task.title };
     }).result;
   }
 

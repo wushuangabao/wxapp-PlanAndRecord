@@ -1,24 +1,33 @@
 <view class="page">
   <view class="eyebrow">FOCUS ON WHAT MATTERS</view>
-  <view class="hero"><view class="title">愿望与项目</view><view class="subtitle">先收集想法，再用项目和实际投入兑现承诺。</view></view>
+  <view class="hero"><view class="title">愿望与项目</view><view class="subtitle">先完成今天的 TODO，再用项目和实际投入兑现承诺。</view></view>
 
-  <view class="card form-card">
-    <view class="section-title">新建项目</view>
-    <input class="input" placeholder="项目名称（最多 25 字）" value="{{projectTitle}}" data-key="projectTitle" bindinput="onField" />
-    <view class="field-row"><picker mode="date" value="{{projectDate}}" data-key="projectDate" bindchange="onField"><view>{{projectDate}}</view></picker><picker mode="time" value="{{projectTime}}" data-key="projectTime" bindchange="onField"><view>{{projectTime}}</view></picker></view>
-    <input class="input" placeholder="首个目标名称" value="{{projectObjective}}" data-key="projectObjective" bindinput="onField" />
-    <input class="input" placeholder="首个关键结果标题" value="{{projectKeyResult}}" data-key="projectKeyResult" bindinput="onField" />
-    <input class="input" type="number" placeholder="当前值 0–100" value="{{projectCurrent}}" data-key="projectCurrent" bindinput="onField" />
-    <button class="primary" bindtap="addProject">创建项目</button>
+  <view class="card todo-card">
+    <view class="section-header"><view class="section-heading"><view class="section-title">TODO LIST（{{todoListTasks.length}}）</view></view><button class="section-add todo-add" bindtap="openStandaloneTask" aria-label="新建 TODO">+</button></view>
+    <view wx:if="{{!todoListTasks.length}}" class="todo-empty">还没有 TODO，点右上角 + 创建一条。</view>
+    <scroll-view wx:else class="todo-list" scroll-x="{{true}}" scroll-left="{{todoScrollLeft}}" scroll-with-animation="{{todoScrollWithAnimation}}" bindscroll="onTodoScroll" bindtouchstart="onTodoTouchStart" bindtouchend="onTodoTouchEnd">
+      <view class="todo-columns">
+        <view wx:for="{{todoListColumns}}" wx:for-item="column" wx:key="id" class="todo-column">
+          <view wx:for="{{column.tasks}}" wx:for-item="task" wx:key="id" class="todo-row {{task.status === 'completed' ? 'is-completed' : ''}}">
+            <view class="todo-check" data-id="{{task.id}}" data-status="{{task.status}}" bindtap="toggleTask">{{task.status === 'completed' ? '✓' : ''}}</view>
+            <view class="todo-main" data-id="{{task.id}}" bindtap="openTaskEditor"><view class="todo-title" style="font-size: {{task.todoTitleFontSize}}rpx;">{{task.title}}</view><view wx:if="{{task.projectId}}" class="todo-project">{{task.projectNameSnapshot}}</view></view>
+            <button class="todo-icon-button todo-link-button" aria-label="关联项目" data-id="{{task.id}}" bindtap="chooseTaskProject"><view class="todo-link-icon"><view class="todo-folder-stack"></view><view class="todo-link-arrow"></view></view></button>
+            <button class="todo-icon-button todo-delete-button" aria-label="删除" data-id="{{task.id}}" bindtap="confirmDeleteTask"><view class="todo-delete-icon"><view class="todo-delete-lines"></view></view></button>
+          </view>
+        </view>
+        <view class="todo-scroll-tail" aria-hidden="true"></view>
+      </view>
+    </scroll-view>
   </view>
 
   <view class="card">
-    <view class="section-title">活动项目（{{activeProjects.length}} / 5）</view>
+    <view class="section-header"><view class="section-heading"><view class="section-title">活动项目（{{activeProjects.length}} / 5）</view></view><button wx:if="{{activeProjects.length < 5}}" class="section-add project-add" bindtap="openProjectCreate" aria-label="新建项目">+</button></view>
     <view wx:if="{{!activeProjects.length}}" class="empty">还没有活动项目。</view>
     <view wx:for="{{activeProjects}}" wx:key="id" class="item project-item">
-      <view class="item-title">{{item.title}}</view><view class="muted">截止：{{item.deadlineText}} · {{item.objectives.length}} 个目标</view>
+      <view class="project-heading" data-id="{{item.id}}" bindtap="openProjectTasks"><view class="item-title">{{item.title}}</view><view class="project-task-link">子任务</view></view>
+      <view class="muted">截止：{{item.deadlineText}} · {{item.objectives.length}} 个目标</view>
       <view wx:for="{{item.objectives}}" wx:for-item="objective" wx:key="id" class="okr"><view>{{objective.title}}</view><view wx:for="{{objective.keyResults}}" wx:for-item="kr" wx:key="id" class="muted">{{kr.title}} {{kr.currentValue}}%</view></view>
-      <view class="actions"><button class="text-button" data-item="{{item}}" bindtap="openProjectEditor">编辑</button><button class="text-button" data-id="{{item.id}}" bindtap="archiveProject">归档</button><button class="danger-button" data-id="{{item.id}}" bindtap="abandonProject">放弃</button></view>
+      <view class="actions"><button class="text-button" data-id="{{item.id}}" bindtap="openKeyResult">OKR</button><button class="text-button" data-id="{{item.id}}" bindtap="openChildTask">+子任务</button><button class="text-button" data-id="{{item.id}}" bindtap="openProjectManage">管理</button></view>
     </view>
   </view>
 
@@ -31,28 +40,22 @@
     </view>
   </view>
 
-  <view class="card form-card">
-    <view class="section-title">添加关键结果</view>
-    <picker range="{{activeProjects}}" range-key="title" value="{{okrProjectIndex}}" data-key="okrProjectIndex" bindchange="onPicker"><view class="picker">项目：{{activeProjects[okrProjectIndex].title || '请先创建项目'}}</view></picker>
-    <input class="input" placeholder="目标名称" value="{{objectiveTitle}}" data-key="objectiveTitle" bindinput="onField" />
-    <input class="input" placeholder="关键结果标题" value="{{keyResultTitle}}" data-key="keyResultTitle" bindinput="onField" />
-    <input class="input" type="number" placeholder="当前值 0–100" value="{{currentValue}}" data-key="currentValue" bindinput="onField" />
-    <button class="primary" bindtap="addKeyResult">保存关键结果</button>
+  <view class="card wish-card">
+    <view class="section-header wish-toggle" bindtap="toggleWishSection"><view class="section-title">想法池（{{wishes.length}}）</view><view class="collapse-mark">{{isWishExpanded ? '收起' : '展开'}}</view></view>
+    <view wx:if="{{isWishExpanded}}" class="wish-content">
+      <input class="input" placeholder="愿望描述（最多 25 字）" value="{{wishTitle}}" data-key="wishTitle" bindinput="onField" />
+      <button class="secondary" bindtap="addWish">收集愿望</button>
+      <view wx:for="{{wishes}}" wx:key="id" class="item"><view wx:if="{{editWishId !== item.id}}"><view class="item-title">{{item.title}}</view><view class="actions"><button class="text-button" data-item="{{item}}" bindtap="editWish">编辑</button><button class="text-button" data-id="{{item.id}}" bindtap="convertWish">转为项目</button></view></view><view wx:else><input class="input" value="{{editWishTitle}}" data-key="editWishTitle" bindinput="onField" /><button class="secondary" bindtap="saveWish">保存愿望</button></view></view>
+    </view>
   </view>
 
-  <view class="card form-card">
-    <view class="section-title">想法池</view>
-    <input class="input" placeholder="愿望描述（最多 25 字）" value="{{wishTitle}}" data-key="wishTitle" bindinput="onField" />
-    <button class="secondary" bindtap="addWish">收集愿望</button>
-    <view wx:for="{{wishes}}" wx:key="id" class="item"><view wx:if="{{editWishId !== item.id}}"><view class="item-title">{{item.title}}</view><view class="actions"><button class="text-button" data-item="{{item}}" bindtap="editWish">编辑</button><button class="text-button" data-id="{{item.id}}" bindtap="convertWish">转为项目</button></view></view><view wx:else><input class="input" value="{{editWishTitle}}" data-key="editWishTitle" bindinput="onField" /><button class="secondary" bindtap="saveWish">保存愿望</button></view></view>
-  </view>
+  <view wx:if="{{isProjectCreateOpen}}" class="modal-mask"><view class="modal" catchtap="noop"><view class="modal-title">新建项目</view><input class="input" placeholder="项目名称（最多 25 字）" value="{{projectTitle}}" data-key="projectTitle" bindinput="onField" /><view class="field-row"><picker mode="date" value="{{projectDate}}" data-key="projectDate" bindchange="onField"><view>{{projectDate}}</view></picker><picker mode="time" value="{{projectTime}}" data-key="projectTime" bindchange="onField"><view>{{projectTime}}</view></picker></view><input class="input" placeholder="首个目标名称" value="{{projectObjective}}" data-key="projectObjective" bindinput="onField" /><input class="input" placeholder="首个关键结果标题" value="{{projectKeyResult}}" data-key="projectKeyResult" bindinput="onField" /><input class="input" type="number" placeholder="当前值 0–100" value="{{projectCurrent}}" data-key="projectCurrent" bindinput="onField" /><button class="primary" bindtap="addProject">创建项目</button><button class="link" bindtap="closeProjectCreate">取消</button></view></view>
 
-  <view class="card form-card">
-    <view class="section-title">任务 / 备忘录</view>
-    <input class="input" placeholder="快速收集一条备忘录" value="{{taskTitle}}" data-key="taskTitle" bindinput="onField" />
-    <button class="secondary" bindtap="addTask">加入收集箱</button>
-    <picker range="{{activeProjects}}" range-key="title" value="{{taskProjectIndex}}" data-key="taskProjectIndex" bindchange="onPicker"><view class="picker">整理到项目：{{activeProjects[taskProjectIndex].title || '不关联项目'}}</view></picker>
-    <view wx:for="{{tasks}}" wx:key="id" class="item"><view class="item-title">{{item.title}}</view><view class="muted">{{item.status === 'inbox' ? '收集箱' : item.status === 'todo' ? '待办' : '已完成'}}{{item.projectNameSnapshot ? ' · ' + item.projectNameSnapshot : ''}}</view><view class="actions"><button wx:if="{{item.status === 'inbox'}}" class="text-button" data-id="{{item.id}}" bindtap="organizeTask">整理为待办</button><button class="text-button" data-id="{{item.id}}" data-status="{{item.status}}" bindtap="toggleTask">{{item.status === 'completed' ? '重新打开' : '完成'}}</button></view></view>
-  </view>
+  <view wx:if="{{taskEditor}}" class="modal-mask"><view class="modal" catchtap="noop"><view class="modal-title">{{taskEditor.mode === 'edit' ? '编辑 TODO' : '新建 TODO'}}</view><input class="input" placeholder="任务名称（最多 25 字）" value="{{taskTitle}}" data-key="taskTitle" bindinput="onField" /><picker class="task-project-picker" mode="selector" range="{{taskEditor.projectOptions}}" range-key="title" value="{{taskEditor.projectIndex}}" bindchange="onTaskProjectChange"><view>关联项目：{{taskEditor.projectTitle}}</view></picker><button class="primary" bindtap="saveTaskEditor">{{taskEditor.mode === 'edit' ? '保存' : '创建'}}</button><button class="link" bindtap="closeTaskEditor">取消</button></view></view>
+
+  <view wx:if="{{okrEditor}}" class="modal-mask"><view class="modal" catchtap="noop"><view class="modal-title">添加关键结果</view><view class="muted">项目：{{okrEditor.title}}</view><input class="input" placeholder="目标名称" value="{{objectiveTitle}}" data-key="objectiveTitle" bindinput="onField" /><input class="input" placeholder="关键结果标题" value="{{keyResultTitle}}" data-key="keyResultTitle" bindinput="onField" /><input class="input" type="number" placeholder="当前值 0–100" value="{{currentValue}}" data-key="currentValue" bindinput="onField" /><button class="primary" bindtap="saveKeyResult">保存关键结果</button><button class="link" bindtap="closeKeyResult">取消</button></view></view>
+
+  <view wx:if="{{projectTaskPanel}}" class="modal-mask"><view class="modal project-tasks-modal" catchtap="noop"><view class="modal-title">{{projectTaskPanel.projectTitle}}的子任务</view><view class="task-tabs"><button class="task-tab {{projectTaskPanel.tab === 'active' ? 'is-active' : ''}}" data-tab="active" bindtap="switchProjectTaskTab">未完成（{{projectTaskPanel.activeTasks.length}}）</button><button class="task-tab {{projectTaskPanel.tab === 'completed' ? 'is-active' : ''}}" data-tab="completed" bindtap="switchProjectTaskTab">已完成（{{projectTaskPanel.completedTasks.length}}）</button></view><view wx:if="{{projectTaskPanel.tab === 'active'}}"><view wx:if="{{!projectTaskPanel.activeTasks.length}}" class="empty">没有未完成子任务。</view><view wx:for="{{projectTaskPanel.activeTasks}}" wx:key="id" class="item"><view class="item-title">{{item.title}}</view></view></view><view wx:else><view wx:if="{{!projectTaskPanel.completedTasks.length}}" class="empty">没有已完成子任务。</view><view wx:for="{{projectTaskPanel.completedTasks}}" wx:key="id" class="item"><view class="item-title">{{item.title}}</view></view></view><button class="link" bindtap="closeProjectTasks">关闭</button></view></view>
+
   <view wx:if="{{projectEditor}}" class="modal-mask"><view class="modal" catchtap="noop"><view class="modal-title">编辑项目</view><input class="input" value="{{projectEditorTitle}}" data-key="projectEditorTitle" bindinput="onField" /><view class="field-row"><picker mode="date" value="{{projectEditorDate}}" data-key="projectEditorDate" bindchange="onField"><view>{{projectEditorDate}}</view></picker><picker mode="time" value="{{projectEditorTime}}" data-key="projectEditorTime" bindchange="onField"><view>{{projectEditorTime}}</view></picker></view><button class="primary" bindtap="saveProjectEditor">保存项目</button><button class="link" bindtap="closeProjectEditor">取消</button></view></view>
 </view>

@@ -1,0 +1,4 @@
+interface:
+  display_name: "小程序简约风格 UI"
+  short_description: "评审、设计、重构并验证 Plan & Record 小程序页面 UI"
+  default_prompt: "使用 $ui-style 根据我的请求评审、设计、重构或验证当前小程序页面 UI；评审时保持只读。"

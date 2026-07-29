@@ -27,7 +27,6 @@ const TIMER_STATUS = {
 };
 
 const TASK_STATUS = {
-  INBOX: 'inbox',
   TODO: 'todo',
   COMPLETED: 'completed'
 };
