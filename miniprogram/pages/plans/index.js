@@ -537,7 +537,7 @@ Page({
     try {
       getService().createWish(this.data.wishTitle);
       this.setData({ wishTitle: '' });
-      showSaved('愿望已加入想法池');
+      showSaved('愿望已添加');
       this.refresh();
     } catch (error) {
       showError(error);

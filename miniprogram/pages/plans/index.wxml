@@ -41,7 +41,7 @@
   </view>
 
   <view class="card wish-card">
-    <view class="section-header wish-toggle" bindtap="toggleWishSection"><view class="section-title">想法池（{{wishes.length}}）</view><view class="collapse-mark">{{isWishExpanded ? '收起' : '展开'}}</view></view>
+    <view class="section-header wish-toggle" bindtap="toggleWishSection"><view class="section-title">愿望池（{{wishes.length}}）</view><view class="collapse-mark">{{isWishExpanded ? '收起' : '展开'}}</view></view>
     <view wx:if="{{isWishExpanded}}" class="wish-content">
       <input class="input" placeholder="愿望描述（最多 25 字）" value="{{wishTitle}}" data-key="wishTitle" bindinput="onField" />
       <button class="secondary" bindtap="addWish">收集愿望</button>

@@ -218,6 +218,65 @@ test('M2：超过 24 小时的计时恢复为候选记录', () => {
   assert.equal(service.snapshot().timer.status, TIMER_STATUS.IDLE);
 });
 
+test('M2：暂停状态超时恢复时扣除尚未结束的暂停区间', () => {
+  const { service, setNow, now } = createHarness();
+  const startedAt = now();
+  service.startTimer({ note: '运行一小时后长时间暂停' });
+  setNow(startedAt + 60 * 60 * 1000);
+  service.pauseTimer();
+  setNow(startedAt + MAX_TIMER_SPAN_MS + 60 * 60 * 1000);
+
+  const recovered = service.recoverTimer(now());
+
+  assert.equal(recovered.state, 'candidate');
+  assert.equal(recovered.log.startedAt, startedAt);
+  assert.equal(recovered.log.endedAt, startedAt + MAX_TIMER_SPAN_MS);
+  assert.equal(recovered.log.durationMinutes, 60);
+  assert.equal(service.snapshot().timer.status, TIMER_STATUS.IDLE);
+  assert.equal(service.snapshot().recoveryDraft, null);
+});
+
+test('M2：暂停区间不自洽时只保留恢复草稿', () => {
+  const { service, repository, setNow, now } = createHarness();
+  const startedAt = now();
+  service.startTimer({ note: '暂停数据异常' });
+  setNow(startedAt + 60 * 60 * 1000);
+  service.pauseTimer();
+  repository.transaction((database) => {
+    database.timer.pauses = [{
+      startedAt: startedAt + 30 * 60 * 1000,
+      endedAt: startedAt + 90 * 60 * 1000
+    }];
+  });
+  setNow(startedAt + MAX_TIMER_SPAN_MS + 60 * 60 * 1000);
+
+  const recovered = service.recoverTimer(now());
+  const snapshot = service.snapshot();
+
+  assert.equal(recovered.state, 'draft');
+  assert.equal(snapshot.timer.status, TIMER_STATUS.IDLE);
+  assert.equal(snapshot.timeLogs.length, 0);
+  assert.equal(snapshot.recoveryDraft.timer.pausedAt, startedAt + 60 * 60 * 1000);
+});
+
+test('M2：运行态字段矛盾时不得恢复或生成候选', () => {
+  const { service, repository, setNow, now } = createHarness();
+  const startedAt = now();
+  service.startTimer({ note: '运行态字段异常' });
+  repository.transaction((database) => {
+    database.timer.endedAt = startedAt + 30 * 60 * 1000;
+  });
+  setNow(startedAt + 60 * 60 * 1000);
+
+  const recovered = service.recoverTimer(now());
+  const snapshot = service.snapshot();
+
+  assert.equal(recovered.state, 'draft');
+  assert.equal(snapshot.timer.status, TIMER_STATUS.IDLE);
+  assert.equal(snapshot.timeLogs.length, 0);
+  assert.equal(snapshot.recoveryDraft.timer.endedAt, startedAt + 30 * 60 * 1000);
+});
+
 test('M4：重复实例按需投影，确认后不会再次投影', () => {
   const { service, now } = createHarness();
   const start = now() + 60 * 60 * 1000;
@@ -271,6 +330,84 @@ test('M3：放弃项目删除未来对象但保留已确认历史和快照', () 
   assert.equal(keptLog.projectId, null);
   assert.equal(keptLog.projectNameSnapshot, '待放弃项目');
   assert.equal(keptLog.taskId, null);
+});
+
+test('M3：放弃项目断开计时草稿失效引用且保留仍有效的项目关联', () => {
+  const { service, repository, now } = createHarness();
+  const abandonedProject = service.createProject({
+    title: '待放弃项目',
+    deadlineAt: now() + 86_400_000,
+    objectives: requiredObjectives()
+  });
+  const retainedProject = service.createProject({
+    title: '保留项目',
+    deadlineAt: now() + 86_400_000,
+    objectives: requiredObjectives()
+  });
+  const deletingTask = service.createTask({
+    title: '待删除任务',
+    projectId: abandonedProject.id
+  });
+  const futureEvent = service.createCalendarEvent({
+    title: '待删除计划',
+    startedAt: now() + 60 * 60 * 1000,
+    endedAt: now() + 2 * 60 * 60 * 1000,
+    projectId: abandonedProject.id,
+    taskId: deletingTask.id
+  });
+  const { rule } = service.createRecurringPlan({
+    title: '待删除规则',
+    startedAt: now() + 3 * 60 * 60 * 1000,
+    endedAt: now() + 4 * 60 * 60 * 1000,
+    frequency: 'daily',
+    interval: 1,
+    projectId: abandonedProject.id,
+    taskId: deletingTask.id
+  });
+  service.startTimer({
+    projectId: abandonedProject.id,
+    taskId: deletingTask.id,
+    calendarEventId: futureEvent.id
+  });
+  repository.transaction((database) => {
+    database.timer.draft.originRuleId = rule.id;
+    database.recoveryDraft = {
+      reason: '待修正',
+      timer: {
+        ...createIdleTimer(),
+        draft: {
+          projectId: retainedProject.id,
+          projectNameSnapshot: retainedProject.title,
+          taskId: deletingTask.id,
+          calendarEventId: futureEvent.id,
+          repeatRuleId: rule.id
+        }
+      },
+      createdAt: now()
+    };
+  });
+
+  service.abandonProject(abandonedProject.id, true);
+  const snapshot = service.snapshot();
+  const timerDraft = snapshot.timer.draft;
+  const recoveryDraft = snapshot.recoveryDraft.timer.draft;
+
+  assert.deepEqual(
+    [timerDraft.projectId, timerDraft.projectNameSnapshot, timerDraft.taskId, timerDraft.taskNameSnapshot],
+    [null, abandonedProject.title, null, deletingTask.title]
+  );
+  assert.deepEqual(
+    [timerDraft.calendarEventId, timerDraft.calendarEventSummarySnapshot, timerDraft.originRuleId, timerDraft.originRuleSummarySnapshot],
+    [null, futureEvent.title, null, rule.title]
+  );
+  assert.deepEqual(
+    [recoveryDraft.projectId, recoveryDraft.projectNameSnapshot, recoveryDraft.taskId, recoveryDraft.taskNameSnapshot],
+    [retainedProject.id, retainedProject.title, null, deletingTask.title]
+  );
+  assert.deepEqual(
+    [recoveryDraft.calendarEventId, recoveryDraft.calendarEventSummarySnapshot, recoveryDraft.repeatRuleId, recoveryDraft.repeatRuleSummarySnapshot],
+    [null, futureEvent.title, null, rule.title]
+  );
 });
 
 test('M3：删除任务清除未结束计划并保留历史计划和计时记录', () => {

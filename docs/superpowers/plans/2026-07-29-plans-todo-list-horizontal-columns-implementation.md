@@ -1,6 +1,10 @@
-# 计划页 TODO LIST 横向任务列 Implementation Plan
+# 计划页 TODO LIST 横向任务列 Implementation Plan（已完成）
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> 状态：已完成并归档。控制器、WXML/WXSS 与自动化回归已于 2026-07-29 合并至提交 `d7593be`；本文是历史执行计划，不再作为当前待办。
+>
+> 当前交互以[产品设计基线](../../product-design.zh-CN.md#42-愿望项目视图)为准；新建任务插入开头，其余任务保持保存顺序。
+>
+> 勾选说明：`[x]` 表示最终产物或历史执行记录可复核；当时未保留输出的“先运行并确认失败”步骤不回填为完成。完整模拟器矩阵与真机验收继续保持未勾选。
 
 **Goal:** 将计划页 TODO LIST 改为每列三条、仅横向拖动且按整列吸附的固定高度任务清单。
 
@@ -30,7 +34,7 @@
 - Consumes: `sortTasks(tasks)` 的任务排序结果，任务对象至少含 `id`、`status` 与 `updatedAt`。
 - Produces: `todoListColumns: Array<{ id: string, tasks: Task[] }>`、`todoColumnIndex: number`、`todoColumnStep: number`、`todoScrollLeft: number`，以及 `onTodoTouchStart(event)`、`onTodoScroll(event)`、`onTodoTouchEnd(event)`。
 
-- [ ] **Step 1: 写出任务分列和吸附的失败测试**
+- [x] **Step 1: 写出任务分列和吸附的失败测试**
 
 让 `createHarness` 接收可选 `tasks`，并让 `service.snapshot()` 返回该数组。新增以下测试；它以页面 `refresh()` 验证真实投影，而不导出页面内部辅助函数：
 
@@ -79,7 +83,7 @@ Run: `node --test tests/plans-page.test.js`
 
 Expected: FAIL，`todoListColumns` 为 `undefined`，且页面没有 `onTodoTouchStart`。
 
-- [ ] **Step 3: 实现最小分列、测量和吸附状态**
+- [x] **Step 3: 实现最小分列、测量和吸附状态**
 
 在 `sortTasks` 下方定义常量和辅助函数：
 
@@ -155,13 +159,13 @@ onTodoTouchEnd(event) {
 
 在 `onReady()` 中调用 `measureTodoColumn()`，使首屏加载后能取得真实列宽。
 
-- [ ] **Step 4: 运行定向测试并确认通过**
+- [x] **Step 4: 运行定向测试并确认通过**
 
 Run: `node --test tests/plans-page.test.js`
 
 Expected: PASS，既有创建、关联、删除、勾选、项目分栏测试和新增三列/左右吸附测试全部通过。
 
-- [ ] **Step 5: 提交控制器与测试**
+- [x] **Step 5: 提交控制器与测试**
 
 ```bash
 git add tests/plans-page.test.js miniprogram/pages/plans/index.js
@@ -179,7 +183,7 @@ git commit -m "feat(plans): add todo column snapping"
 - Consumes: Task 1 的 `todoListColumns`、`todoScrollLeft` 与触摸/滚动处理器。
 - Produces: 仅横向滚动的 TODO `scroll-view`，每列最多三条任务，项目副标题和可访问的链接/垃圾桶图标按钮。
 
-- [ ] **Step 1: 为 WXML/WXSS 结构写失败静态回归**
+- [x] **Step 1: 为 WXML/WXSS 结构写失败静态回归**
 
 在“计划页以 TODO LIST 和项目上下文入口替代任务收集表单”测试后新增：
 
@@ -208,7 +212,7 @@ Run: `node --test tests/m2-m4-page-regression.test.js`
 
 Expected: FAIL，当前 WXML 启用了 `scroll-y`，且不存在列容器、横向事件和图标按钮。
 
-- [ ] **Step 3: 重写 TODO 区的 WXML 结构**
+- [x] **Step 3: 重写 TODO 区的 WXML 结构**
 
 保留卡片标题、空态、任务完成事件、项目关联菜单和删除确认事件；将现有单层 `wx:for` 换为以下双层循环。按钮内不放可见文字，以 `aria-label` 提供操作名称：
 
@@ -228,7 +232,7 @@ Expected: FAIL，当前 WXML 启用了 `scroll-y`，且不存在列容器、横�
 </scroll-view>
 ```
 
-- [ ] **Step 4: 重写 TODO 相关 WXSS**
+- [x] **Step 4: 重写 TODO 相关 WXSS**
 
 删除 `.todo-row` 的 `border-top` 与文字按钮宽度规则，使用以下尺寸关系：卡片内边距 `30rpx`、页头占 `64rpx`、列表区 `296rpx`；每列宽 `60%` 并以 `20%` 分隔，使操作图标与后一列完成方框拉开，同时保留约三分之一下一列预览。
 
@@ -248,13 +252,13 @@ Expected: FAIL，当前 WXML 启用了 `scroll-y`，且不存在列容器、横�
 
 用 `.todo-link-icon` 的两个旋转圆角描边绘制链接，用 `.todo-delete-icon` 的盒体和顶盖绘制垃圾桶；绿色使用 `#15803d`，红色使用 `#dc2626`。完成态继续将标题与项目文字设为 `#94a3b8`，且仅完成态显示删除线。
 
-- [ ] **Step 5: 运行页面测试并确认通过**
+- [x] **Step 5: 运行页面测试并确认通过**
 
 Run: `node --test tests/plans-page.test.js tests/m2-m4-page-regression.test.js`
 
 Expected: PASS，横向结构、无纵向滚动、列宽、无分割线、图标可访问名称以及原有任务操作测试全部通过。
 
-- [ ] **Step 6: 提交页面结构与样式**
+- [x] **Step 6: 提交页面结构与样式**
 
 ```bash
 git add tests/m2-m4-page-regression.test.js miniprogram/pages/plans/index.wxml miniprogram/pages/plans/index.wxss
@@ -274,7 +278,7 @@ git commit -m "feat(plans): render horizontal todo columns"
 - Consumes: Task 1 的控制器和 Task 2 的页面结构。
 - Produces: 自动化回归证据、模拟器视觉证据和明确的真机验收边界。
 
-- [ ] **Step 1: 运行全量自动化测试与差异检查**
+- [x] **Step 1: 运行全量自动化测试与差异检查**
 
 Run: `npm test`
 
@@ -293,14 +297,20 @@ $path = Get-Content -Raw -Encoding UTF8 .local/wechatide-path.txt
 if (-not $path.Trim() -or -not (Test-Path $path.Trim())) { throw '微信开发者工具路径未配置或无效' }
 ```
 
-路径有效时，按 `wechatide-skill` 的编译流程打开 `E:\github\wxapp-PlanAndRecord`、进入 `pages/plans/index` 并编译。路径无效时停止该步骤并报告阻塞，不把静态测试当作模拟器通过。
+路径有效时，按 `wechatide-skill` 的编译流程打开当前仓库根目录（不得硬编码盘符）、进入 `pages/plans/index` 并编译。路径无效时停止该步骤并报告阻塞，不把静态测试当作模拟器通过。
 
 - [ ] **Step 3: 在模拟器完成视觉验收矩阵**
 
-依次检查并记录截图：空 TODO、3 条 TODO、4 至 6 条 TODO、7 条 TODO、带项目副标题、长标题、完成态、向左/向右轻划后整列吸附、关联菜单、删除确认、底部悬浮新建按钮与安全区。真机只标记为“未验证”，除非实际在真机完成相同手势验收。
+依次检查并记录截图：空 TODO、3 条 TODO、4 至 6 条 TODO、7 条 TODO、带项目副标题、长标题、完成态、向左/向右轻划后整列吸附、关联菜单、删除确认、TODO LIST 标题区新建按钮与底部安全区。真机只标记为“未验证”，除非实际在真机完成相同手势验收。
 
-- [ ] **Step 4: 记录最终工作树**
+- [x] **Step 4: 记录最终工作树**
 
 Run: `git status --short` and `git log --oneline -3`
 
 Expected: 只显示本计划产生的改动或提交；不推送远端，除非用户另行要求。
+
+## 执行记录（2026-07-29）
+
+- 任务分列、列宽测量、横向吸附、尾随占位、图标操作和相关自动化回归已合并至提交 `d7593be`。
+- 当次 `npm test` 全量通过；测试数量会随仓库演进变化，不在历史计划中固定。
+- 完整模拟器场景矩阵与真机触控手感没有可复核的完整验收记录，仍保持未验证。

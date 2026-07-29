@@ -170,6 +170,46 @@ class ApplicationService {
     return true;
   }
 
+  detachProjectReference(target, project) {
+    if (!target || target.projectId !== project.id) return false;
+    target.projectId = null;
+    target.projectNameSnapshot = target.projectNameSnapshot || project.title;
+    return true;
+  }
+
+  detachCalendarEventReference(target, event) {
+    if (!target || target.calendarEventId !== event.id) return false;
+    target.calendarEventId = null;
+    target.calendarEventSummarySnapshot = target.calendarEventSummarySnapshot || event.title;
+    return true;
+  }
+
+  detachRepeatRuleReference(target, rule) {
+    if (!target) return false;
+    let changed = false;
+    if (target.originRuleId === rule.id) {
+      target.originRuleId = null;
+      target.originRuleSummarySnapshot = target.originRuleSummarySnapshot || rule.title;
+      changed = true;
+    }
+    if (target.repeatRuleId === rule.id) {
+      target.repeatRuleId = null;
+      target.repeatRuleSummarySnapshot = target.repeatRuleSummarySnapshot || rule.title;
+      changed = true;
+    }
+    return changed;
+  }
+
+  detachAbandonedProjectDraftReferences(target, project, deletingTasks, deletedEvents, deletedRules) {
+    if (!target) return;
+    this.detachProjectReference(target, project);
+    const task = deletingTasks.find((item) => item.id === target.taskId);
+    if (task) this.detachTaskReference(target, task);
+    const event = deletedEvents.find((item) => item.id === target.calendarEventId);
+    if (event) this.detachCalendarEventReference(target, event);
+    deletedRules.forEach((rule) => this.detachRepeatRuleReference(target, rule));
+  }
+
   resolveAssociations(database, input = {}) {
     let project = null;
     let task = null;
@@ -376,15 +416,20 @@ class ApplicationService {
     const now = this.now();
     return this.repository.transaction((database) => {
       const project = this.requireEntity(database.projects, id, '项目');
-      const deletingTaskIds = database.tasks
-        .filter((task) => task.projectId === id && task.status !== TASK_STATUS.COMPLETED)
-        .map((task) => task.id);
-      const deletedEventIds = database.calendarEvents
-        .filter((event) => (event.projectId === id || deletingTaskIds.includes(event.taskId)) && event.endedAt > now)
-        .map((event) => event.id);
-      const deletedRuleIds = database.repeatRules
-        .filter((rule) => rule.revisions.some((revision) => revision.projectId === id || deletingTaskIds.includes(revision.taskId)))
-        .map((rule) => rule.id);
+      const deletingTasks = database.tasks
+        .filter((task) => task.projectId === id && task.status !== TASK_STATUS.COMPLETED);
+      const deletingTaskIds = deletingTasks.map((task) => task.id);
+      const deletedEvents = database.calendarEvents
+        .filter((event) => (event.projectId === id || deletingTaskIds.includes(event.taskId)) && event.endedAt > now);
+      const deletedEventIds = deletedEvents.map((event) => event.id);
+      const deletedRules = database.repeatRules
+        .filter((rule) => rule.revisions.some((revision) => revision.projectId === id || deletingTaskIds.includes(revision.taskId)));
+      const deletedRuleIds = deletedRules.map((rule) => rule.id);
+
+      this.detachAbandonedProjectDraftReferences(database.timer && database.timer.draft, project, deletingTasks, deletedEvents, deletedRules);
+      if (database.recoveryDraft && database.recoveryDraft.timer) {
+        this.detachAbandonedProjectDraftReferences(database.recoveryDraft.timer.draft, project, deletingTasks, deletedEvents, deletedRules);
+      }
 
       database.projects = database.projects.filter((item) => item.id !== id);
       database.tasks = database.tasks.filter((task) => {
@@ -974,20 +1019,34 @@ class ApplicationService {
         return isFiniteTimestamp(pause.startedAt) && isFiniteTimestamp(pause.endedAt) && pause.endedAt >= pause.startedAt && pause.startedAt >= precedingEnd && pause.endedAt <= now;
       });
       const basicValid = isFiniteTimestamp(timer.startedAt) && now >= timer.startedAt;
-      const activePauseValid = timer.status !== TIMER_STATUS.PAUSED || (isFiniteTimestamp(timer.pausedAt) && timer.pausedAt >= timer.startedAt && timer.pausedAt <= now);
-      if (basicValid && pausesAreValid && activePauseValid && now - timer.startedAt <= MAX_TIMER_SPAN_MS) {
+      const precedingPauseEnd = pausesAreValid && timer.pauses.length
+        ? timer.pauses[timer.pauses.length - 1].endedAt
+        : timer.startedAt;
+      const statusFieldsValid = timer.status === TIMER_STATUS.RUNNING
+        ? timer.endedAt === null && timer.pausedAt === null
+        : timer.status === TIMER_STATUS.PAUSED && timer.endedAt === null;
+      const activePauseValid = timer.status === TIMER_STATUS.RUNNING
+        ? timer.pausedAt === null
+        : timer.status === TIMER_STATUS.PAUSED
+          && isFiniteTimestamp(timer.pausedAt)
+          && timer.pausedAt >= precedingPauseEnd
+          && timer.pausedAt <= now;
+      if (basicValid && pausesAreValid && statusFieldsValid && activePauseValid && now - timer.startedAt <= MAX_TIMER_SPAN_MS) {
         return { state: 'resumed', timer };
       }
       database.timer = createIdleTimer();
-      if (!basicValid) {
+      if (!basicValid || !pausesAreValid || !statusFieldsValid || !activePauseValid) {
         database.recoveryDraft = { reason: '时间戳无法还原，请手工修正后再创建候选记录', timer, createdAt: now };
         return { state: 'draft', recoveryDraft: database.recoveryDraft };
       }
       const endedAt = Math.min(now, timer.startedAt + MAX_TIMER_SPAN_MS);
-      const pauses = pausesAreValid ? timer.pauses.filter((pause) => pause.startedAt < endedAt).map((pause) => ({
+      const pauses = timer.pauses.filter((pause) => pause.startedAt < endedAt).map((pause) => ({
         startedAt: pause.startedAt,
         endedAt: Math.min(pause.endedAt, endedAt)
-      })) : [];
+      }));
+      if (timer.status === TIMER_STATUS.PAUSED && timer.pausedAt < endedAt) {
+        pauses.push({ startedAt: timer.pausedAt, endedAt });
+      }
       const durationMinutes = calculateDurationMinutes(timer.startedAt, endedAt, pauses);
       if (durationMinutes <= 0) {
         database.recoveryDraft = { reason: '可恢复时间无效，请手工修正后再创建候选记录', timer, createdAt: now };

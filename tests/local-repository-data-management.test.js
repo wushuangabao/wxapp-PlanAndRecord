@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
+const { APP_SCHEMA_VERSION } = require('../miniprogram/domain/constants');
 const { createInitialDatabase, clone } = require('../miniprogram/domain/entities');
 const { DomainError, StorageError } = require('../miniprogram/domain/errors');
 const {
@@ -91,6 +92,242 @@ test('MemoryStorageAdapter.remove 只删除指定键', () => {
 
   assert.deepEqual(storage.get('keep'), { value: 1 });
   assert.equal(storage.get('remove'), undefined);
+});
+
+test('initialize 严格校验合法当前版本快照且不重复写入', () => {
+  const storage = new FaultStorage();
+  const stored = createInitialDatabase(1_700_000_000_000);
+  storage.set(STORAGE_KEY, stored);
+  storage.setCalls.length = 0;
+  const repository = new LocalRepository(storage, { now: () => 1_700_000_000_100 });
+
+  const loaded = repository.initialize();
+
+  assert.deepEqual(loaded, stored);
+  assert.notEqual(loaded, repository.cache);
+  loaded.wishes.push({ id: 'wish_outside', title: '只修改返回值' });
+  assert.deepEqual(repository.cache, stored);
+  assert.deepEqual(storage.get(STORAGE_KEY), stored);
+  assert.deepEqual(storage.setCalls, []);
+  assert.deepEqual(storage.removeCalls, []);
+});
+
+test('initialize 将结构完整但暂停语义不一致的活动计时留给恢复流程', () => {
+  const storage = new FaultStorage();
+  const stored = createInitialDatabase(1_700_000_000_000);
+  stored.timer = {
+    status: 'paused',
+    startedAt: 1_700_000_000_000,
+    endedAt: null,
+    pausedAt: 1_700_000_050_000,
+    pauses: [
+      { startedAt: 1_700_000_030_000, endedAt: 1_700_000_020_000 }
+    ],
+    draft: {}
+  };
+  storage.set(STORAGE_KEY, stored);
+  storage.setCalls.length = 0;
+  const repository = new LocalRepository(storage, { now: () => 1_700_000_060_000 });
+
+  const loaded = repository.initialize();
+
+  assert.deepEqual(loaded.timer, stored.timer);
+  assert.deepEqual(repository.cache, stored);
+  assert.deepEqual(storage.get(STORAGE_KEY), stored);
+  assert.deepEqual(storage.setCalls, []);
+  assert.deepEqual(storage.removeCalls, []);
+});
+
+test('initialize 允许已保存恢复草稿保留反向暂停区间供用户修正', () => {
+  const storage = new FaultStorage();
+  const stored = createInitialDatabase(1_700_000_000_000);
+  stored.recoveryDraft = {
+    reason: '暂停区间待修正',
+    timer: {
+      status: 'paused',
+      startedAt: 1_700_000_000_000,
+      endedAt: null,
+      pausedAt: 1_700_000_050_000,
+      pauses: [
+        { startedAt: 1_700_000_030_000, endedAt: 1_700_000_020_000 }
+      ],
+      draft: {}
+    },
+    createdAt: 1_700_000_060_000
+  };
+  storage.set(STORAGE_KEY, stored);
+  storage.setCalls.length = 0;
+  const repository = new LocalRepository(storage, { now: () => 1_700_000_070_000 });
+
+  const loaded = repository.initialize();
+
+  assert.deepEqual(loaded.recoveryDraft, stored.recoveryDraft);
+  assert.deepEqual(repository.cache, stored);
+  assert.deepEqual(storage.get(STORAGE_KEY), stored);
+  assert.deepEqual(storage.setCalls, []);
+  assert.deepEqual(storage.removeCalls, []);
+  assert.throws(
+    () => repository.replace(loaded),
+    (error) => error instanceof DomainError && error.code === 'IMPORT_SCHEMA_INVALID'
+  );
+});
+
+test('initialize 对可恢复计时仍严格校验必需字段、容器、枚举、时间戳和草稿类型', () => {
+  const cases = [
+    ['缺少字段', (timer) => { delete timer.endedAt; }],
+    ['暂停容器错误', (timer) => { timer.pauses = {}; }],
+    ['暂停字段缺失', (timer) => { timer.pauses = [{ startedAt: 1_700_000_010_000 }]; }],
+    ['状态枚举错误', (timer) => { timer.status = 'recovering'; }],
+    ['时间戳类型错误', (timer) => { timer.startedAt = '1700000000000'; }],
+    ['草稿类型错误', (timer) => { timer.draft = { note: 42 }; }]
+  ];
+
+  cases.forEach(([label, mutate]) => {
+    const storage = new FaultStorage();
+    const stored = createInitialDatabase(1_700_000_000_000);
+    stored.timer = {
+      status: 'running',
+      startedAt: 1_700_000_000_000,
+      endedAt: null,
+      pausedAt: null,
+      pauses: [],
+      draft: {}
+    };
+    mutate(stored.timer);
+    storage.set(STORAGE_KEY, stored);
+    storage.setCalls.length = 0;
+    const repository = new LocalRepository(storage);
+
+    assert.throws(
+      () => repository.initialize(),
+      (error) => error instanceof StorageError && error.code === 'DATA_CORRUPTED',
+      label
+    );
+    assert.equal(repository.cache, null, label);
+    assert.deepEqual(storage.get(STORAGE_KEY), stored, label);
+    assert.deepEqual(storage.setCalls, [], label);
+    assert.deepEqual(storage.removeCalls, [], label);
+  });
+});
+
+test('initialize 拒绝同版本损坏快照，后续事务仍零写入且缓存不受污染', () => {
+  const storage = new FaultStorage();
+  const stored = createInitialDatabase(1_700_000_000_000);
+  const sentinel = 'PRIVATE_LOCAL_SNAPSHOT_SENTINEL_749';
+  stored.wishes.push({
+    id: 'wish_private',
+    title: sentinel,
+    createdAt: stored.createdAt,
+    updatedAt: stored.updatedAt
+  });
+  stored.timer = {
+    status: 'running',
+    startedAt: stored.createdAt,
+    endedAt: null,
+    pausedAt: null,
+    pauses: [],
+    draft: {}
+  };
+  delete stored.tasks;
+  storage.set(STORAGE_KEY, stored);
+  storage.setCalls.length = 0;
+  const repository = new LocalRepository(storage, { now: () => 1_700_000_000_100 });
+
+  const error = captureThrown(() => repository.initialize());
+
+  assert.equal(error instanceof StorageError, true);
+  assert.equal(error.code, 'DATA_CORRUPTED');
+  assert.match(error.message, /停止写入/);
+  assert.doesNotMatch(error.message, new RegExp(sentinel));
+  assert.equal(repository.cache, null);
+  assert.deepEqual(storage.get(STORAGE_KEY), stored);
+  assert.deepEqual(storage.setCalls, []);
+  assert.deepEqual(storage.removeCalls, []);
+
+  let mutatorCalled = false;
+  assert.throws(
+    () => repository.transaction(() => {
+      mutatorCalled = true;
+    }),
+    (transactionError) => transactionError instanceof StorageError
+      && transactionError.code === 'DATA_CORRUPTED'
+  );
+  assert.equal(mutatorCalled, false);
+  assert.equal(repository.cache, null);
+  assert.deepEqual(storage.get(STORAGE_KEY), stored);
+  assert.deepEqual(storage.setCalls, []);
+  assert.deepEqual(storage.removeCalls, []);
+});
+
+test('initialize 将同版本重复 ID 领域错误转换为安全的损坏错误', () => {
+  const storage = new FaultStorage();
+  const stored = createInitialDatabase(1_700_000_000_000);
+  stored.categories.push(clone(stored.categories[0]));
+  storage.set(STORAGE_KEY, stored);
+  storage.setCalls.length = 0;
+  const repository = new LocalRepository(storage);
+
+  const error = captureThrown(() => repository.initialize());
+
+  assert.equal(error instanceof StorageError, true);
+  assert.equal(error.code, 'DATA_CORRUPTED');
+  assert.doesNotMatch(error.message, /IMPORT_DUPLICATE_ID|category_uncategorized/);
+  assert.equal(repository.cache, null);
+  assert.deepEqual(storage.get(STORAGE_KEY), stored);
+  assert.deepEqual(storage.setCalls, []);
+  assert.deepEqual(storage.removeCalls, []);
+});
+
+test('initialize 将同版本校验器原生异常转换为安全的损坏错误', () => {
+  const storage = new FaultStorage();
+  const stored = createInitialDatabase(1_700_000_000_000);
+  const sentinel = 'PRIVATE_NATIVE_VALIDATION_SENTINEL_749';
+  stored.wishes.push({
+    id: 'wish_private_native',
+    title: sentinel,
+    createdAt: stored.createdAt,
+    updatedAt: stored.updatedAt
+  });
+  stored.timeLogs = [null];
+  storage.set(STORAGE_KEY, stored);
+  storage.setCalls.length = 0;
+  const repository = new LocalRepository(storage);
+
+  const error = captureThrown(() => repository.initialize());
+
+  assert.equal(error instanceof StorageError, true);
+  assert.equal(error.code, 'DATA_CORRUPTED');
+  assert.equal(error.name, 'StorageError');
+  assert.doesNotMatch(error.message, /TypeError|Cannot read|source/);
+  assert.doesNotMatch(error.message, new RegExp(sentinel));
+  assert.equal(repository.cache, null);
+  assert.deepEqual(storage.get(STORAGE_KEY), stored);
+  assert.deepEqual(storage.setCalls, []);
+  assert.deepEqual(storage.removeCalls, []);
+});
+
+test('initialize 拒绝高版本快照且不校验或覆盖未来数据', () => {
+  const storage = new FaultStorage();
+  const stored = createInitialDatabase(1_700_000_000_000);
+  const sentinel = 'PRIVATE_FUTURE_SNAPSHOT_SENTINEL_749';
+  stored.schemaVersion = APP_SCHEMA_VERSION + 1;
+  stored.futurePayload = sentinel;
+  delete stored.tasks;
+  storage.set(STORAGE_KEY, stored);
+  storage.setCalls.length = 0;
+  const repository = new LocalRepository(storage);
+
+  const error = captureThrown(() => repository.initialize());
+
+  assert.equal(error instanceof StorageError, true);
+  assert.equal(error.code, 'DATA_VERSION_UNSUPPORTED');
+  assert.match(error.message, /不会覆盖/);
+  assert.doesNotMatch(error.message, new RegExp(sentinel));
+  assert.equal(repository.cache, null);
+  assert.deepEqual(storage.get(STORAGE_KEY), stored);
+  assert.equal(storage.get(BACKUP_KEY), undefined);
+  assert.deepEqual(storage.setCalls, []);
+  assert.deepEqual(storage.removeCalls, []);
 });
 
 test('replace 在候选快照校验失败时不写入且不改变缓存', () => {

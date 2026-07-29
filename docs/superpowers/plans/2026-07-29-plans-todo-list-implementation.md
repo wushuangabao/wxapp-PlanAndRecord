@@ -1,6 +1,10 @@
-# 计划页 TODO LIST 重构 Implementation Plan
+# 计划页 TODO LIST 重构 Implementation Plan（已完成）
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> 状态：已完成并归档。实现已于 2026-07-29 合并至提交 `d7593be`；本文是历史执行计划，不再作为当前待办或产品规则。
+>
+> 当前语义以[产品设计基线](../../product-design.zh-CN.md)为准：独立 TODO 入口最终位于 TODO LIST 标题区，单任务删除采用产品基线 5.2 的最终删除与历史保全规则。
+>
+> 勾选说明：`[x]` 表示最终产物或历史执行记录可复核；当时未保留输出的“先运行并确认失败”步骤不回填为完成。完整模拟器矩阵与真机验收继续保持未勾选。
 
 **Goal:** 将计划页重构为“顶部 TODO LIST + 项目内子任务 + 右下角独立 TODO”，并彻底移除 `inbox` 状态与任务收集流程。
 
@@ -25,7 +29,7 @@
 - `miniprogram/services/application-service.js`：任务状态校验、默认 TODO 创建与原子 `deleteTask`。
 - `docs/product-design.zh-CN.md`：任务状态、计划页入口、删除边界的权威定义。
 - `miniprogram/pages/plans/index.js`：页面投影、底部弹层状态与所有计划页事件。
-- `miniprogram/pages/plans/index.wxml`：TODO LIST、项目上下文入口、想法池折叠和弹层结构。
+- `miniprogram/pages/plans/index.wxml`：TODO LIST、项目上下文入口、愿望池折叠和弹层结构。
 - `miniprogram/pages/plans/index.wxss`：固定高度列表、紧凑行、悬浮按钮与折叠/弹层样式。
 - `tests/application-service.test.js`：任务状态与删除断链服务回归。
 - `tests/json-snapshot.test.js`：`inbox` 快照被拒绝的协议回归。
@@ -45,7 +49,7 @@
 - Produces: `ApplicationService.deleteTask(id: string, confirmed: boolean): { id: string, title: string }`。
 - Produces: `createTask(input)` 默认写入 `TASK_STATUS.TODO`；`updateTask` 拒绝未定义状态。
 
-- [ ] **Step 1: 写出状态与删除断链的失败测试**
+- [x] **Step 1: 写出状态与删除断链的失败测试**
 
 在 `tests/application-service.test.js` 增加以下场景：默认新任务为 TODO；非法状态抛 `TASK_STATUS_INVALID`；未确认删除抛 `TASK_DELETE_CONFIRMATION_REQUIRED`；确认删除后任务被移除，而事件、规则 revision、例外 override、日志、运行中 timer draft 和 recovery draft 的 `taskId` 都为 `null`、名称快照为任务标题、其 `projectId` 保持不变。
 
@@ -75,7 +79,7 @@ Run: `node --test tests/application-service.test.js tests/json-snapshot.test.js`
 
 Expected: FAIL，缺少 `deleteTask`，且现有枚举仍接受 `inbox`。
 
-- [ ] **Step 3: 实现最小状态收敛和断链逻辑**
+- [x] **Step 3: 实现最小状态收敛和断链逻辑**
 
 在 `constants.js` 改为：
 
@@ -108,13 +112,13 @@ detachTaskReference(target, task) {
 
 `json-snapshot.js` 无需单独硬编码任务状态；它已通过 `validEnum(task.status, TASK_STATUS)` 校验，枚举更新后会自动拒绝 `inbox`。
 
-- [ ] **Step 4: 运行定向测试确认通过**
+- [x] **Step 4: 运行定向测试确认通过**
 
 Run: `node --test tests/application-service.test.js tests/json-snapshot.test.js`
 
 Expected: PASS，新增状态和删除测试通过，既有 JSON 协议测试仍通过。
 
-- [ ] **Step 5: 提交领域服务变更**
+- [x] **Step 5: 提交领域服务变更**
 
 ```bash
 git add miniprogram/domain/constants.js miniprogram/services/application-service.js tests/application-service.test.js tests/json-snapshot.test.js
@@ -130,25 +134,25 @@ git commit -m "feat(tasks): remove inbox and add safe task deletion"
 - Consumes: Task 1 的双状态契约与 `deleteTask` 断链语义。
 - Produces: 计划页、任务状态和删除边界的单一权威定义。
 
-- [ ] **Step 1: 将任务定义替换为双状态 TODO**
+- [x] **Step 1: 将任务定义替换为双状态 TODO**
 
 把对象表中的“备忘录是尚未整理的收集状态”替换为“任务是可选关联项目的 TODO”；把 3.3 的状态约束改为：`Task.status` 只使用 `todo / completed`，两个新增入口都创建 `todo`，完成任务可重新打开为 `todo`。
 
-- [ ] **Step 2: 重写 4.2 的任务交互段落**
+- [x] **Step 2: 重写 4.2 的任务交互段落**
 
 在愿望/项目视图定义中写明：页眉之后先放固定 `420rpx` TODO LIST，活动项目位于其后；TODO 行包含勾选、标题、可选项目小字、关联项目、删除；关联菜单第一项为“取消关联”；右下角悬浮 `+` 创建无关联 TODO；项目条目的 `+子任务` 创建关联 TODO，标题打开按未完成/已完成分页的任务弹层；删除旧的任务收集/inbox 整理流程说明。
 
-- [ ] **Step 3: 补充 5.2 的单任务删除边界**
+- [x] **Step 3: 补充 5.2 的单任务删除边界**
 
 新增一条：显式删除任务需要确认，删除任务实体后保留事件、规则、例外、日志与计时草稿，清除其中 `taskId` 并保留 `taskNameSnapshot`；不删除其他实体，也不清除其有效项目关联。
 
-- [ ] **Step 4: 检查文档一致性**
+- [x] **Step 4: 检查文档一致性**
 
 Run: `rg -n "inbox|收集箱|整理为待办|任务 / 备忘录" docs/product-design.zh-CN.md`
 
 Expected: 不出现已废弃的任务状态或收集流程；若出现的是导入历史说明，必须同步改为不兼容旧 `inbox` 协议。
 
-- [ ] **Step 5: 提交权威文档变更**
+- [x] **Step 5: 提交权威文档变更**
 
 ```bash
 git add docs/product-design.zh-CN.md
@@ -165,7 +169,7 @@ git commit -m "docs(product): define direct todo task flow"
 - Consumes: `createTask({ title, projectId?, status })`、`updateTask`、`deleteTask`。
 - Produces: 计划页控制器和 WXML 结构的可执行回归保护。
 
-- [ ] **Step 1: 建立页面测试 harness 与失败断言**
+- [x] **Step 1: 建立页面测试 harness 与失败断言**
 
 仿照 `tests/timer-page.test.js` 劫持 `global.Page` 加载 `pages/plans/index.js`；提供 `setData`、`global.getApp`、`global.wx.showToast/showModal/showActionSheet` 的可控替身。测试至少覆盖：
 
@@ -195,7 +199,7 @@ test('计划页：关联菜单首项取消关联，删除需确认', () => {
 
 另加 `openProjectTasks` 的未完成/已完成分组断言和 `toggleTask` 的 `completed ↔ todo` 断言。
 
-- [ ] **Step 2: 扩充静态结构回归**
+- [x] **Step 2: 扩充静态结构回归**
 
 在 `m2-m4-page-regression.test.js` 增加：`TODO LIST` 出现在“活动项目”之前；存在 `openStandaloneTask`、`openChildTask`、`openProjectTasks` 与 `openKeyResult`；不存在“任务 / 备忘录”“加入收集箱”“整理为待办”；新建项目表单在弹层条件内而非首屏常驻。
 
@@ -217,7 +221,7 @@ Expected: FAIL，当前页面没有新事件、TODO LIST 或新增测试所需�
 - Consumes: `ApplicationService.deleteTask(id, true)`、Task 1 的两状态枚举。
 - Produces: 由稳定项目/任务 ID 驱动的计划页 UI，不再存在全局任务收集表单。
 
-- [ ] **Step 1: 替换页面状态与投影函数**
+- [x] **Step 1: 替换页面状态与投影函数**
 
 删除 `taskProjectIndex`、`okrProjectIndex`、`addTask`、`organizeTask` 和全局 `addKeyResult` 依赖的索引选择。保留原始 `tasks`，新增如下状态并在 `refresh()` 中生成 `todoListTasks`：
 
@@ -237,7 +241,7 @@ const todoListTasks = snapshot.tasks.slice().sort((left, right) => {
 
 `refresh()` 若有 `projectTaskPanel`，必须用其 `projectId` 从新快照重新构造两个任务数组，不能使用显示名称或旧数组下标。
 
-- [ ] **Step 2: 实现上下文事件**
+- [x] **Step 2: 实现上下文事件**
 
 新增并使用以下事件：
 
@@ -259,9 +263,9 @@ saveTaskEditor() {
 
 实现 `openProjectTasks`、`switchProjectTaskTab`、`openKeyResult`、`saveKeyResult`、`toggleWishSection`。`saveKeyResult` 每次从 `getService().snapshot().projects` 按 `okrEditor.id` 读取最新项目，再整体提交 objectives。`chooseTaskProject` 通过 `wx.showActionSheet({ itemList: ['取消关联'].concat(activeProjects.map((item) => item.title)) })`，首项调用 `updateTask(id, { projectId: null })`；其余项按索引取得项目 ID。`confirmDeleteTask` 用 `wx.showModal` 的确认回调调用 `deleteTask(id, true)`。
 
-- [ ] **Step 3: 重写 WXML 的页面层级**
+- [x] **Step 3: 重写 WXML 的页面层级**
 
-主内容必须依次渲染：TODO LIST 卡片、活动项目卡片、归档项目卡片、可折叠想法池。TODO 行采用以下绑定结构，确保事件都有稳定 ID：
+主内容必须依次渲染：TODO LIST 卡片、活动项目卡片、归档项目卡片、可折叠愿望池。TODO 行采用以下绑定结构，确保事件都有稳定 ID：
 
 ```xml
 <scroll-view class="todo-list" scroll-y="true">
@@ -277,7 +281,7 @@ saveTaskEditor() {
 
 活动项目标题和列表末尾 `+` 分别绑定 `openProjectTasks` 与 `openProjectCreate`；每项目添加 `openKeyResult`、`openChildTask` 和低频 `openProjectManage`。删除旧的任务收集 WXML 与全局 KR 表单。新增 `taskEditor`、项目任务面板、OKR、新建项目、项目编辑的底部弹层；每个弹层带 `catchtap="noop"`、取消操作和安全区 padding。页末固定添加 `<button class="todo-fab" bindtap="openStandaloneTask">+</button>`。
 
-- [ ] **Step 4: 重写 WXSS，保证紧凑但可操作**
+- [x] **Step 4: 重写 WXSS，保证紧凑但可操作**
 
 新增 `.todo-card { height: 420rpx; }`、`.todo-list { height: 340rpx; }`、`.todo-row { min-height: 84rpx; display: flex; align-items: center; gap: 12rpx; }`、`.todo-check` 的 36rpx 方框与 `.is-completed` 低对比状态。任务标题使用 `flex: 1; min-width: 0;`，项目名称使用小号绿色/灰色文字；“关联”“删除”保持文本按钮，不再新增卡片。悬浮按钮必须使用：
 
@@ -298,15 +302,15 @@ saveTaskEditor() {
 }
 ```
 
-将页面底部 padding 调整到至少 `calc(176rpx + env(safe-area-inset-bottom))`，防止想法池被悬浮按钮遮挡。
+将页面底部 padding 调整到至少 `calc(176rpx + env(safe-area-inset-bottom))`，防止愿望池被悬浮按钮遮挡。
 
-- [ ] **Step 5: 运行计划页测试确认通过**
+- [x] **Step 5: 运行计划页测试确认通过**
 
 Run: `node --test tests/plans-page.test.js tests/m2-m4-page-regression.test.js`
 
 Expected: PASS，任务创建、勾选、关联/取消关联、确认删除、子任务分组和新 WXML 层级均通过。
 
-- [ ] **Step 6: 提交页面重构**
+- [x] **Step 6: 提交页面重构**
 
 ```bash
 git add miniprogram/pages/plans/index.js miniprogram/pages/plans/index.wxml miniprogram/pages/plans/index.wxss tests/plans-page.test.js tests/m2-m4-page-regression.test.js
@@ -322,7 +326,7 @@ git commit -m "feat(plans): add todo list and contextual task actions"
 - Consumes: 完整领域、页面和文档变更。
 - Produces: 自动化测试证据和模拟器验证矩阵。
 
-- [ ] **Step 1: 运行完整自动化回归与静态检查**
+- [x] **Step 1: 运行完整自动化回归与静态检查**
 
 Run: `npm test`
 
@@ -330,15 +334,15 @@ Expected: PASS，包含 JSON 快照、导入导出、服务、页面静态回归
 
 - [ ] **Step 2: 检查微信开发者工具路径并编译计划页**
 
-先确认 `.local/wechatide-path.txt` 非空且指向有效目录；按 `wechatide-skill` 的 compiler scene 打开 `E:\github\wxapp-PlanAndRecord`，进入 `pages/plans/index` 并编译。
+先确认 `.local/wechatide-path.txt` 非空且指向有效目录；按 `wechatide-skill` 的 compiler scene 打开当前仓库根目录（不得硬编码盘符），进入 `pages/plans/index` 并编译。
 
 Expected: 编译成功，无 WXML/WXSS/事件绑定错误。
 
 - [ ] **Step 3: 截图并完成模拟器验证矩阵**
 
-至少验证：空 TODO、长标题、TODO 内滚动、完成/重新打开、关联/取消关联、删除确认/取消、独立/子任务弹层、项目子任务双页签、5 个项目、想法池折叠、底部安全区与 tabBar 避让。模拟器无法证明真机触控时，将真机项标为“未验证”。
+至少验证：空 TODO、长标题、TODO 内滚动、完成/重新打开、关联/取消关联、删除确认/取消、独立/子任务弹层、项目子任务双页签、5 个项目、愿望池折叠、底部安全区与 tabBar 避让。模拟器无法证明真机触控时，将真机项标为“未验证”。
 
-- [ ] **Step 4: 检查最终工作树并报告**
+- [x] **Step 4: 检查最终工作树并报告**
 
 Run: `git status --short` 和 `git log --oneline -4`
 
@@ -347,6 +351,6 @@ Expected: 只包含本计划的已提交改动；报告实际验证结果、未�
 ## 执行记录（2026-07-29）
 
 - 已完成任务状态收敛、任务删除断链、权威产品文档和计划页重构；`inbox` 不再兼容。
-- 自动化回归：`npm test` 通过 113 项测试；包含任务状态、删除断链、项目内子任务、取消关联、删除确认与弹层层级回归。
-- 微信开发者工具：计划页 WXML/WXSS 编译通过；空 TODO 首屏与独立 TODO 弹层已截图复核。
-- 未验证：真机触控、长标题、清单滚动、五项目上限及所有任务操作的全组合手工体验，仍需在目标设备上验收。
+- 自动化回归：当次 `npm test` 全量通过；包含任务状态、删除断链、项目内子任务、取消关联、删除确认与弹层层级回归。测试数量会随仓库演进变化，不在历史计划中固定。
+- 微信开发者工具：历史执行记录曾记载计划页 WXML/WXSS 单页编译及空 TODO、独立 TODO 弹层截图；本轮文档治理未能重新复核完整模拟器矩阵，因此不把上述记录视作完整模拟器验收。
+- 未验证：完整模拟器场景矩阵、真机触控、长标题、清单滚动、五项目上限及所有任务操作的全组合手工体验，仍需在目标设备上验收。
