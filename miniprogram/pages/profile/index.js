@@ -1,12 +1,10 @@
 const { rangeForView } = require('../../utils/date-range');
 const { getService, showError, showSaved } = require('../../utils/page');
-
-const CURRENT_EXPORT_TEMP_FILE_NAME = 'plan-and-record-share.json';
-const LEGACY_EXPORT_FILE_NAMES = ['plan-and-record-share.csv'];
-const LEGACY_EXPORT_FILE_PATTERNS = [
-  /^plan-and-record-\d{13}\.json$/,
-  /^plan-and-record-logs-\d{13}\.csv$/
-];
+const {
+  CURRENT_EXPORT_TEMP_FILE_NAME,
+  LEGACY_EXPORT_FILE_NAMES,
+  LEGACY_EXPORT_FILE_PATTERNS
+} = require('../../services/export-temp-file-store');
 const IMPORT_MODE = {
   INCREMENTAL: 'incremental',
   REPLACE: 'replace'
@@ -680,7 +678,7 @@ Page({
       operation.service = getService();
       wx.showModal({
         title: '清空全部数据？',
-        content: '将删除当前设备中的全部用户数据、计时状态、恢复草稿和迁移备份，并重建空资料库。已发送或另存的 JSON 不受影响，此操作无法撤销。',
+        content: '将删除当前设备中的全部用户数据、计时状态、恢复草稿、迁移备份，以及小程序内尚存的导出临时文件，并重建空资料库。已发送或另存的 JSON 不受影响，此操作无法撤销。',
         confirmText: '清空数据',
         cancelText: '取消',
         confirmColor: '#b91c1c',
@@ -694,7 +692,6 @@ Page({
           operation.phase = 'committing-clear';
           try {
             operation.service.clearAllData(true);
-            cleanupStaleExports();
             operation.page.refresh();
             showSaved('数据已清空');
           } catch (error) {

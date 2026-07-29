@@ -565,6 +565,7 @@ test('M5：清空数据取消不写入，确认后只清空一次并在完成后
     cancelled.page.clearData();
     assert.equal(cancelled.calls.modals[0].confirmColor, '#b91c1c');
     assert.match(cancelled.calls.modals[0].content, /全部用户数据/);
+    assert.match(cancelled.calls.modals[0].content, /导出临时文件/);
     assert.match(cancelled.calls.modals[0].content, /无法撤销/);
     cancelledConfirmation.success({ confirm: false, cancel: true });
     assert.deepEqual(cancelled.calls.service.clearAllData, []);
@@ -590,43 +591,38 @@ test('M5：清空数据取消不写入，确认后只清空一次并在完成后
   }
 });
 
-test('M5：清空提交后的临时文件清理失败只记元数据并在 onLoad 重试', () => {
-  const harness = createHarness({
-    unlinkSyncResult: (filePath) => {
-      throw new Error(`unlinkSync:fail permission denied ${filePath}`);
-    }
-  });
+test('M5：清空由应用服务执行严格文件清理，页面不再追加尽力而为清理', () => {
+  const harness = createHarness();
   try {
     harness.page.clearData();
 
     assert.deepEqual(harness.calls.service.clearAllData, [true]);
     assert.equal(harness.calls.toasts.some((toast) => toast.title === '数据已清空'), true);
-    assert.equal(harness.calls.unlinkSync.length, 2);
-    assert.equal(harness.calls.warnings.length, 2);
-    assert.deepEqual(Object.keys(harness.calls.warnings[0][1]).sort(), ['error', 'filePath']);
-    const afterClear = harness.calls.unlinkSync.length;
+    assert.equal(harness.calls.unlinkSync.length, 0);
 
     harness.page.onLoad();
-    assert.equal(harness.calls.unlinkSync.length, afterClear + 2);
+    assert.equal(harness.calls.unlinkSync.length, 2);
   } finally {
     harness.restore();
   }
 });
 
-test('M5：资料库清空成功后文件系统管理器异常不能伪报清空失败', () => {
+test('M5：严格清空失败时不刷新、不提示成功并释放操作锁', () => {
   const harness = createHarness({
-    fileSystemManagerResult: () => {
-      throw new Error('getFileSystemManager:fail unavailable');
-    }
+    clearError: new Error('无法确认临时导出文件已清理，数据未清空，请重试')
   });
   try {
     harness.page.clearData();
 
     assert.deepEqual(harness.calls.service.clearAllData, [true]);
-    assert.equal(harness.calls.toasts.some((toast) => toast.title === '数据已清空'), true);
-    assert.equal(harness.calls.toasts.some((toast) => toast.title === 'getFileSystemManager:fail unavailable'), false);
-    assert.equal(harness.calls.warnings.length, 1);
-    assert.deepEqual(Object.keys(harness.calls.warnings[0][1]), ['error']);
+    assert.equal(harness.calls.refreshes, 0);
+    assert.equal(harness.calls.toasts.some((toast) => toast.title === '数据已清空'), false);
+    assert.equal(
+      harness.calls.toasts.some((toast) => (
+        toast.title === '无法确认临时导出文件已清理，数据未清空，请重试'
+      )),
+      true
+    );
     assert.equal(harness.page.data.dataOperationInProgress, false);
   } finally {
     harness.restore();

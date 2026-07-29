@@ -11,7 +11,17 @@ const {
 const { DomainError } = require('../domain/errors');
 const { createId } = require('../domain/id');
 const { clone, createCalendarEvent, createIdleTimer, createRepeatRule, createTimeLog } = require('../domain/entities');
-const { createOccurrenceException, projectRule } = require('../domain/recurrence');
+const {
+  createOccurrenceException,
+  initialRuleOccurrenceStart,
+  intervalIntersectsRange,
+  logicalOccurrenceKey,
+  logicalOccurrenceStart,
+  occurrenceKey,
+  projectRevisionStartedAt,
+  projectRule,
+  projectRuleIntersectingRange
+} = require('../domain/recurrence');
 const { buildStatistics } = require('../domain/statistics');
 const { calculateDurationMinutes, calculateTimerDurationMinutes, isFiniteTimestamp } = require('../domain/time');
 const { requiredTitle, validInterval, validPercentage, validPriority, validRepeatFrequency, validTimeRange } = require('../domain/validation');
@@ -28,6 +38,7 @@ class ApplicationService {
   constructor(repository, options = {}) {
     this.repository = repository;
     this.now = options.now || Date.now;
+    this.exportTempFileStore = options.exportTempFileStore || null;
     this.pendingJsonImport = null;
   }
 
@@ -136,8 +147,25 @@ class ApplicationService {
     if (confirmed !== true) {
       throw new DomainError('CLEAR_CONFIRMATION_REQUIRED', '清空全部本地数据需要明确确认');
     }
-    this.pendingJsonImport = null;
+    if (
+      !this.exportTempFileStore
+      || typeof this.exportTempFileStore.removeAllStrict !== 'function'
+    ) {
+      throw new DomainError(
+        'EXPORT_TEMP_FILE_STORE_UNAVAILABLE',
+        '无法确认临时导出文件已清理，数据未清空，请重试'
+      );
+    }
+    try {
+      this.exportTempFileStore.removeAllStrict();
+    } catch (error) {
+      throw new DomainError(
+        'EXPORT_TEMP_FILE_CLEANUP_FAILED',
+        '无法确认临时导出文件已清理，数据未清空，请重试'
+      );
+    }
     const database = this.repository.reset();
+    this.pendingJsonImport = null;
     return {
       cleared: true,
       localProfileId: database.localProfile.id
@@ -691,7 +719,9 @@ class ApplicationService {
       if (!activeRevision) {
         throw new DomainError('OCCURRENCE_NOT_FOUND', '找不到需要修订的重复实例');
       }
-      const startedAt = input.startedAt === undefined ? occurrenceStart : Number(input.startedAt);
+      const startedAt = input.startedAt === undefined
+        ? projectRevisionStartedAt(activeRevision, occurrenceStart)
+        : Number(input.startedAt);
       const originalDuration = activeRevision.endedAt - activeRevision.startedAt;
       const endedAt = input.endedAt === undefined ? startedAt + originalDuration : Number(input.endedAt);
       validTimeRange(startedAt, endedAt, '重复规则时间');
@@ -755,15 +785,45 @@ class ApplicationService {
 
   timeline(rangeStart, rangeEnd) {
     const database = this.snapshot();
+    const repeatRulesById = new Map(database.repeatRules.map((rule) => [rule.id, rule]));
+    const materializedEventOccurrences = new Set(database.calendarEvents
+      .filter((event) => event.repeatRuleId)
+      .map((event) => {
+        const rule = repeatRulesById.get(event.repeatRuleId);
+        const occurrenceStart = initialRuleOccurrenceStart(rule);
+        return occurrenceStart === null
+          ? null
+          : occurrenceKey(event.repeatRuleId, occurrenceStart);
+      })
+      .filter(Boolean));
+    const materializedLogicalOccurrences = new Set(database.timeLogs
+      .map((log) => logicalOccurrenceKey(log.originRuleId, log.originOccurrenceId))
+      .filter(Boolean));
     const eventEntries = database.calendarEvents
-      .filter((event) => event.endedAt >= rangeStart && event.startedAt <= rangeEnd)
+      .filter((event) => intervalIntersectsRange(event, rangeStart, rangeEnd))
       .map((event) => ({ ...event, type: 'plan', virtual: false }));
     const logEntries = database.timeLogs
-      .filter((log) => log.endedAt >= rangeStart && log.startedAt <= rangeEnd)
+      .filter((log) => intervalIntersectsRange(log, rangeStart, rangeEnd))
       .map((log) => ({ ...log, type: log.status, title: log.taskNameSnapshot || log.note || '时间记录', virtual: false }));
-    const virtualEntries = database.repeatRules.flatMap((rule) => projectRule(rule, rangeStart, rangeEnd, database.occurrenceExceptions))
-      .filter((item) => !database.calendarEvents.some((event) => event.repeatRuleId === item.ruleId && event.startedAt === item.startedAt))
-      .filter((item) => !database.timeLogs.some((log) => log.originRuleId === item.ruleId && log.originOccurrenceId === item.originOccurrenceId));
+    const virtualEntries = database.repeatRules
+      .flatMap((rule) => projectRuleIntersectingRange(
+        rule,
+        rangeStart,
+        rangeEnd,
+        database.occurrenceExceptions
+      ))
+      .filter((item) => !materializedEventOccurrences.has(occurrenceKey(
+        item.ruleId,
+        item.occurrenceStart
+      )))
+      .filter((item) => !database.timeLogs.some((log) => (
+        log.originRuleId === item.ruleId
+        && log.originOccurrenceId === item.originOccurrenceId
+      )))
+      .filter((item) => !materializedLogicalOccurrences.has(occurrenceKey(
+        item.ruleId,
+        item.occurrenceStart
+      )));
     return eventEntries.concat(logEntries, virtualEntries).sort((first, second) => first.startedAt - second.startedAt);
   }
 
@@ -771,13 +831,22 @@ class ApplicationService {
     const now = this.now();
     return this.repository.transaction((database) => {
       const rule = this.requireEntity(database.repeatRules, input.ruleId, '重复规则');
-      const occurrenceStart = input.occurrenceStart || input.startedAt;
+      const occurrenceStart = input.occurrenceStart === undefined
+        ? (logicalOccurrenceStart(input.ruleId, input.originOccurrenceId) || input.startedAt)
+        : input.occurrenceStart;
       const occurrence = projectRule(rule, occurrenceStart, occurrenceStart, database.occurrenceExceptions)
         .find((item) => item.originOccurrenceId === input.originOccurrenceId);
       if (!occurrence) {
         throw new DomainError('OCCURRENCE_NOT_FOUND', '该重复实例已跳过、已修改或不再有效');
       }
-      if (database.timeLogs.some((log) => log.originRuleId === rule.id && log.originOccurrenceId === occurrence.originOccurrenceId)) {
+      const occurrenceLogicalKey = occurrenceKey(rule.id, occurrence.occurrenceStart);
+      if (database.timeLogs.some((log) => (
+        log.originRuleId === rule.id
+        && (
+          log.originOccurrenceId === occurrence.originOccurrenceId
+          || logicalOccurrenceKey(log.originRuleId, log.originOccurrenceId) === occurrenceLogicalKey
+        )
+      ))) {
         throw new DomainError('OCCURRENCE_ALREADY_CONFIRMED', '该重复实例已确认，不能重复生成记录');
       }
       const association = this.resolveAssociations(database, { projectId: occurrence.projectId, taskId: occurrence.taskId, categoryId: input.categoryId });

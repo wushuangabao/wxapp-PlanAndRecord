@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 
 const { LOG_SOURCE, LOG_STATUS, MAX_TIMER_SPAN_MS, TASK_STATUS, TIMER_STATUS } = require('../miniprogram/domain/constants');
 const { createIdleTimer, createInitialDatabase, clone } = require('../miniprogram/domain/entities');
+const { projectRule } = require('../miniprogram/domain/recurrence');
 const {
   CONFLICT_POLICY,
   IMPORT_MODE
@@ -47,12 +48,23 @@ class TrackingStorage extends MemoryStorageAdapter {
 function createHarness(start = 1_700_000_000_000, storage = new TrackingStorage()) {
   let now = start;
   const repository = new LocalRepository(storage, { now: () => now });
-  const service = new ApplicationService(repository, { now: () => now });
+  const exportTempFileStore = {
+    removeAllStrictCalls: 0,
+    removeAllStrict() {
+      this.removeAllStrictCalls += 1;
+      return { removedCount: 0 };
+    }
+  };
+  const service = new ApplicationService(repository, {
+    now: () => now,
+    exportTempFileStore
+  });
   service.initialize();
   return {
     service,
     repository,
     storage,
+    exportTempFileStore,
     setNow(value) { now = value; },
     now() { return now; }
   };
@@ -297,6 +309,129 @@ test('M4：重复实例按需投影，确认后不会再次投影', () => {
   assert.equal(repeated.rule.revisions[0].frequency, 'daily');
 });
 
+test('M4/M5：时间线与候选统计都纳入跨查询起点的过夜重复实例', () => {
+  const { service } = createHarness();
+  const firstStart = new Date(2026, 6, 1, 23, 30, 0, 0).getTime();
+  const queryStart = new Date(2026, 6, 3, 0, 0, 0, 0).getTime();
+  const expectedOccurrenceStart = new Date(2026, 6, 2, 23, 30, 0, 0).getTime();
+  service.createRecurringPlan({
+    title: '跨日起居',
+    startedAt: firstStart,
+    endedAt: firstStart + 60 * 60 * 1000,
+    priority: 1,
+    frequency: 'daily',
+    interval: 1
+  });
+
+  const timeline = service.timeline(queryStart, queryStart + 15 * 60 * 1000);
+  const occurrence = timeline.find((item) => item.virtual);
+  const statistics = service.statistics({
+    rangeStart: queryStart,
+    rangeEnd: queryStart + 15 * 60 * 1000,
+    includeCandidates: true
+  });
+
+  assert.equal(occurrence.occurrenceStart, expectedOccurrenceStart);
+  assert.equal(occurrence.startedAt, expectedOccurrenceStart);
+  assert.equal(occurrence.endedAt, queryStart + 30 * 60 * 1000);
+  assert.equal(statistics.totalMinutes, 60);
+  assert.equal(statistics.weeklyReview.logCount, 1);
+});
+
+test('M4：时间线按单次改期后的最终区间决定候选移入和移出', () => {
+  const { service } = createHarness();
+  const firstStart = new Date(2026, 6, 1, 9, 0, 0, 0).getTime();
+  const occurrenceStart = new Date(2026, 6, 3, 9, 0, 0, 0).getTime();
+  const queryStart = new Date(2026, 6, 2, 15, 0, 0, 0).getTime();
+  const { rule } = service.createRecurringPlan({
+    title: '改期事项',
+    startedAt: firstStart,
+    endedAt: firstStart + 60 * 60 * 1000,
+    priority: 1,
+    frequency: 'daily',
+    interval: 1
+  });
+  service.overrideOccurrence(rule.id, occurrenceStart, {
+    title: '移入查询范围',
+    startedAt: queryStart + 15 * 60 * 1000,
+    endedAt: queryStart + 75 * 60 * 1000,
+    priority: 2
+  });
+
+  const movedIn = service.timeline(queryStart, queryStart + 60 * 60 * 1000)
+    .filter((item) => item.virtual && item.occurrenceStart === occurrenceStart);
+  const movedOut = service.timeline(occurrenceStart, occurrenceStart + 60 * 60 * 1000)
+    .filter((item) => item.virtual && item.occurrenceStart === occurrenceStart);
+
+  assert.equal(movedIn.length, 1);
+  assert.equal(movedIn[0].startedAt, queryStart + 15 * 60 * 1000);
+  assert.equal(movedIn[0].priority, 2);
+  assert.equal(movedOut.length, 0);
+});
+
+test('M4：时间线按规则与原始发生时间跨修订去重已确认实例', () => {
+  const { service, now } = createHarness();
+  const start = now() + 60 * 60 * 1000;
+  const { rule } = service.createRecurringPlan({
+    title: '跨修订实例',
+    startedAt: start,
+    endedAt: start + 30 * 60 * 1000,
+    priority: 1,
+    frequency: 'daily',
+    interval: 1
+  });
+  const occurrenceStart = start + 24 * 60 * 60 * 1000;
+  const virtual = service.timeline(occurrenceStart, occurrenceStart + 30 * 60 * 1000)
+    .find((item) => item.virtual && item.occurrenceStart === occurrenceStart);
+  const confirmed = service.confirmVirtualOccurrence({ ...virtual });
+  service.reviseRuleFollowing(rule.id, occurrenceStart, { priority: 2 });
+
+  const timeline = service.timeline(occurrenceStart, occurrenceStart + 30 * 60 * 1000);
+  const snapshot = service.snapshot();
+  const revisedRule = snapshot.repeatRules.find((item) => item.id === rule.id);
+  const revisedOccurrence = projectRule(
+    revisedRule,
+    occurrenceStart,
+    occurrenceStart,
+    snapshot.occurrenceExceptions
+  )[0];
+
+  assert.equal(timeline.some((item) => item.virtual && item.occurrenceStart === occurrenceStart), false);
+  assert.equal(timeline.filter((item) => item.id === confirmed.id).length, 1);
+  assert.notEqual(revisedOccurrence.originOccurrenceId, confirmed.originOccurrenceId);
+  assert.throws(
+    () => service.confirmVirtualOccurrence({ ...revisedOccurrence }),
+    (error) => error.code === 'OCCURRENCE_ALREADY_CONFIRMED'
+  );
+});
+
+test('M4：种子计划块改时后仍按规则最早逻辑实例抑制虚拟首项', () => {
+  const { service, now } = createHarness();
+  const start = now() + 60 * 60 * 1000;
+  const { event } = service.createRecurringPlan({
+    title: '移动首个计划块',
+    startedAt: start,
+    endedAt: start + 30 * 60 * 1000,
+    priority: 1,
+    frequency: 'daily',
+    interval: 1
+  });
+  const movedStart = start + 6 * 60 * 60 * 1000;
+  service.updateCalendarEvent(event.id, {
+    startedAt: movedStart,
+    endedAt: movedStart + 30 * 60 * 1000
+  });
+
+  const originalRange = service.timeline(start, start + 30 * 60 * 1000);
+  const movedRange = service.timeline(movedStart, movedStart + 30 * 60 * 1000);
+
+  assert.equal(
+    originalRange.some((item) => item.virtual && item.occurrenceStart === start),
+    false
+  );
+  assert.equal(movedRange.filter((item) => item.id === event.id).length, 1);
+});
+
 test('M5：候选默认不计统计，重叠提示计算相交分钟数', () => {
   const { service, now } = createHarness();
   const start = now() - 60 * 60 * 1000;
@@ -494,6 +629,46 @@ test('M4：跳过实例和后续修订都不会生成重复投影', () => {
   const afterRevision = service.timeline(start, start + 21 * 86_400_000);
   assert.equal(new Set(afterRevision.filter((item) => item.virtual).map((item) => item.occurrenceKey)).size, afterRevision.filter((item) => item.virtual).length);
   assert.equal(afterRevision.some((item) => item.virtual && item.priority === 3), true);
+});
+
+test('M4：连续后续修订只改优先级时保留上一修订的最终开始时间', () => {
+  const { service, now } = createHarness();
+  const start = now() + 2 * 60 * 60 * 1000;
+  const { rule } = service.createRecurringPlan({
+    title: '连续修订',
+    startedAt: start,
+    endedAt: start + 30 * 60 * 1000,
+    priority: 1,
+    frequency: 'daily',
+    interval: 1
+  });
+  const firstLogicalStart = new Date(start);
+  firstLogicalStart.setDate(firstLogicalStart.getDate() + 1);
+  const firstDisplayStart = firstLogicalStart.getTime() - 60 * 60 * 1000;
+  service.reviseRuleFollowing(rule.id, firstLogicalStart.getTime(), {
+    startedAt: firstDisplayStart,
+    endedAt: firstDisplayStart + 30 * 60 * 1000
+  });
+
+  const secondLogicalStart = new Date(firstLogicalStart.getTime());
+  secondLogicalStart.setDate(secondLogicalStart.getDate() + 1);
+  const expectedDisplayStart = secondLogicalStart.getTime() - 60 * 60 * 1000;
+  service.reviseRuleFollowing(rule.id, secondLogicalStart.getTime(), { priority: 3 });
+
+  const occurrence = service.timeline(
+    expectedDisplayStart,
+    expectedDisplayStart + 30 * 60 * 1000
+  ).find((item) => (
+    item.virtual
+    && item.occurrenceStart === secondLogicalStart.getTime()
+  ));
+
+  assert.equal(occurrence.startedAt, expectedDisplayStart);
+  assert.equal(occurrence.priority, 3);
+  const legacyConfirmationInput = { ...occurrence };
+  delete legacyConfirmationInput.occurrenceStart;
+  const confirmed = service.confirmVirtualOccurrence(legacyConfirmationInput);
+  assert.equal(confirmed.startedAt, expectedDisplayStart);
 });
 
 test('M4：从首个实例修订后续会替换原修订，导出后仍可导入', () => {
@@ -753,7 +928,7 @@ test('覆盖导入写入失败时完整保留旧资料库', () => {
 });
 
 test('清空必须确认，成功后重建空资料库、清除运行态和待处理导入', () => {
-  const { service, storage, setNow, now } = createHarness();
+  const { service, storage, exportTempFileStore, setNow, now } = createHarness();
   service.createWish('待清空');
   service.startTimer({ note: '运行中' });
   const before = service.snapshot();
@@ -765,10 +940,12 @@ test('清空必须确认，成功后重建空资料库、清除运行态和待�
     (error) => error.code === 'CLEAR_CONFIRMATION_REQUIRED'
   );
   assert.deepEqual(service.snapshot(), before);
+  assert.equal(exportTempFileStore.removeAllStrictCalls, 0);
 
   setNow(now() + 10_000);
   const result = service.clearAllData(true);
   const snapshot = service.snapshot();
+  assert.equal(exportTempFileStore.removeAllStrictCalls, 1);
   assert.equal(result.cleared, true);
   assert.notEqual(snapshot.localProfile.id, before.localProfile.id);
   assert.deepEqual(snapshot.wishes, []);
@@ -782,15 +959,68 @@ test('清空必须确认，成功后重建空资料库、清除运行态和待�
 });
 
 test('清空写入失败时保留旧资料库', () => {
-  const { service, storage } = createHarness();
+  const { service, storage, exportTempFileStore } = createHarness();
   service.createWish('不能丢失');
   const before = service.snapshot();
+  const prepared = service.prepareJsonImport(JSON.stringify(before));
   storage.failNextSet = true;
 
   assert.throws(
     () => service.clearAllData(true),
     (error) => error instanceof StorageError && error.code === 'WRITE_FAILED'
   );
+  assert.equal(exportTempFileStore.removeAllStrictCalls, 1);
+  assert.deepEqual(service.snapshot(), before);
+  assert.doesNotThrow(
+    () => service.previewJsonImport(prepared.token, { mode: IMPORT_MODE.INCREMENTAL })
+  );
+});
+
+test('严格清理临时导出文件失败时不重置资料库，也不清除待处理导入', () => {
+  const { service, storage } = createHarness();
+  service.createWish('必须保留');
+  const before = service.snapshot();
+  const prepared = service.prepareJsonImport(JSON.stringify(before));
+  service.exportTempFileStore = {
+    removeAllStrict() {
+      throw new Error('unlinkSync:fail permission denied http://usr/plan-and-record-share.json');
+    }
+  };
+  storage.resetCalls();
+
+  assert.throws(
+    () => service.clearAllData(true),
+    (error) => (
+      error instanceof DomainError
+      && error.code === 'EXPORT_TEMP_FILE_CLEANUP_FAILED'
+      && !error.message.includes('http://usr')
+      && !error.message.includes('permission denied')
+    )
+  );
+  assert.deepEqual(storage.setCalls, []);
+  assert.deepEqual(service.snapshot(), before);
+  assert.doesNotThrow(
+    () => service.previewJsonImport(prepared.token, { mode: IMPORT_MODE.INCREMENTAL })
+  );
+});
+
+test('未配置临时导出文件存储时拒绝清空并保留资料库', () => {
+  const storage = new TrackingStorage();
+  const repository = new LocalRepository(storage, { now: () => 1_700_000_000_000 });
+  const service = new ApplicationService(repository, { now: () => 1_700_000_000_000 });
+  service.initialize();
+  service.createWish('配置缺失也不能丢失');
+  const before = service.snapshot();
+  storage.resetCalls();
+
+  assert.throws(
+    () => service.clearAllData(true),
+    (error) => (
+      error instanceof DomainError
+      && error.code === 'EXPORT_TEMP_FILE_STORE_UNAVAILABLE'
+    )
+  );
+  assert.deepEqual(storage.setCalls, []);
   assert.deepEqual(service.snapshot(), before);
 });
 
