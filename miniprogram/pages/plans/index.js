@@ -170,10 +170,10 @@ Page({
   },
 
   measureTodoTitleFontSizes() {
-    if (!wx.createSelectorQuery || !wx.getSystemInfoSync) return;
-    const systemInfo = wx.getSystemInfoSync();
-    if (!systemInfo || !systemInfo.windowWidth) return;
-    const rpxPerPixel = 750 / systemInfo.windowWidth;
+    if (!wx.createSelectorQuery || !wx.getWindowInfo) return;
+    const windowInfo = wx.getWindowInfo();
+    if (!windowInfo || !windowInfo.windowWidth) return;
+    const rpxPerPixel = 750 / windowInfo.windowWidth;
     wx.createSelectorQuery()
       .selectAll('.todo-main')
       .boundingClientRect((rects) => {

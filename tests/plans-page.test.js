@@ -177,7 +177,7 @@ test('计划页：无关联 TODO 默认 32rpx，关联 TODO 默认 28rpx，溢�
   ];
   const harness = createHarness({ tasks });
   try {
-    global.wx.getSystemInfoSync = () => ({ windowWidth: 375 });
+    global.wx.getWindowInfo = () => ({ windowWidth: 375 });
     global.wx.createSelectorQuery = () => ({
       selectAll(selector) {
         this.selector = selector;
