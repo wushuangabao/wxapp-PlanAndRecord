@@ -1,6 +1,4 @@
 const {
-  DEFAULT_CATEGORY_ID,
-  DEFAULT_CATEGORY_NAME,
   PROJECT_STATUS
 } = require('../domain/constants');
 const { clone, createInitialDatabase } = require('../domain/entities');
@@ -9,7 +7,6 @@ const { logicalOccurrenceStart, projectRule } = require('../domain/recurrence');
 const { validateJsonSnapshot, persistedValueEquals } = require('./json-snapshot');
 
 const ENTITY_COLLECTIONS = [
-  'categories',
   'wishes',
   'projects',
   'tasks',
@@ -128,8 +125,6 @@ function repairFinalReferences(database) {
   const taskIds = new Set(database.tasks.map((item) => item.id));
   const eventIds = new Set(database.calendarEvents.map((item) => item.id));
   const ruleIds = new Set(database.repeatRules.map((item) => item.id));
-  const categoryIds = new Set(database.categories.map((item) => item.id));
-  const defaultCategory = database.categories.find((item) => item.id === DEFAULT_CATEGORY_ID);
   let repairedReferenceCount = 0;
   let discardedExceptionCount = 0;
 
@@ -209,11 +204,6 @@ function repairFinalReferences(database) {
   });
 
   database.timeLogs.forEach((item) => {
-    if (!categoryIds.has(item.categoryId)) {
-      item.categoryId = DEFAULT_CATEGORY_ID;
-      item.categoryNameSnapshot = defaultCategory.name;
-      repairedReferenceCount += 1;
-    }
     clearMissing(item, 'calendarEventId', eventIds);
     if (item.originRuleId !== null && !ruleIds.has(item.originRuleId)) {
       item.originRuleId = null;

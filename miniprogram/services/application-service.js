@@ -1,5 +1,4 @@
 const {
-  DEFAULT_CATEGORY_ID,
   LOG_SOURCE,
   LOG_STATUS,
   MAX_ACTIVE_PROJECTS,
@@ -23,6 +22,7 @@ const {
   projectRuleIntersectingRange
 } = require('../domain/recurrence');
 const { buildStatistics } = require('../domain/statistics');
+const { normalizeTags, tagsEqual } = require('../domain/tags');
 const { calculateDurationMinutes, calculateTimerDurationMinutes, isFiniteTimestamp } = require('../domain/time');
 const { requiredTitle, validInterval, validPercentage, validPriority, validRepeatFrequency, validTimeRange } = require('../domain/validation');
 const {
@@ -307,15 +307,7 @@ class ApplicationService {
     if (input.calendarEventId) {
       event = this.requireEntity(database.calendarEvents, input.calendarEventId, '计划块');
     }
-    const category = input.categoryId
-      ? this.requireEntity(database.categories, input.categoryId, '分类')
-      : database.categories.find((item) => item.id === DEFAULT_CATEGORY_ID);
-    if (category.status !== 'active') {
-      throw new DomainError('CATEGORY_ARCHIVED', '归档分类不能用于新记录');
-    }
     return {
-      categoryId: category.id,
-      categoryNameSnapshot: category.name,
       projectId: project ? project.id : null,
       projectNameSnapshot: project ? project.title : null,
       taskId: task ? task.id : null,
@@ -360,19 +352,6 @@ class ApplicationService {
       projectNameSnapshot: project ? project.title : null,
       taskId: task.id,
       taskNameSnapshot: task.title
-    };
-  }
-
-  resolveActiveCategoryAssociation(database, categoryId) {
-    const category = this.hasReferenceValue(categoryId)
-      ? this.requireEntity(database.categories, categoryId, '分类')
-      : database.categories.find((item) => item.id === DEFAULT_CATEGORY_ID);
-    if (!category || category.status !== 'active') {
-      throw new DomainError('CATEGORY_ARCHIVED', '归档分类不能用于新记录');
-    }
-    return {
-      categoryId: category.id,
-      categoryNameSnapshot: category.name
     };
   }
 
@@ -512,20 +491,7 @@ class ApplicationService {
 
   resolveNewRecordAssociations(database, input = {}) {
     this.rejectDirectRecordTaskOrProject(input);
-    return {
-      ...this.resolveActiveCategoryAssociation(database, input.categoryId),
-      ...this.resolveRequestedRecordPlanAssociation(database, input)
-    };
-  }
-
-  preserveRecordCategoryAssociation(database, current = {}) {
-    const defaultCategory = database.categories.find((item) => item.id === DEFAULT_CATEGORY_ID);
-    const category = database.categories.find((item) => item.id === current.categoryId)
-      || defaultCategory;
-    return {
-      categoryId: category.id,
-      categoryNameSnapshot: current.categoryNameSnapshot || category.name
-    };
+    return this.resolveRequestedRecordPlanAssociation(database, input);
   }
 
   preserveRecordPlanAssociation(database, current = {}) {
@@ -565,15 +531,6 @@ class ApplicationService {
 
   resolveRecordUpdateAssociations(database, current = {}, input = {}) {
     this.rejectDirectRecordTaskOrProject(input);
-    const currentCategoryId = current.categoryId || DEFAULT_CATEGORY_ID;
-    const requestedCategoryId = this.hasReferenceValue(input.categoryId)
-      ? input.categoryId
-      : DEFAULT_CATEGORY_ID;
-    const categoryAssociation = input.categoryId !== undefined
-      && requestedCategoryId !== currentCategoryId
-      ? this.resolveActiveCategoryAssociation(database, requestedCategoryId)
-      : this.preserveRecordCategoryAssociation(database, current);
-
     const planAssociationInputSpecified = [
       input.calendarEventId,
       input.originRuleId,
@@ -582,54 +539,19 @@ class ApplicationService {
     const planAssociation = planAssociationInputSpecified
       ? this.resolveRequestedRecordPlanAssociation(database, input, current)
       : this.preserveRecordPlanAssociation(database, current);
-    return { ...categoryAssociation, ...planAssociation };
+    return planAssociation;
   }
 
-  createCategory(name) {
-    const now = this.now();
-    const normalized = requiredTitle(name, '分类名称');
-    return this.repository.transaction((database) => {
-      if (database.categories.some((item) => item.name === normalized)) {
-        throw new DomainError('CATEGORY_DUPLICATED', '分类名称已存在');
-      }
-      const category = {
-        id: createId('category', now),
-        name: normalized,
-        status: 'active',
-        isSystem: false,
-        createdAt: now,
-        updatedAt: now
-      };
-      database.categories.push(category);
-      return category;
-    }).result;
-  }
-
-  renameCategory(id, name) {
-    const normalized = requiredTitle(name, '分类名称');
-    const now = this.now();
-    return this.repository.transaction((database) => {
-      const category = this.requireEntity(database.categories, id, '分类');
-      if (database.categories.some((item) => item.id !== id && item.name === normalized)) {
-        throw new DomainError('CATEGORY_DUPLICATED', '分类名称已存在');
-      }
-      category.name = normalized;
-      category.updatedAt = now;
-      return category;
-    }).result;
-  }
-
-  archiveCategory(id) {
-    const now = this.now();
-    return this.repository.transaction((database) => {
-      const category = this.requireEntity(database.categories, id, '分类');
-      if (category.isSystem) {
-        throw new DomainError('CATEGORY_SYSTEM', '“未分类”不可归档');
-      }
-      category.status = 'archived';
-      category.updatedAt = now;
-      return category;
-    }).result;
+  resolveUpdatedTags(currentTags, inputTags) {
+    const current = Array.isArray(currentTags) ? currentTags : [];
+    if (inputTags === undefined) {
+      return current;
+    }
+    const normalizedWithoutLimits = normalizeTags(inputTags, { enforceLimits: false });
+    if (tagsEqual(normalizedWithoutLimits, current)) {
+      return current;
+    }
+    return normalizeTags(inputTags);
   }
 
   createWish(title) {
@@ -1370,7 +1292,6 @@ class ApplicationService {
         throw new DomainError('OCCURRENCE_ALREADY_CONFIRMED', '该重复实例已确认，不能重复生成记录');
       }
       const association = this.resolveNewRecordAssociations(database, {
-        categoryId: input.categoryId,
         originRuleId: rule.id,
         originOccurrenceId: occurrence.originOccurrenceId
       });
@@ -1385,7 +1306,7 @@ class ApplicationService {
         originRuleId: rule.id,
         originOccurrenceId: occurrence.originOccurrenceId,
         originRuleSummarySnapshot: rule.title,
-        tags: input.tags || []
+        tags: input.tags
       }, now);
       database.timeLogs.push(log);
       return log;
@@ -1405,7 +1326,7 @@ class ApplicationService {
         endedAt,
         durationMinutes: calculateDurationMinutes(startedAt, endedAt, []),
         note: input.note || '',
-        tags: input.tags || [],
+        tags: input.tags,
         status: LOG_STATUS.CONFIRMED,
         source: LOG_SOURCE.MANUAL
       }, now);
@@ -1426,12 +1347,13 @@ class ApplicationService {
       const endedAt = input.endedAt === undefined ? log.endedAt : Number(input.endedAt);
       validTimeRange(startedAt, endedAt, '记录时间');
       const association = this.resolveRecordUpdateAssociations(database, log, input);
+      const tags = this.resolveUpdatedTags(log.tags, input.tags);
       Object.assign(log, association, {
         startedAt,
         endedAt,
         durationMinutes: calculateDurationMinutes(startedAt, endedAt, []),
         note: input.note === undefined ? log.note : input.note,
-        tags: input.tags === undefined ? log.tags : input.tags,
+        tags,
         status: log.status === LOG_STATUS.CANDIDATE ? LOG_STATUS.CONFIRMED : log.status,
         updatedAt: now
       });
@@ -1482,7 +1404,11 @@ class ApplicationService {
         endedAt: null,
         pausedAt: null,
         pauses: [],
-        draft: { ...association, note: input.note || '', tags: input.tags || [] }
+        draft: {
+          ...association,
+          note: input.note || '',
+          tags: normalizeTags(input.tags === undefined ? [] : input.tags)
+        }
       };
       database.recoveryDraft = null;
       return database.timer;
@@ -1495,11 +1421,12 @@ class ApplicationService {
         throw new DomainError('TIMER_NOT_ACTIVE', '没有可编辑的计时记录');
       }
       const association = this.resolveRecordUpdateAssociations(database, database.timer.draft, input);
+      const tags = this.resolveUpdatedTags(database.timer.draft.tags, input.tags);
       database.timer.draft = {
         ...database.timer.draft,
         ...association,
         note: input.note === undefined ? database.timer.draft.note : input.note,
-        tags: input.tags === undefined ? database.timer.draft.tags : input.tags
+        tags
       };
       return database.timer;
     }).result;
@@ -1563,7 +1490,7 @@ class ApplicationService {
         durationMinutes,
         status: LOG_STATUS.CONFIRMED,
         source: LOG_SOURCE.TIMER
-      }, now);
+      }, now, { enforceTagLimits: false });
       database.timeLogs.push(log);
       database.timer = createIdleTimer();
       return { log, hasOverlap: this.hasOverlap(database.timeLogs, log) };
@@ -1582,16 +1509,17 @@ class ApplicationService {
       }
       const originalDraft = recoveryDraft.timer.draft || {};
       const association = this.resolveRecordUpdateAssociations(database, originalDraft, input);
+      const tags = this.resolveUpdatedTags(originalDraft.tags, input.tags);
       const log = createTimeLog({
         ...association,
         startedAt,
         endedAt,
         durationMinutes: calculateDurationMinutes(startedAt, endedAt, []),
         note: input.note === undefined ? (originalDraft.note || '') : input.note,
-        tags: input.tags === undefined ? (originalDraft.tags || []) : input.tags,
+        tags,
         status: LOG_STATUS.CANDIDATE,
         source: LOG_SOURCE.TIMER
-      }, now);
+      }, now, { enforceTagLimits: false });
       database.timeLogs.push(log);
       database.recoveryDraft = null;
       return log;
@@ -1654,7 +1582,7 @@ class ApplicationService {
         durationMinutes,
         status: LOG_STATUS.CANDIDATE,
         source: LOG_SOURCE.TIMER
-      }, now);
+      }, now, { enforceTagLimits: false });
       database.timeLogs.push(log);
       return { state: 'candidate', log };
     }).result;

@@ -134,7 +134,8 @@ test('未物化的重复规则实例只作为计划，不计入候选实际', ()
   assert.equal(confirmedOnly.totalMinutes, 0);
   assert.equal(withCandidates.totalMinutes, 0);
   assert.equal(withCandidates.weeklyReview.logCount, 0);
-  assert.deepEqual(withCandidates.categories, []);
+  assert.deepEqual(withCandidates.tags, []);
+  assert.equal(Object.hasOwn(withCandidates, 'categories'), false);
   assert.equal(
     withCandidates.planVariance.events.reduce((total, item) => total + item.plannedMinutes, 0),
     180
@@ -144,6 +145,49 @@ test('未物化的重复规则实例只作为计划，不计入候选实际', ()
     true
   );
   assert.equal(withCandidates.planVariance.nonPlannedMinutes, 0);
+});
+
+test('标签投入按日志标签分别累计，同一日志同一标签只计一次且无标签使用独立桶', () => {
+  const startedAt = localTimestamp(2026, 7, 8, 9);
+  const database = createInitialDatabase(startedAt - DAY_MS);
+  [
+    { minutes: 30, tags: ['AI', '复盘'] },
+    { minutes: 20, tags: ['AI', 'AI'] },
+    { minutes: 15, tags: [] },
+    { minutes: 10, tags: ['无标签'] }
+  ].forEach((item, index) => {
+    const logStartedAt = startedAt + index * HOUR_MS;
+    database.timeLogs.push(createTimeLog({
+      startedAt: logStartedAt,
+      endedAt: logStartedAt + item.minutes * MINUTE_MS,
+      durationMinutes: item.minutes,
+      status: LOG_STATUS.CONFIRMED,
+      source: LOG_SOURCE.MANUAL,
+      tags: item.tags
+    }, logStartedAt));
+  });
+
+  const statistics = buildStatistics(database, {
+    rangeStart: startedAt,
+    rangeEnd: startedAt + 4 * HOUR_MS
+  });
+
+  assert.equal(statistics.totalMinutes, 75);
+  assert.deepEqual(
+    statistics.tags.map((item) => ({
+      tag: item.tag,
+      name: item.name,
+      isUntagged: item.isUntagged,
+      durationMinutes: item.durationMinutes,
+      count: item.count
+    })),
+    [
+      { tag: 'AI', name: 'AI', isUntagged: false, durationMinutes: 50, count: 2 },
+      { tag: '复盘', name: '复盘', isUntagged: false, durationMinutes: 30, count: 1 },
+      { tag: null, name: '无标签', isUntagged: true, durationMinutes: 15, count: 1 },
+      { tag: '无标签', name: '无标签', isUntagged: false, durationMinutes: 10, count: 1 }
+    ]
+  );
 });
 
 test('已物化日志只计一次，其他重复计划不会虚增实际投入', () => {

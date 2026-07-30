@@ -58,7 +58,7 @@ test('M2：计时页按秒刷新显示，并预览向上取整后的记录分钟
     endedAt: null,
     pausedAt: null,
     pauses: [],
-    draft: {}
+    draft: { tags: [] }
   });
   try {
     harness.page.updateElapsed();
@@ -87,29 +87,96 @@ test('M2：计时页提供跨日期补录和恢复草稿修正入口', () => {
   assert.match(wxml, /时 : 分 : 秒/);
 });
 
-test('计时页只提交分类和可选计划块，不暴露项目或任务选择器', () => {
+test('计时页只提交可选标签和计划块，不暴露分类、项目或任务选择器', () => {
   const page = loadTimerPage();
   page.data = {
     ...page.data,
-    categories: [{ id: 'category_focus', name: '专注' }],
     events: [{ id: '', title: '非计划实际' }, { id: 'event_plan', title: '写方案' }],
-    categoryIndex: 0,
     eventIndex: 1,
     note: '按计划执行',
-    tagsText: '深度，写作, 深度'
+    tagsText: ' 深度 ，写作, 深度，ＡＩ '
   };
   assert.deepEqual(page.selectedInput(), {
-    categoryId: 'category_focus',
     calendarEventId: 'event_plan',
     note: '按计划执行',
-    tags: ['深度', '写作']
+    tags: ['深度', '写作', 'AI']
   });
+  assert.equal(page.data.maxTagsPerLog, 10);
+  assert.equal(page.data.maxTagLength, 5);
 
   const wxml = fs.readFileSync(timerWxmlPath, 'utf8');
-  assert.match(wxml, /分类：/);
   assert.match(wxml, /计划块：/);
-  assert.doesNotMatch(wxml, /项目：|任务：/);
-  assert.match(wxml, /标签（用逗号分隔，可选）/);
+  assert.doesNotMatch(wxml, /分类：|项目：|任务：/);
+  assert.match(
+    wxml,
+    /标签（可选，逗号分隔，最多 \{\{maxTagsPerLog\}\} 个，每个 \{\{maxTagLength\}\} 个字符）/
+  );
+});
+
+test('计时页把完整超限标签交给应用服务拒绝并沿用领域错误提示', () => {
+  const originalGetApp = global.getApp;
+  const originalWx = global.wx;
+  const calls = [];
+  const toasts = [];
+  global.getApp = () => ({
+    globalData: {
+      bootstrap: {
+        applicationService: {
+          startTimer(input) {
+            calls.push(input);
+            const error = new Error('一条记录最多添加 10 个标签');
+            error.code = 'TAG_COUNT_EXCEEDED';
+            throw error;
+          }
+        }
+      }
+    }
+  });
+  global.wx = {
+    showToast(options) { toasts.push(options); }
+  };
+  try {
+    const page = loadTimerPage();
+    page.setData = (updates) => Object.assign(page.data, updates);
+    page.refresh = () => {};
+    Object.assign(page.data, {
+      timer: { status: TIMER_STATUS.IDLE },
+      events: [{ id: '', title: '非计划实际', associationType: 'none' }],
+      eventIndex: 0,
+      tagsText: '一，二，三，四，五，六，七，八，九，十，十一'
+    });
+
+    page.onPrimary();
+
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].tags.length, 11);
+    assert.equal(toasts.at(-1).title, '一条记录最多添加 10 个标签');
+    assert.equal(toasts.at(-1).icon, 'none');
+  } finally {
+    global.getApp = originalGetApp;
+    global.wx = originalWx;
+  }
+});
+
+test('计时页不限额解析导入标签，由应用服务按规范化结果判断是否实际修改', () => {
+  const page = loadTimerPage();
+  const importedTags = Array.from({ length: 11 }, (_, index) => `标签${index}`);
+  const originalTagsText = importedTags.join('，');
+  Object.assign(page.data, {
+    events: [{ id: '', title: '非计划实际', associationType: 'none' }],
+    eventIndex: 0,
+    originalTags: importedTags,
+    originalTagsText,
+    tagsText: ` ${importedTags[0]} ，${importedTags.slice(1).join('，')}`,
+    manualEvents: [{ id: '', title: '非计划实际', associationType: 'none' }],
+    manualEventIndex: 0,
+    manualOriginalTags: importedTags,
+    manualOriginalTagsText: originalTagsText,
+    manualTagsText: `${importedTags.slice(0, -1).join('，')}， ${importedTags.at(-1)} `
+  });
+
+  assert.deepEqual(page.selectedInput().tags, importedTags);
+  assert.deepEqual(page.selectedManualInput().tags, importedTags);
 });
 
 test('计时页会显示并保留当前重复计划，已有同源日志后仍可再次选择该实例', () => {
@@ -118,7 +185,6 @@ test('计时页会显示并保留当前重复计划，已有同源日志后仍�
   const page = loadTimerPage();
   const ranges = [];
   const snapshot = {
-    categories: [{ id: 'category_default', name: '未分类', status: 'active' }],
     projects: [],
     tasks: [{ id: 'task_repeat', title: '重复任务', status: 'todo' }],
     calendarEvents: [],
@@ -134,14 +200,12 @@ test('计时页会显示并保留当前重复计划，已有同源日志后仍�
       pausedAt: null,
       pauses: [],
       draft: {
-        categoryId: 'category_default',
-        categoryNameSnapshot: '未分类',
         calendarEventId: null,
         originRuleId: 'rule_repeat',
         originOccurrenceId: 'rule_repeat:1:1700000000000',
         originRuleSummarySnapshot: '每日整理',
         note: '',
-        tags: []
+        tags: ['a,b', '复,盘']
       }
     },
     recoveryDraft: null
@@ -205,21 +269,23 @@ test('计时页会显示并保留当前重复计划，已有同源日志后仍�
     assert.equal(page.data.events.some((item) => item.originRuleId === 'rule_choice'), true);
     assert.equal(page.data.events.some((item) => item.originRuleId === 'rule_taskless'), false);
     assert.ok(ranges.every((range) => range.end - range.start <= 3 * 24 * 60 * 60 * 1_000));
+    assert.equal(page.data.tagsText, '"a,b"，"复,盘"');
     assert.deepEqual(page.selectedInput(), {
-      categoryId: 'category_default',
       note: '',
-      tags: []
+      tags: ['a,b', '复,盘']
     });
+    page.data.tagsText = `${page.data.tagsText}，新增`;
+    assert.deepEqual(page.selectedInput().tags, ['a,b', '复,盘', '新增']);
+    page.data.tagsText = page.data.originalTagsText;
     const virtualIndex = page.data.events.findIndex(
       (item) => item.originRuleId === 'rule_choice'
     );
     page.data.eventIndex = virtualIndex;
     assert.deepEqual(page.selectedInput(), {
-      categoryId: 'category_default',
       originRuleId: 'rule_choice',
       originOccurrenceId: 'rule_choice:1:1700000000000',
       note: '',
-      tags: []
+      tags: ['a,b', '复,盘']
     });
     page.data.eventIndex = 0;
     assert.equal(page.selectedInput().calendarEventId, null);
@@ -229,12 +295,11 @@ test('计时页会显示并保留当前重复计划，已有同源日志后仍�
         startedAt: NOW,
         endedAt: NOW + 60_000,
         draft: {
-          categoryId: 'category_default',
           originRuleId: 'rule_repeat',
           originOccurrenceId: 'rule_repeat:1:1700000000000',
           originRuleSummarySnapshot: '每日整理',
           note: '',
-          tags: ['恢复']
+          tags: ['恢复,一', '复,盘']
         }
       }
     };
@@ -252,8 +317,7 @@ test('计时页会显示并保留当前重复计划，已有同源日志后仍�
       true
     );
     assert.deepEqual(page.selectedManualInput(), {
-      categoryId: 'category_default',
-      tags: ['恢复']
+      tags: ['恢复,一', '复,盘']
     });
     page.data.manualEventIndex = 0;
     assert.equal(page.selectedManualInput().calendarEventId, null);
@@ -267,7 +331,6 @@ test('手工补录按记录区间有限投影具体与重复计划候选', () =>
   const page = loadTimerPage();
   const ranges = [];
   const snapshot = {
-    categories: [{ id: 'category_default', name: '未分类', status: 'active' }],
     projects: [],
     tasks: [{ id: 'task_live', title: '有效任务', status: 'todo' }],
     calendarEvents: [],
@@ -308,16 +371,13 @@ test('手工补录按记录区间有限投影具体与重复计划候选', () =>
     if (callback) callback();
   };
   Object.assign(page.data, {
-    categories: snapshot.categories,
     events: [{ id: '', title: '非计划实际', associationType: 'none' }],
-    categoryIndex: 0,
     eventIndex: 0,
     manualStartDate: '2026-07-30',
     manualStartTime: '09:00',
     manualEndDate: '2026-07-30',
     manualEndTime: '10:00'
   });
-  page.activeCategories = snapshot.categories;
   page.currentSnapshot = snapshot;
   page.currentService = service;
 
@@ -332,7 +392,6 @@ test('手工补录按记录区间有限投影具体与重复计划候选', () =>
   );
   page.data.manualEventIndex = virtualIndex;
   assert.deepEqual(page.selectedManualInput(), {
-    categoryId: 'category_default',
     originRuleId: 'rule_manual',
     originOccurrenceId: 'rule_manual:1:123',
     tags: []

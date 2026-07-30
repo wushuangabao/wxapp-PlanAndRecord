@@ -19,10 +19,6 @@ function database(now = NOW) {
   return createInitialDatabase(now);
 }
 
-function category(id, name, now = NOW) {
-  return { id, name, status: 'active', isSystem: false, createdAt: now, updatedAt: now };
-}
-
 function wish(id, title, now = NOW) {
   return { id, title, createdAt: now, updatedAt: now };
 }
@@ -82,7 +78,6 @@ function occurrenceException(id, ruleId, override, now = NOW) {
 function timeLog(id, references = {}, now = NOW) {
   return {
     id, schemaVersion: 1, startedAt: now, endedAt: now + 3_600_000, durationMinutes: 60,
-    categoryId: 'category_uncategorized', categoryNameSnapshot: '未分类',
     projectId: null, projectNameSnapshot: null, taskId: null, taskNameSnapshot: null,
     calendarEventId: null, calendarEventSummarySnapshot: null, note: '', status: 'confirmed',
     source: 'manual', originRuleId: null, originOccurrenceId: null,
@@ -92,7 +87,7 @@ function timeLog(id, references = {}, now = NOW) {
 
 function addedCounts(overrides = {}) {
   return {
-    categories: 0, wishes: 0, projects: 0, tasks: 0, calendarEvents: 0,
+    wishes: 0, projects: 0, tasks: 0, calendarEvents: 0,
     repeatRules: 0, occurrenceExceptions: 0, timeLogs: 0, ...overrides
   };
 }
@@ -101,7 +96,7 @@ test('增量导入添加新实体并保留本机运行态', () => {
   const local = database(1000);
   local.timer = {
     status: 'running', startedAt: 900, endedAt: null, pausedAt: null, pauses: [],
-    draft: { note: '本机计时' }
+    draft: { note: '本机计时', tags: [] }
   };
   local.recoveryDraft = { reason: '本机恢复草稿', timer: createIdleTimer(), createdAt: 1000 };
   const imported = database(1000);
@@ -150,7 +145,7 @@ test('同 ID 且完整持久化值相同会跳过，对象属性顺序忽略而�
 
   const analysis = createImportAnalysis(local, imported, { mode: IMPORT_MODE.INCREMENTAL, now: NOW + 1 });
 
-  assert.equal(analysis.identicalCount, 2);
+  assert.equal(analysis.identicalCount, 1);
   assert.equal(analysis.conflictCount, 1);
   assert.deepEqual(analysis.addedCounts, addedCounts());
 });
@@ -219,10 +214,9 @@ test('同 ID 重复规则冲突按统一策略保留或整体替换 revisions', 
   assert.equal(JSON.stringify(usedRule).includes('revision_local_only'), false);
 });
 
-test('八类顶层聚合均按 ID 合并，项目和规则的嵌套聚合随父实体移动', () => {
+test('七类顶层聚合均按 ID 合并，项目和规则的嵌套聚合随父实体移动', () => {
   const local = database();
   const imported = database();
-  imported.categories.push(category('category_imported', '相同名称'));
   imported.wishes.push(wish('wish_imported', '愿望'));
   imported.projects.push(project('project_imported', '项目', NOW, [
     objective('objective_imported', '目标', [keyResult('key_result_imported', '关键结果')])
@@ -246,7 +240,7 @@ test('八类顶层聚合均按 ID 合并，项目和规则的嵌套聚合随父�
   }));
 
   assert.deepEqual(resolved.summary.addedCounts, addedCounts({
-    categories: 1, wishes: 1, projects: 1, tasks: 1, calendarEvents: 1,
+    wishes: 1, projects: 1, tasks: 1, calendarEvents: 1,
     repeatRules: 1, occurrenceExceptions: 1, timeLogs: 1
   }));
   assert.deepEqual(resolved.database.projects[0].objectives[0].keyResults[0].id, 'key_result_imported');
@@ -254,13 +248,11 @@ test('八类顶层聚合均按 ID 合并，项目和规则的嵌套聚合随父�
   assert.equal(resolved.summary.repairedReferenceCount, 0);
 });
 
-test('不同 ID 即使分类、项目和任务显示名相同也保持为不同实体', () => {
+test('不同 ID 即使项目和任务显示名相同也保持为不同实体', () => {
   const local = database();
   const imported = database();
-  local.categories.push(category('category_local', '同名'));
   local.projects.push(project('project_local', '同名'));
   local.tasks.push(task('task_local', '同名'));
-  imported.categories.push(category('category_imported', '同名'));
   imported.projects.push(project('project_imported', '同名'));
   imported.tasks.push(task('task_imported', '同名'));
 
@@ -268,7 +260,6 @@ test('不同 ID 即使分类、项目和任务显示名相同也保持为不同�
     mode: IMPORT_MODE.INCREMENTAL, now: NOW + 1
   }));
 
-  assert.deepEqual(resolved.database.categories.map((item) => item.id), ['category_uncategorized', 'category_local', 'category_imported']);
   assert.deepEqual(resolved.database.projects.map((item) => item.id), ['project_local', 'project_imported']);
   assert.deepEqual(resolved.database.tasks.map((item) => item.id), ['task_local', 'task_imported']);
 });
@@ -277,7 +268,7 @@ test('覆盖导入以空聚合开始，重置运行态且不从来源导入资�
   const local = database(1000);
   local.wishes.push(wish('wish_local', '本地愿望', 1000));
   const imported = database(2000);
-  imported.timer = { status: 'running', startedAt: 1900, endedAt: null, pausedAt: null, pauses: [], draft: { note: '来源计时' } };
+  imported.timer = { status: 'running', startedAt: 1900, endedAt: null, pausedAt: null, pauses: [], draft: { note: '来源计时', tags: [] } };
   imported.recoveryDraft = { reason: '来源草稿', timer: createIdleTimer(), createdAt: 2000 };
   imported.wishes.push(wish('wish_imported', '导入愿望', 2000));
   imported.createdAt = 2000;
@@ -294,7 +285,7 @@ test('覆盖导入以空聚合开始，重置运行态且不从来源导入资�
   assert.equal(resolved.database.recoveryDraft, null);
   assert.equal(resolved.database.createdAt, 3000);
   assert.equal(resolved.database.updatedAt, 3000);
-  assert.deepEqual(resolved.summary.addedCounts, addedCounts({ categories: 1, wishes: 1 }));
+  assert.deepEqual(resolved.summary.addedCounts, addedCounts({ wishes: 1 }));
 });
 
 test('最终合并结果保留本地实体时，不会误修复导入任务的本地项目引用', () => {
@@ -330,8 +321,8 @@ test('最终引用修复忽略旧直接关系字段，并只计数当前有效�
   }));
   local.occurrenceExceptions.push(occurrenceException('exception_orphan', 'rule_missing', null));
   local.timeLogs.push(timeLog('log_missing_event', {
-    categoryId: 'category_missing', categoryNameSnapshot: '旧分类', projectId: 'project_missing',
-    projectNameSnapshot: '日志项目快照', taskId: 'task_missing', taskNameSnapshot: '日志任务快照',
+    projectId: 'project_missing', projectNameSnapshot: '日志项目快照',
+    taskId: 'task_missing', taskNameSnapshot: '日志任务快照',
     calendarEventId: 'event_missing', calendarEventSummarySnapshot: '日志计划快照'
   }));
   local.timeLogs.push(timeLog('log_missing_rule', {
@@ -381,10 +372,8 @@ test('最终引用修复忽略旧直接关系字段，并只计数当前有效�
   assert.equal(repairedEventLog.taskNameSnapshot, '日志任务快照');
   assert.equal(repairedEventLog.calendarEventSummarySnapshot, '日志计划快照');
   assert.equal(repairedRuleLog.originRuleSummarySnapshot, '日志规则快照');
-  assert.equal(repairedEventLog.categoryId, 'category_uncategorized');
-  assert.equal(repairedEventLog.categoryNameSnapshot, '未分类');
   assert.equal(resolved.database.occurrenceExceptions.some((item) => item.id === 'exception_orphan'), false);
-  assert.equal(resolved.summary.repairedReferenceCount, 9);
+  assert.equal(resolved.summary.repairedReferenceCount, 8);
   assert.equal(resolved.summary.discardedExceptionCount, 1);
 });
 
@@ -407,7 +396,8 @@ test('USE_IMPORTED 替换为 taskless 计划后修复本机 timer 关联且不�
       taskId: 'task_local',
       taskNameSnapshot: '本机任务',
       calendarEventId: 'event_conflict',
-      calendarEventSummarySnapshot: '本机计划快照'
+      calendarEventSummarySnapshot: '本机计划快照',
+      tags: []
     }
   };
   const imported = database();
@@ -483,7 +473,8 @@ test('规则冲突使本机 origin 草稿命中 taskless 实例时清除完整 p
     draft: {
       originRuleId: 'rule_conflict',
       originOccurrenceId: `rule_conflict:1:${NOW}`,
-      originRuleSummarySnapshot: '本机规则快照'
+      originRuleSummarySnapshot: '本机规则快照',
+      tags: []
     }
   };
   const imported = database();

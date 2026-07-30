@@ -557,14 +557,10 @@ function confirmImportFileSelection(operation) {
 
 Page({
   data: {
-    categories: [],
-    categoryName: '',
-    renameId: '',
-    renameValue: '',
     includeCandidates: false,
     dataOperationInProgress: false,
     statistics: null,
-    categoryStats: [],
+    tagStats: [],
     projectStats: [],
     variance: [],
     overlaps: [],
@@ -582,7 +578,6 @@ Page({
   refresh() {
     try {
       const service = getService();
-      const snapshot = service.snapshot();
       const range = rangeForView(Date.now(), 'week');
       const statistics = service.statistics({
         rangeStart: range.start,
@@ -590,9 +585,11 @@ Page({
         includeCandidates: this.data.includeCandidates
       });
       this.setData({
-        categories: snapshot.categories,
         statistics,
-        categoryStats: statistics.categories,
+        tagStats: statistics.tags.map((item) => ({
+          ...item,
+          displayName: item.isUntagged ? '无标签' : `#${item.name}`
+        })),
         projectStats: statistics.projects,
         variance: statistics.planVariance.events,
         overlaps: statistics.overlaps,
@@ -603,51 +600,8 @@ Page({
     }
   },
 
-  onField(event) {
-    this.setData({ [event.currentTarget.dataset.key]: event.detail.value });
-  },
-
   onCandidatesChange(event) {
     this.setData({ includeCandidates: event.detail.value }, () => this.refresh());
-  },
-
-  addCategory() {
-    try {
-      getService().createCategory(this.data.categoryName);
-      this.setData({ categoryName: '' });
-      showSaved();
-      this.refresh();
-    } catch (error) { showError(error); }
-  },
-
-  startRename(event) {
-    const category = event.currentTarget.dataset.item;
-    this.setData({ renameId: category.id, renameValue: category.name });
-  },
-
-  saveRename() {
-    try {
-      getService().renameCategory(this.data.renameId, this.data.renameValue);
-      this.setData({ renameId: '', renameValue: '' });
-      showSaved();
-      this.refresh();
-    } catch (error) { showError(error); }
-  },
-
-  archiveCategory(event) {
-    const id = event.currentTarget.dataset.id;
-    wx.showModal({
-      title: '归档分类',
-      content: '归档后不能用于新记录，历史记录中的分类名称会保留。',
-      success: (result) => {
-        if (!result.confirm) return;
-        try {
-          getService().archiveCategory(id);
-          showSaved('分类已归档');
-          this.refresh();
-        } catch (error) { showError(error); }
-      }
-    });
   },
 
   exportJson() {

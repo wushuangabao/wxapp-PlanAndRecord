@@ -1,4 +1,9 @@
-const { TIMER_STATUS } = require('../../domain/constants');
+const {
+  MAX_TAGS_PER_LOG,
+  MAX_TAG_LENGTH,
+  TIMER_STATUS
+} = require('../../domain/constants');
+const { formatTagsText, parseTagsText } = require('../../domain/tags');
 const { calculateTimerDurationMinutes, parseLocalDateTime, sumPausedMilliseconds } = require('../../domain/time');
 const { defaultDateTime, formatDateTime, getService, showError, showSaved } = require('../../utils/page');
 
@@ -22,11 +27,6 @@ function elapsedSeconds(timer, now) {
     pauses.push({ startedAt: timer.pausedAt, endedAt: now });
   }
   return Math.max(0, Math.floor((now - timer.startedAt - sumPausedMilliseconds(pauses, now)) / 1_000));
-}
-
-function findOptionIndex(options, id) {
-  const index = options.findIndex((item) => item.id === id);
-  return index < 0 ? 0 : index;
 }
 
 function boundedPlanRange(startedAt, endedAt, fallbackNow = Date.now()) {
@@ -157,22 +157,6 @@ function associationInput(options, index) {
   };
 }
 
-function parseTags(value) {
-  const seen = new Set();
-  return String(value || '')
-    .split(/[,，]/)
-    .map((item) => item.trim())
-    .filter((item) => {
-      if (!item || seen.has(item)) return false;
-      seen.add(item);
-      return true;
-    });
-}
-
-function formatTags(tags) {
-  return Array.isArray(tags) ? tags.join('，') : '';
-}
-
 Page({
   data: {
     timer: { status: TIMER_STATUS.IDLE },
@@ -180,12 +164,14 @@ Page({
     elapsedMinutes: 0,
     statusLabel: '准备开始',
     primaryLabel: '开始记录',
-    categories: [],
+    maxTagsPerLog: MAX_TAGS_PER_LOG,
+    maxTagLength: MAX_TAG_LENGTH,
     events: [],
-    categoryIndex: 0,
     eventIndex: 0,
     note: '',
     tagsText: '',
+    originalTags: [],
+    originalTagsText: '',
     showManual: false,
     manualStartDate: '',
     manualStartTime: '',
@@ -193,9 +179,9 @@ Page({
     manualEndTime: '',
     manualNote: '',
     manualTagsText: '',
-    manualCategories: [],
+    manualOriginalTags: [],
+    manualOriginalTagsText: '',
     manualEvents: [],
-    manualCategoryIndex: 0,
     manualEventIndex: 0,
     manualMode: 'manual',
     recoveryDraft: null,
@@ -244,25 +230,14 @@ Page({
       const service = getService();
       const snapshot = service.snapshot();
       const draft = snapshot.timer.draft || {};
-      const activeCategories = snapshot.categories.filter((item) => item.status === 'active');
-      const categories = activeCategories.slice();
-      if (
-        snapshot.timer.status !== TIMER_STATUS.IDLE
-        && draft.categoryId
-        && !categories.some((item) => item.id === draft.categoryId)
-      ) {
-        const currentCategory = snapshot.categories.find((item) => item.id === draft.categoryId);
-        if (currentCategory) categories.push(currentCategory);
-      }
+      const draftTags = Array.isArray(draft.tags) ? draft.tags.slice() : [];
+      const draftTagsText = formatTagsText(draftTags);
+      const hasActiveDraft = snapshot.timer.status !== TIMER_STATUS.IDLE;
       const now = Date.now();
       const planSelection = planOptionsForRange(service, snapshot, now, now);
       const selectableEvents = planSelection.options;
       const eventById = new Map(snapshot.calendarEvents.map((item) => [item.id, item]));
-      const currentCategory = this.data.categories[this.data.categoryIndex];
       const currentEvent = this.data.events[this.data.eventIndex];
-      const categoryId = snapshot.timer.status === TIMER_STATUS.IDLE
-        ? (currentCategory && currentCategory.id)
-        : draft.categoryId;
       let currentPlan;
       if (snapshot.timer.status === TIMER_STATUS.IDLE) {
         const matchedIndex = findPlanAssociationIndex(selectableEvents, currentEvent);
@@ -274,9 +249,7 @@ Page({
       } else {
         currentPlan = optionsForCurrentDraft(selectableEvents, draft, eventById);
       }
-      this.categoryById = new Map(snapshot.categories.map((item) => [item.id, item]));
       this.eventById = eventById;
-      this.activeCategories = activeCategories;
       this.selectableEvents = selectableEvents;
       this.currentSnapshot = snapshot;
       this.currentService = service;
@@ -293,15 +266,15 @@ Page({
       this.setData({
         timer: snapshot.timer,
         recoveryDraft: snapshot.recoveryDraft,
-        categories,
         events: currentPlan.options,
-        categoryIndex: findOptionIndex(categories, categoryId),
         eventIndex: currentPlan.index,
         recentLogs,
         note: snapshot.timer.status === TIMER_STATUS.IDLE ? this.data.note : (draft.note || ''),
-        tagsText: snapshot.timer.status === TIMER_STATUS.IDLE
+        tagsText: !hasActiveDraft
           ? this.data.tagsText
-          : formatTags(draft.tags)
+          : draftTagsText,
+        originalTags: hasActiveDraft ? draftTags : [],
+        originalTagsText: hasActiveDraft ? draftTagsText : ''
       }, () => {
         this.updateElapsed();
         this.startTicker();
@@ -341,21 +314,23 @@ Page({
   },
 
   selectedInput() {
-    const getId = (items, index) => (items[index] ? items[index].id : undefined);
+    const tags = this.data.tagsText === this.data.originalTagsText
+      ? this.data.originalTags.slice()
+      : parseTagsText(this.data.tagsText, { enforceLimits: false });
     return {
-      categoryId: getId(this.data.categories, this.data.categoryIndex),
       ...associationInput(this.data.events, this.data.eventIndex),
       note: this.data.note,
-      tags: parseTags(this.data.tagsText)
+      tags
     };
   },
 
   selectedManualInput() {
-    const category = this.data.manualCategories[this.data.manualCategoryIndex];
+    const tags = this.data.manualTagsText === this.data.manualOriginalTagsText
+      ? this.data.manualOriginalTags.slice()
+      : parseTagsText(this.data.manualTagsText, { enforceLimits: false });
     return {
-      categoryId: category && category.id,
       ...associationInput(this.data.manualEvents, this.data.manualEventIndex),
-      tags: parseTags(this.data.manualTagsText)
+      tags
     };
   },
 
@@ -368,7 +343,7 @@ Page({
       if (status === TIMER_STATUS.PAUSED) service.resumeTimer();
       if (status === TIMER_STATUS.ENDED) {
         const result = service.generateTimerRecord();
-        this.setData({ categoryIndex: 0, eventIndex: 0, note: '', tagsText: '' });
+        this.setData({ eventIndex: 0, note: '', tagsText: '' });
         showSaved(result.hasOverlap ? '已保存：存在重叠时间' : '记录已生成');
       }
       this.refresh();
@@ -421,8 +396,6 @@ Page({
   },
 
   openManual() {
-    const categories = (this.activeCategories || this.data.categories).slice();
-    const currentCategory = this.data.categories[this.data.categoryIndex];
     const currentEvent = this.data.events[this.data.eventIndex];
     const planSelection = this.planOptionsForManualFields();
     const matchedIndex = findPlanAssociationIndex(planSelection.options, currentEvent);
@@ -437,9 +410,9 @@ Page({
       manualMode: 'manual',
       manualNote: '',
       manualTagsText: '',
-      manualCategories: categories,
+      manualOriginalTags: [],
+      manualOriginalTagsText: '',
       manualEvents: currentPlan.options,
-      manualCategoryIndex: findOptionIndex(categories, currentCategory && currentCategory.id),
       manualEventIndex: currentPlan.index
     });
   },
@@ -451,11 +424,8 @@ Page({
     const start = defaultDateTime(startedAt);
     const end = defaultDateTime(endedAt);
     const draft = timer.draft || {};
-    const categories = this.data.categories.slice();
-    if (draft.categoryId && !categories.some((item) => item.id === draft.categoryId)) {
-      const currentCategory = this.categoryById && this.categoryById.get(draft.categoryId);
-      if (currentCategory) categories.push(currentCategory);
-    }
+    const originalTags = Array.isArray(draft.tags) ? draft.tags.slice() : [];
+    const originalTagsText = formatTagsText(originalTags);
     const service = this.currentService || getService();
     const snapshot = this.currentSnapshot || service.snapshot();
     const planSelection = planOptionsForRange(service, snapshot, startedAt, endedAt);
@@ -469,10 +439,10 @@ Page({
       manualEndDate: end.date,
       manualEndTime: end.time,
       manualNote: draft.note || '',
-      manualTagsText: formatTags(draft.tags),
-      manualCategories: categories,
+      manualTagsText: originalTagsText,
+      manualOriginalTags: originalTags,
+      manualOriginalTagsText: originalTagsText,
       manualEvents: currentPlan.options,
-      manualCategoryIndex: findOptionIndex(categories, draft.categoryId),
       manualEventIndex: currentPlan.index
     });
   },
@@ -503,7 +473,9 @@ Page({
         showManual: false,
         manualMode: 'manual',
         manualNote: '',
-        manualTagsText: ''
+        manualTagsText: '',
+        manualOriginalTags: [],
+        manualOriginalTagsText: ''
       });
       showSaved(wasRecovery ? '已创建待核实的恢复记录' : (result.hasOverlap ? '已保存：存在重叠时间' : '补录已保存'));
       this.refresh();

@@ -96,8 +96,8 @@ function validOverrideException(override = {}) {
 function validLog() {
   return {
     id: 'log_1', schemaVersion: 1, startedAt: NOW, endedAt: NOW + 3_600_000, durationMinutes: 60,
-    categoryId: 'category_uncategorized', categoryNameSnapshot: '未分类', projectId: null, projectNameSnapshot: null,
-    taskId: null, taskNameSnapshot: null, calendarEventId: null, calendarEventSummarySnapshot: null,
+    projectId: null, projectNameSnapshot: null, taskId: null, taskNameSnapshot: null,
+    calendarEventId: null, calendarEventSummarySnapshot: null,
     note: '', status: 'confirmed', source: 'manual', originRuleId: null, originOccurrenceId: null,
     originRuleSummarySnapshot: null, tags: [], createdAt: NOW, updatedAt: NOW
   };
@@ -146,6 +146,74 @@ test('解析会忽略未知字段，但保留已知字段的严格校验', () =>
   assert.throws(() => parseJsonSnapshot(JSON.stringify(database)), (error) => error.code === 'IMPORT_SCHEMA_INVALID');
 });
 
+test('旧 Category 字段按未知字段忽略且不迁移为标签', () => {
+  const database = copySnapshot();
+  database.categories = [{
+    id: 'category_legacy',
+    name: '旧分类',
+    status: 'active',
+    isSystem: false,
+    createdAt: NOW,
+    updatedAt: NOW
+  }];
+  database.timeLogs.push({
+    ...validLog(),
+    categoryId: 'category_legacy',
+    categoryNameSnapshot: '旧分类'
+  });
+  database.timer.draft = {
+    categoryId: 'category_legacy',
+    categoryNameSnapshot: '旧分类'
+  };
+
+  const parsed = parseJsonSnapshot(JSON.stringify(database));
+
+  assert.equal(Object.prototype.hasOwnProperty.call(parsed, 'categories'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(parsed.timeLogs[0], 'categoryId'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(parsed.timeLogs[0], 'categoryNameSnapshot'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(parsed.timer.draft, 'categoryId'), false);
+  assert.deepEqual(parsed.timeLogs[0].tags, []);
+});
+
+test('JSON 标签规范化去空去重但不执行用户数量和长度上限', () => {
+  const database = copySnapshot();
+  const oversized = Array.from({ length: 11 }, (_, index) => `标签${index}`);
+  database.timeLogs.push({
+    ...validLog(),
+    tags: [' ＡＩ ', '', 'AI', '超过五个字符', ...oversized]
+  });
+  database.timer.draft = {
+    tags: [' 草稿 ', '草稿', '', '超过五个字符']
+  };
+  database.recoveryDraft = {
+    reason: '等待用户恢复',
+    timer: {
+      ...createIdleTimer(),
+      draft: { tags: [' 恢复  草稿 ', '恢复 草稿', ''] }
+    },
+    createdAt: NOW
+  };
+
+  const parsed = parseJsonSnapshot(JSON.stringify(database));
+
+  assert.deepEqual(
+    parsed.timeLogs[0].tags,
+    ['AI', '超过五个字符', ...oversized]
+  );
+  assert.deepEqual(parsed.timer.draft.tags, ['草稿', '超过五个字符']);
+  assert.deepEqual(parsed.recoveryDraft.timer.draft.tags, ['恢复 草稿']);
+});
+
+test('JSON 标签非法类型统一报告 IMPORT_SCHEMA_INVALID', () => {
+  const database = copySnapshot();
+  database.timeLogs.push({ ...validLog(), tags: ['有效', 1] });
+
+  assert.throws(
+    () => parseJsonSnapshot(JSON.stringify(database)),
+    (error) => error.code === 'IMPORT_SCHEMA_INVALID'
+  );
+});
+
 test('导出会移除各层遗留字段，且输出仍可被当前解析器读取', () => {
   const database = copySnapshot();
   database.projects.push(validProject());
@@ -156,7 +224,7 @@ test('导出会移除各层遗留字段，且输出仍可被当前解析器读�
   database.timeLogs.push(validLog());
   database.recoveryDraft = {
     reason: '等待用户修复',
-    timer: { status: 'running', startedAt: null, endedAt: NOW, pausedAt: NOW, pauses: [], draft: {} },
+    timer: { status: 'running', startedAt: null, endedAt: NOW, pausedAt: NOW, pauses: [], draft: { tags: [] } },
     createdAt: NOW
   };
   database.projects[0].legacyProjectField = true;
@@ -181,7 +249,8 @@ test('重复计划实例关联在计时器、恢复草稿和 JSON 往返中保�
   const originDraft = {
     originRuleId: 'rule_1',
     originOccurrenceId: `rule_1:1:${NOW}`,
-    originRuleSummarySnapshot: '每周重复计划'
+    originRuleSummarySnapshot: '每周重复计划',
+    tags: []
   };
   const database = copySnapshot();
   database.timer.draft = { ...originDraft };
@@ -297,13 +366,13 @@ test('JSON 解析错误、非文本和非普通对象根均被拒绝', () => {
 });
 
 test('根级必填字段逐一缺失时被拒绝', () => {
-  for (const field of ['schemaVersion', 'localProfile', 'categories', 'wishes', 'projects', 'tasks', 'calendarEvents', 'repeatRules', 'occurrenceExceptions', 'timeLogs', 'timer', 'recoveryDraft', 'createdAt', 'updatedAt']) {
+  for (const field of ['schemaVersion', 'localProfile', 'wishes', 'projects', 'tasks', 'calendarEvents', 'repeatRules', 'occurrenceExceptions', 'timeLogs', 'timer', 'recoveryDraft', 'createdAt', 'updatedAt']) {
     expectSchemaInvalid((database) => { delete database[field]; });
   }
 });
 
-test('八个顶层集合必须都是数组', () => {
-  for (const field of ['categories', 'wishes', 'projects', 'tasks', 'calendarEvents', 'repeatRules', 'occurrenceExceptions', 'timeLogs']) {
+test('七个顶层集合必须都是数组', () => {
+  for (const field of ['wishes', 'projects', 'tasks', 'calendarEvents', 'repeatRules', 'occurrenceExceptions', 'timeLogs']) {
     expectSchemaInvalid((database) => { database[field] = {}; });
   }
 });
@@ -320,9 +389,7 @@ test('根时间戳和 localProfile 时间戳不做隐式类型转换', () => {
   expectSchemaInvalid((database) => { database.localProfile.updatedAt = String(NOW); });
 });
 
-test('分类、愿望、项目、目标和关键结果字段类型严格校验', () => {
-  expectSchemaInvalid((database) => { database.categories[0].isSystem = 'true'; });
-  expectSchemaInvalid((database) => { database.categories[0].status = 'deleted'; });
+test('愿望、项目、目标和关键结果字段类型严格校验', () => {
   expectSchemaInvalid((database) => { database.wishes.push({ id: 'wish_1', title: 1, createdAt: NOW, updatedAt: NOW }); });
   expectSchemaInvalid((database) => { database.projects.push({ ...validProject(), deadlineAt: String(NOW) }); });
   expectSchemaInvalid((database) => { database.projects.push({ ...validProject(), objectives: {} }); });
@@ -355,6 +422,21 @@ test('例外、日志、计时器和恢复草稿字段类型严格校验', () =>
   expectSchemaInvalid((database) => { database.timer = { ...createIdleTimer(), draft: { originRuleSummarySnapshot: 1 } }; });
   expectSchemaInvalid((database) => { database.recoveryDraft = { reason: 1, timer: createIdleTimer(), createdAt: NOW }; });
   expectSchemaInvalid((database) => { database.recoveryDraft = { reason: '恢复', timer: { ...createIdleTimer(), pauses: {} }, createdAt: NOW }; });
+});
+
+test('持久化标签必须已经规范化、非空且唯一，但允许超出用户上限', () => {
+  for (const tags of [[' 未规范 '], [''], ['重复', '重复']]) {
+    expectSchemaInvalid((database) => {
+      database.timeLogs.push({ ...validLog(), tags });
+    });
+  }
+
+  const database = copySnapshot();
+  database.timeLogs.push({
+    ...validLog(),
+    tags: ['超过五个字符', ...Array.from({ length: 11 }, (_, index) => `标签${index}`)]
+  });
+  assert.doesNotThrow(() => validateJsonSnapshot(database));
 });
 
 test('完整合法的 override 例外通过校验', () => {
@@ -439,6 +521,48 @@ test('根 timer 拒绝与状态机矛盾的时间戳组合', () => {
   });
 });
 
+test('根 timer 非 idle 状态必须持久化可为空的规范化标签数组', () => {
+  const activeTimers = [{
+    ...createIdleTimer(),
+    status: 'running',
+    startedAt: NOW
+  }, {
+    ...createIdleTimer(),
+    status: 'paused',
+    startedAt: NOW,
+    pausedAt: NOW + 1_000
+  }, {
+    ...createIdleTimer(),
+    status: 'ended',
+    startedAt: NOW,
+    endedAt: NOW + 1_000
+  }];
+
+  activeTimers.forEach((timer) => {
+    expectSchemaInvalid((database) => {
+      database.timer = { ...timer, draft: {} };
+    });
+    const database = copySnapshot();
+    database.timer = { ...timer, draft: { tags: [] } };
+    assert.doesNotThrow(() => validateJsonSnapshot(database));
+  });
+
+  expectSchemaInvalid((database) => {
+    database.recoveryDraft = {
+      reason: '等待用户修复',
+      timer: {
+        status: 'running',
+        startedAt: null,
+        endedAt: NOW,
+        pausedAt: NOW,
+        pauses: [],
+        draft: {}
+      },
+      createdAt: NOW
+    };
+  });
+});
+
 test('根 timer 的 pause 必须有序、不重叠并处于主计时边界内', () => {
   expectSchemaInvalid((database) => {
     database.timer = {
@@ -466,7 +590,7 @@ test('recoveryDraft 保留结构有效但状态异常的原始 timer', () => {
     reason: '等待用户修复',
     timer: {
       status: 'running', startedAt: null, endedAt: NOW, pausedAt: NOW,
-      pauses: [{ startedAt: NOW, endedAt: NOW }], draft: {}
+      pauses: [{ startedAt: NOW, endedAt: NOW }], draft: { tags: [] }
     },
     createdAt: NOW
   };
@@ -474,16 +598,10 @@ test('recoveryDraft 保留结构有效但状态异常的原始 timer', () => {
 });
 
 test('重复 ID 包括顶层实体、嵌套目标、关键结果和修订均被拒绝', () => {
-  expectDuplicateId((database) => { database.wishes.push({ id: 'category_uncategorized', title: '重复', createdAt: NOW, updatedAt: NOW }); });
+  expectDuplicateId((database) => { database.wishes.push({ id: database.localProfile.id, title: '重复', createdAt: NOW, updatedAt: NOW }); });
   expectDuplicateId((database) => { database.projects.push({ ...validProject(), objectives: [{ ...validProject().objectives[0] }, { ...validProject().objectives[0], id: 'objective_1' }] }); });
   expectDuplicateId((database) => { database.projects.push({ ...validProject(), objectives: [{ ...validProject().objectives[0], keyResults: [{ ...validProject().objectives[0].keyResults[0] }, { ...validProject().objectives[0].keyResults[0], id: 'key_result_1' }] }] }); });
   expectDuplicateId((database) => { database.repeatRules.push({ ...validRule(), revisions: [{ ...validRevision() }, { ...validRevision(), revision: 2 }] }); });
-});
-
-test('系统未分类必须唯一且具有规范字段', () => {
-  expectSchemaInvalid((database) => { database.categories[0].name = '其他'; });
-  expectSchemaInvalid((database) => { database.categories.push({ ...database.categories[0], id: 'category_2' }); });
-  expectSchemaInvalid((database) => { database.categories[0].isSystem = false; });
 });
 
 test('校验错误信息不泄漏 JSON 中的实体正文', () => {

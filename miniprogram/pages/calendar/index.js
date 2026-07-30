@@ -1,4 +1,6 @@
+const { MAX_TAGS_PER_LOG, MAX_TAG_LENGTH } = require('../../domain/constants');
 const { parseLocalDateTime } = require('../../domain/time');
+const { formatTagsText, parseTagsText } = require('../../domain/tags');
 const { rangeForView, shiftAnchor } = require('../../utils/date-range');
 const { defaultDateTime, formatDateTime, getService, showError, showSaved } = require('../../utils/page');
 
@@ -123,23 +125,13 @@ function associationInput(option) {
   };
 }
 
-function parseTags(value) {
-  const seen = new Set();
-  return String(value || '')
-    .split(/[,，]/)
-    .map((item) => item.trim())
-    .filter((item) => {
-      if (!item || seen.has(item)) return false;
-      seen.add(item);
-      return true;
-    });
-}
-
 Page({
   data: {
     view: 'week',
     anchor: Date.now(),
     rangeLabel: '',
+    maxTagsPerLog: MAX_TAGS_PER_LOG,
+    maxTagLength: MAX_TAG_LENGTH,
     timeline: [],
     title: '',
     startDate: '',
@@ -166,6 +158,8 @@ Page({
     logEnd: '',
     logNote: '',
     logTagsText: '',
+    logOriginalTags: [],
+    logOriginalTagsText: '',
     planEditor: null,
     planTitle: '',
     planStartDate: '',
@@ -175,10 +169,7 @@ Page({
     planPriority: 1,
     planTasks: [],
     planTaskIndex: 0,
-    categories: [],
-    logCategories: [],
     logEvents: [],
-    logCategoryIndex: 0,
     logEventIndex: 0,
     views: ['day', 'week', 'month', 'year'],
     frequencyLabels: FREQUENCY_LABELS,
@@ -224,12 +215,10 @@ Page({
           || (item.status === 'completed' ? item.projectNameSnapshot : null)
           || '未关联项目'
       }]));
-      this.categoryById = new Map(snapshot.categories.map((item) => [item.id, item]));
       this.eventById = new Map(snapshot.calendarEvents.map((item) => [item.id, item]));
       this.currentSnapshot = snapshot;
       this.currentService = service;
       this.setData({
-        categories: snapshot.categories.filter((item) => item.status === 'active'),
         tasks,
         planTasks: tasks,
         hasTaskOptions: tasks.length > 1,
@@ -487,14 +476,8 @@ Page({
     const item = event.currentTarget.dataset.item;
     const start = defaultDateTime(item.startedAt);
     const end = defaultDateTime(item.endedAt);
-    const logCategories = this.data.categories.slice();
-    if (item.categoryId && !logCategories.some((category) => category.id === item.categoryId)) {
-      const category = this.categoryById && this.categoryById.get(item.categoryId);
-      logCategories.push(category || {
-        id: item.categoryId,
-        name: item.categoryNameSnapshot || '已归档分类'
-      });
-    }
+    const originalTags = Array.isArray(item.tags) ? item.tags.slice() : [];
+    const originalTagsText = formatTagsText(originalTags);
     const service = this.currentService || getService();
     const snapshot = this.currentSnapshot || service.snapshot();
     const planSelection = planOptionsForRange(
@@ -535,10 +518,10 @@ Page({
       logStart: start.time,
       logEnd: end.time,
       logNote: item.note || '',
-      logTagsText: Array.isArray(item.tags) ? item.tags.join('，') : '',
-      logCategories,
+      logTagsText: originalTagsText,
+      logOriginalTags: originalTags,
+      logOriginalTagsText: originalTagsText,
       logEvents: currentPlan.options,
-      logCategoryIndex: findOptionIndex(logCategories, item.categoryId),
       logEventIndex: currentPlan.index
     });
   },
@@ -569,14 +552,15 @@ Page({
   saveLogEditor() {
     try {
       const item = this.data.logEditor;
-      const category = this.data.logCategories[this.data.logCategoryIndex];
       const calendarEvent = this.data.logEvents[this.data.logEventIndex];
+      const tags = this.data.logTagsText === this.data.logOriginalTagsText
+        ? this.data.logOriginalTags.slice()
+        : parseTagsText(this.data.logTagsText, { enforceLimits: false });
       const input = {
         startedAt: parseLocalDateTime(this.data.logDate, this.data.logStart),
         endedAt: parseLocalDateTime(this.data.logDate, this.data.logEnd),
-        categoryId: category && category.id,
         note: this.data.logNote,
-        tags: parseTags(this.data.logTagsText)
+        tags
       };
       Object.assign(input, associationInput(calendarEvent));
       getService().updateLog(item.id, input);

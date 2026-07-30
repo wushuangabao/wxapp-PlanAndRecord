@@ -29,17 +29,43 @@ function includedLogs(database, rangeStart, rangeEnd, includeCandidates) {
   });
 }
 
-function accumulate(logs, idField, nameField, uncategorizedName) {
+function accumulate(logs, idField, nameField, fallbackName) {
   const groups = new Map();
   logs.forEach((log) => {
     const id = log[idField] || 'unassigned';
-    const name = log[nameField] || uncategorizedName;
+    const name = log[nameField] || fallbackName;
     const current = groups.get(id) || { id, name, durationMinutes: 0, count: 0 };
     current.durationMinutes += log.durationMinutes;
     current.count += 1;
     groups.set(id, current);
   });
   return Array.from(groups.values()).sort((first, second) => second.durationMinutes - first.durationMinutes);
+}
+
+function accumulateTags(logs) {
+  const groups = new Map();
+  logs.forEach((log) => {
+    const tags = Array.isArray(log.tags) ? Array.from(new Set(log.tags)) : [];
+    const groupTags = tags.length ? tags : [null];
+    groupTags.forEach((tag) => {
+      const isUntagged = tag === null;
+      const id = isUntagged ? 'untagged' : `tag:${tag}`;
+      const current = groups.get(id) || {
+        id,
+        tag,
+        name: isUntagged ? '无标签' : tag,
+        isUntagged,
+        durationMinutes: 0,
+        count: 0
+      };
+      current.durationMinutes += log.durationMinutes;
+      current.count += 1;
+      groups.set(id, current);
+    });
+  });
+  return Array.from(groups.values()).sort(
+    (first, second) => second.durationMinutes - first.durationMinutes
+  );
 }
 
 function occurrenceRevisionNumber(ruleId, originOccurrenceId) {
@@ -203,7 +229,7 @@ function buildStatistics(database, options) {
   const completedTasks = database.tasks.filter((task) => task.status === 'completed' && task.completedAt >= rangeStart && task.completedAt <= rangeEnd);
   return {
     totalMinutes,
-    categories: accumulate(logs, 'categoryId', 'categoryNameSnapshot', '未分类'),
+    tags: accumulateTags(logs),
     projects: accumulate(logs, 'projectId', 'projectNameSnapshot', '未归属项目'),
     planVariance: calculatePlanVariance(database, logs, rangeStart, rangeEnd),
     overlaps: findOverlaps(logs),

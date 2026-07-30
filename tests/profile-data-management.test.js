@@ -22,7 +22,7 @@ function loadProfilePage() {
 
 function defaultStatistics() {
   return {
-    categories: [],
+    tags: [],
     projects: [],
     planVariance: { events: [] },
     overlaps: [],
@@ -72,7 +72,7 @@ function createHarness(options = {}) {
 
   const service = {
     snapshot: () => createInitialDatabase(FIXED_NOW),
-    statistics: () => defaultStatistics(),
+    statistics: () => options.statistics || defaultStatistics(),
     exportJson() {
       calls.service.exportJson += 1;
       return '{"schemaVersion":1}';
@@ -114,10 +114,7 @@ function createHarness(options = {}) {
       calls.service.clearAllData.push(confirmed);
       if (options.clearError) throw options.clearError;
       return { cleared: true };
-    },
-    createCategory() {},
-    renameCategory() {},
-    archiveCategory() {}
+    }
   };
 
   const fileSystemManager = {
@@ -230,7 +227,9 @@ function createHarness(options = {}) {
     Object.assign(page.data, updates);
     if (callback) callback();
   };
-  page.refresh = () => { calls.refreshes += 1; };
+  if (!options.keepPageRefresh) {
+    page.refresh = () => { calls.refreshes += 1; };
+  }
 
   function invokeUserTap(callback) {
     userTapDepth += 1;
@@ -252,6 +251,46 @@ function createHarness(options = {}) {
 
   return { calls, fileSystemManager, invokeUserTap, page, restore, service };
 }
+
+test('用户页用标签投入替代分类管理，并区分派生无标签桶与同名字面标签', () => {
+  const statistics = {
+    ...defaultStatistics(),
+    tags: [{
+      id: 'untagged',
+      tag: null,
+      name: '无标签',
+      isUntagged: true,
+      durationMinutes: 25,
+      count: 1
+    }, {
+      id: 'tag:无标签',
+      tag: '无标签',
+      name: '无标签',
+      isUntagged: false,
+      durationMinutes: 15,
+      count: 1
+    }]
+  };
+  const harness = createHarness({ keepPageRefresh: true, statistics });
+  try {
+    harness.page.refresh();
+
+    assert.deepEqual(
+      harness.page.data.tagStats.map((item) => item.displayName),
+      ['无标签', '#无标签']
+    );
+
+    const wxml = fs.readFileSync(profileWxmlPath, 'utf8');
+    const wxss = fs.readFileSync(profileWxssPath, 'utf8');
+    assert.match(wxml, /标签投入/);
+    assert.match(wxml, /一条记录有多个标签时，完整耗时会分别计入每个标签/);
+    assert.match(wxml, /\{\{item\.displayName\}\}/);
+    assert.doesNotMatch(wxml, /分类投入|分类管理|新增分类|归档分类/);
+    assert.doesNotMatch(wxss, /\.category-row/);
+  } finally {
+    harness.restore();
+  }
+});
 
 test('M5：数据管理区只暴露 JSON 导出、JSON 导入和危险清空按钮', () => {
   const wxml = fs.readFileSync(profileWxmlPath, 'utf8');

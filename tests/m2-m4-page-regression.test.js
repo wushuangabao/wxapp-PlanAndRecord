@@ -82,18 +82,26 @@ test('M4：日历提供计划块编辑删除入口，重复实例编辑弹层只
   assert.equal((wxml.match(/修改重复实例/g) || []).length, 1);
 });
 
-test('日历计划块只选择必选任务，日志编辑只选择分类和计划块', () => {
+test('日历计划块只选择必选任务，日志编辑只选择标签和计划块', () => {
   const script = fs.readFileSync(calendarScriptPath, 'utf8');
   const wxml = fs.readFileSync(calendarWxmlPath, 'utf8');
   assert.match(wxml, /任务（必选）/);
   assert.match(wxml, /项目归属（由任务决定）/);
-  assert.match(wxml, /logCategoryIndex/);
   assert.match(wxml, /logEventIndex/);
   assert.match(wxml, /logTagsText/);
-  assert.doesNotMatch(wxml, /data-key="projectIndex"|data-key="planProjectIndex"/);
+  assert.match(
+    wxml,
+    /标签（可选，逗号分隔，最多 \{\{maxTagsPerLog\}\} 个，每个 \{\{maxTagLength\}\} 个字符）/
+  );
+  assert.doesNotMatch(wxml, /分类|logCategoryIndex|data-key="projectIndex"|data-key="planProjectIndex"/);
+  assert.doesNotMatch(script, /categoryById|logCategories|logCategoryIndex/);
   assert.doesNotMatch(script, /projectId:\s*project/);
+  assert.match(script, /parseTagsText\(this\.data\.logTagsText,\s*\{\s*enforceLimits:\s*false\s*\}\)/s);
   assert.match(script, /originRuleId: item\.ruleId/);
   assert.match(script, /calendarEventId: item\.id/);
+  const page = loadCalendarPage();
+  assert.equal(page.data.maxTagsPerLog, 10);
+  assert.equal(page.data.maxTagLength, 5);
 });
 
 test('日历创建计划只向服务提交任务关联', () => {
@@ -135,7 +143,6 @@ test('日历创建计划只向服务提交任务关联', () => {
 test('日历按任务当前 projectId 派生只读项目标题', () => {
   const originalGetApp = global.getApp;
   const snapshot = {
-    categories: [],
     projects: [{ id: 'project_current', title: '重命名后的项目', status: 'active' }],
     tasks: [{
       id: 'task_plan',
@@ -172,7 +179,6 @@ test('尚未结束的失效任务计划可补绑任务，历史失效计划保�
   const updates = [];
   const toasts = [];
   const snapshot = {
-    categories: [],
     projects: [],
     tasks: [{ id: 'task_live', title: '有效任务', status: 'todo', projectId: null }],
     calendarEvents: []
@@ -321,7 +327,6 @@ test('日志编辑可保留或明确解除重复计划实例关联', () => {
   const updates = [];
   const ranges = [];
   const snapshot = {
-    categories: [{ id: 'category_focus', name: '专注', status: 'active' }],
     projects: [],
     tasks: [{ id: 'task_repeat', title: '重复任务', status: 'todo' }],
     calendarEvents: []
@@ -380,17 +385,12 @@ test('日志编辑可保留或明确解除重复计划实例关联', () => {
       type: 'confirmed',
       startedAt: new Date(2026, 6, 30, 9, 0).getTime(),
       endedAt: new Date(2026, 6, 30, 10, 0).getTime(),
-      categoryId: 'category_focus',
-      categoryNameSnapshot: '专注',
       calendarEventId: null,
       originRuleId: 'rule_repeat',
       originOccurrenceId: 'rule_repeat:rev:occurrence',
       originRuleSummarySnapshot: '每日写作',
       note: ''
     };
-    Object.assign(page.data, {
-      categories: snapshot.categories
-    });
     page.currentSnapshot = snapshot;
     page.currentService = service;
     page.refresh = () => {};
@@ -429,15 +429,11 @@ test('日志编辑可保留或明确解除重复计划实例关联', () => {
   }
 });
 
-test('日志编辑器会保留当前已归档分类供原值保存', () => {
+test('日志编辑器只改备注时不限额规范化并保留导入的超限标签', () => {
   const originalGetApp = global.getApp;
   const originalWx = global.wx;
   let received;
   const snapshot = {
-    categories: [
-      { id: 'category_default', name: '未分类', status: 'active' },
-      { id: 'category_old', name: '旧分类', status: 'archived' }
-    ],
     projects: [],
     tasks: [],
     calendarEvents: []
@@ -457,33 +453,43 @@ test('日志编辑器会保留当前已归档分类供原值保存', () => {
   global.wx = { showToast() {} };
   try {
     const page = loadCalendarPage();
-    const archivedCategory = { id: 'category_old', name: '旧分类', status: 'archived' };
-    Object.assign(page.data, {
-      categories: [{ id: 'category_default', name: '未分类', status: 'active' }]
-    });
+    const importedTags = [
+      'a,b',
+      '复,盘',
+      '标签三',
+      '标签四',
+      '标签五',
+      '标签六',
+      '标签七',
+      '标签八',
+      '标签九',
+      '标签十',
+      '标签十一'
+    ];
     page.currentSnapshot = snapshot;
     page.currentService = service;
-    page.categoryById = new Map([[archivedCategory.id, archivedCategory]]);
     page.refresh = () => {};
     page.openLogEditor({
       currentTarget: {
         dataset: {
           item: {
-            id: 'log_archived_category',
+            id: 'log_imported_tags',
             type: 'confirmed',
             startedAt: new Date(2026, 6, 30, 9, 0).getTime(),
             endedAt: new Date(2026, 6, 30, 10, 0).getTime(),
-            categoryId: archivedCategory.id,
-            categoryNameSnapshot: archivedCategory.name,
             calendarEventId: null,
-            note: ''
+            note: '旧备注',
+            tags: importedTags
           }
         }
       }
     });
-    assert.equal(page.data.logCategories[page.data.logCategoryIndex].id, archivedCategory.id);
+    assert.equal(page.data.logTagsText.startsWith('"a,b"，"复,盘"'), true);
+    page.data.logNote = '只改备注';
     page.saveLogEditor();
-    assert.equal(received.input.categoryId, archivedCategory.id);
+    assert.equal(received.input.note, '只改备注');
+    assert.deepEqual(received.input.tags, importedTags);
+    assert.equal(Object.prototype.hasOwnProperty.call(received.input, 'categoryId'), false);
   } finally {
     global.getApp = originalGetApp;
     global.wx = originalWx;

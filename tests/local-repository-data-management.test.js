@@ -123,7 +123,7 @@ test('initialize 将结构完整但暂停语义不一致的活动计时留给恢
     pauses: [
       { startedAt: 1_700_000_030_000, endedAt: 1_700_000_020_000 }
     ],
-    draft: {}
+    draft: { tags: [] }
   };
   storage.set(STORAGE_KEY, stored);
   storage.setCalls.length = 0;
@@ -151,7 +151,7 @@ test('initialize 允许已保存恢复草稿保留反向暂停区间供用户修
       pauses: [
         { startedAt: 1_700_000_030_000, endedAt: 1_700_000_020_000 }
       ],
-      draft: {}
+      draft: { tags: [] }
     },
     createdAt: 1_700_000_060_000
   };
@@ -179,7 +179,7 @@ test('initialize 对可恢复计时仍严格校验必需字段、容器、枚举
     ['暂停字段缺失', (timer) => { timer.pauses = [{ startedAt: 1_700_000_010_000 }]; }],
     ['状态枚举错误', (timer) => { timer.status = 'recovering'; }],
     ['时间戳类型错误', (timer) => { timer.startedAt = '1700000000000'; }],
-    ['草稿类型错误', (timer) => { timer.draft = { note: 42 }; }]
+    ['草稿类型错误', (timer) => { timer.draft = { note: 42, tags: [] }; }]
   ];
 
   cases.forEach(([label, mutate]) => {
@@ -191,7 +191,7 @@ test('initialize 对可恢复计时仍严格校验必需字段、容器、枚举
       endedAt: null,
       pausedAt: null,
       pauses: [],
-      draft: {}
+      draft: { tags: [] }
     };
     mutate(stored.timer);
     storage.set(STORAGE_KEY, stored);
@@ -226,7 +226,7 @@ test('initialize 拒绝同版本损坏快照，后续事务仍零写入且缓存
     endedAt: null,
     pausedAt: null,
     pauses: [],
-    draft: {}
+    draft: { tags: [] }
   };
   delete stored.tasks;
   storage.set(STORAGE_KEY, stored);
@@ -262,7 +262,12 @@ test('initialize 拒绝同版本损坏快照，后续事务仍零写入且缓存
 test('initialize 将同版本重复 ID 领域错误转换为安全的损坏错误', () => {
   const storage = new FaultStorage();
   const stored = createInitialDatabase(1_700_000_000_000);
-  stored.categories.push(clone(stored.categories[0]));
+  stored.wishes.push({
+    id: stored.localProfile.id,
+    title: '重复标识',
+    createdAt: stored.createdAt,
+    updatedAt: stored.updatedAt
+  });
   storage.set(STORAGE_KEY, stored);
   storage.setCalls.length = 0;
   const repository = new LocalRepository(storage);
@@ -271,7 +276,7 @@ test('initialize 将同版本重复 ID 领域错误转换为安全的损坏错�
 
   assert.equal(error instanceof StorageError, true);
   assert.equal(error.code, 'DATA_CORRUPTED');
-  assert.doesNotMatch(error.message, /IMPORT_DUPLICATE_ID|category_uncategorized/);
+  assert.doesNotMatch(error.message, /IMPORT_DUPLICATE_ID|重复标识/);
   assert.equal(repository.cache, null);
   assert.deepEqual(storage.get(STORAGE_KEY), stored);
   assert.deepEqual(storage.setCalls, []);
@@ -526,7 +531,7 @@ test('增量 replace 不删除迁移备份', () => {
   assert.deepEqual(storage.removeCalls, []);
 });
 
-test('reset 原子建立新资料库、唯一系统分类和空运行态', () => {
+test('reset 原子建立不含分类聚合的新资料库和空运行态', () => {
   const storage = new FaultStorage();
   const { repository, setNow } = createRepository(storage);
   const oldSnapshot = repository.read();
@@ -538,12 +543,7 @@ test('reset 原子建立新资料库、唯一系统分类和空运行态', () =>
 
   assert.notEqual(reset.localProfile.id, oldSnapshot.localProfile.id);
   assert.equal(reset.localProfile.createdAt, 1_700_000_001_000);
-  assert.deepEqual(reset.categories.map((category) => ({
-    id: category.id,
-    name: category.name,
-    status: category.status,
-    isSystem: category.isSystem
-  })), [{ id: 'category_uncategorized', name: '未分类', status: 'active', isSystem: true }]);
+  assert.equal(Object.prototype.hasOwnProperty.call(reset, 'categories'), false);
   for (const collection of ['wishes', 'projects', 'tasks', 'calendarEvents', 'repeatRules', 'occurrenceExceptions', 'timeLogs']) {
     assert.deepEqual(reset[collection], []);
   }

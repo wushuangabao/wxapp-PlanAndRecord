@@ -168,8 +168,6 @@ function importedLog(id, now) {
     startedAt: now - 3_600_000,
     endedAt: now - 1_800_000,
     durationMinutes: 30,
-    categoryId: 'category_uncategorized',
-    categoryNameSnapshot: '未分类',
     projectId: null,
     projectNameSnapshot: null,
     taskId: null,
@@ -188,14 +186,75 @@ function importedLog(id, now) {
   };
 }
 
-test('M1：首次资料库生成匿名资料库和不可删除的未分类', () => {
+test('M1：首次资料库生成匿名资料库且不再包含分类实体', () => {
   const { service } = createHarness();
   const snapshot = service.snapshot();
 
   assert.match(snapshot.localProfile.id, /^profile_/);
-  assert.equal(snapshot.categories.length, 1);
-  assert.equal(snapshot.categories[0].name, '未分类');
-  assert.throws(() => service.archiveCategory(snapshot.categories[0].id), (error) => error.code === 'CATEGORY_SYSTEM');
+  assert.equal(Object.hasOwn(snapshot, 'categories'), false);
+  assert.equal(service.createCategory, undefined);
+  assert.equal(service.renameCategory, undefined);
+  assert.equal(service.archiveCategory, undefined);
+});
+
+test('新建记录和计时草稿统一规范化标签并执行 10/5 上限', () => {
+  const { service, now } = createHarness();
+  const manual = service.createManualLog({
+    startedAt: now() - 3_600_000,
+    endedAt: now() - 1_800_000,
+    tags: [' ＡＩ ', 'AI', 'ai']
+  }).log;
+  assert.deepEqual(manual.tags, ['AI', 'ai']);
+
+  assert.throws(
+    () => service.createManualLog({
+      startedAt: now() - 1_700_000,
+      endedAt: now() - 1_600_000,
+      tags: ['一二三四五六']
+    }),
+    (error) => error.code === 'TAG_TOO_LONG'
+  );
+
+  const timer = service.startTimer({ tags: [' 复　盘 ', '复 盘'] });
+  assert.deepEqual(timer.draft.tags, ['复 盘']);
+  assert.throws(
+    () => service.updateTimerDraft({
+      tags: Array.from({ length: 11 }, (_, index) => String(index))
+    }),
+    (error) => error.code === 'TAG_COUNT_EXCEEDED'
+  );
+});
+
+test('导入的超限计时草稿在不改标签时可生成记录或恢复为候选', () => {
+  const { service, repository, now } = createHarness();
+  const importedTags = Array.from({ length: 11 }, (_, index) => `标签${index}`);
+  repository.transaction((database) => {
+    database.timer = {
+      status: TIMER_STATUS.ENDED,
+      startedAt: now() - 120_000,
+      endedAt: now() - 60_000,
+      pausedAt: null,
+      pauses: [],
+      draft: { tags: importedTags }
+    };
+  });
+  assert.deepEqual(service.generateTimerRecord().log.tags, importedTags);
+
+  repository.transaction((database) => {
+    database.recoveryDraft = {
+      reason: '导入的恢复草稿',
+      timer: {
+        ...createIdleTimer(),
+        draft: { tags: importedTags }
+      },
+      createdAt: now()
+    };
+  });
+  const recovered = service.createRecoveryCandidate({
+    startedAt: now() - 50_000,
+    endedAt: now() - 10_000
+  });
+  assert.deepEqual(recovered.tags, importedTags);
 });
 
 test('M1/M3：关键结果只能记录百分比，活动项目不能超过五个', () => {
@@ -291,13 +350,21 @@ test('M2：恢复草稿经用户修正后创建候选记录并清除草稿', () 
 });
 
 test('M2：超过 24 小时的计时恢复为候选记录', () => {
-  const { service, setNow, now } = createHarness();
+  const { service, repository, setNow, now } = createHarness();
   service.startTimer({ note: '异常恢复' });
+  const importedTags = [
+    '超过五个字符',
+    ...Array.from({ length: 10 }, (_, index) => `标签${index}`)
+  ];
+  repository.transaction((database) => {
+    database.timer.draft.tags = importedTags;
+  });
   setNow(now() + MAX_TIMER_SPAN_MS + 60_000);
   const recovered = service.recoverTimer(now());
 
   assert.equal(recovered.state, 'candidate');
   assert.equal(recovered.log.status, LOG_STATUS.CANDIDATE);
+  assert.deepEqual(recovered.log.tags, importedTags);
   assert.equal(service.snapshot().timer.status, TIMER_STATUS.IDLE);
 });
 
@@ -1663,10 +1730,8 @@ test('确认候选记录执行统一关联归一化，并保证具体计划与�
   );
 });
 
-test('编辑日志保留归档分类和历史计划；换绑时校验，显式空值解除所有计划关联', () => {
-  const { service, now } = createHarness();
-  const category = service.createCategory('已归档分类');
-  const otherArchivedCategory = service.createCategory('其他归档分类');
+test('编辑日志保留导入的超限标签和历史计划；改标签时执行限制，显式空值解除计划关联', () => {
+  const { service, repository, now } = createHarness();
   const task = service.createTask({ title: '历史任务' });
   const historicalEvent = createCalendarEventForTask(service, {
     title: '历史计划',
@@ -1677,22 +1742,29 @@ test('编辑日志保留归档分类和历史计划；换绑时校验，显式�
   const log = service.createManualLog({
     startedAt: now() - 2 * 60 * 60 * 1000,
     endedAt: now() - 90 * 60 * 1000,
-    categoryId: category.id,
+    tags: ['历史'],
     calendarEventId: historicalEvent.id
   }).log;
-  service.archiveCategory(category.id);
-  service.archiveCategory(otherArchivedCategory.id);
+  const importedTags = Array.from({ length: 11 }, (_, index) => `标签${index}`);
+  repository.transaction((database) => {
+    database.timeLogs.find((item) => item.id === log.id).tags = importedTags;
+  });
 
-  const noteOnly = service.updateLog(log.id, { note: '只改备注' }).log;
-  assert.deepEqual(
-    [noteOnly.categoryId, noteOnly.calendarEventId],
-    [category.id, historicalEvent.id]
-  );
-  assert.equal(service.updateLog(log.id, { categoryId: category.id }).log.categoryId, category.id);
+  const noteOnly = service.updateLog(log.id, {
+    note: '只改备注',
+    tags: importedTags.slice()
+  }).log;
+  assert.deepEqual(noteOnly.tags, importedTags);
+  assert.equal(noteOnly.calendarEventId, historicalEvent.id);
   assert.throws(
-    () => service.updateLog(log.id, { categoryId: otherArchivedCategory.id }),
-    (error) => error.code === 'CATEGORY_ARCHIVED'
+    () => service.updateLog(log.id, { tags: importedTags.concat('新增') }),
+    (error) => error.code === 'TAG_COUNT_EXCEEDED'
   );
+  assert.throws(
+    () => service.updateLog(log.id, { tags: ['一二三四五六'] }),
+    (error) => error.code === 'TAG_TOO_LONG'
+  );
+  assert.deepEqual(service.updateLog(log.id, { tags: [' ＡＩ ', 'AI'] }).log.tags, ['AI']);
 
   service.deleteTask(task.id, true);
   const preserved = service.updateLog(log.id, {

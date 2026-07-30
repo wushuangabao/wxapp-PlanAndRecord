@@ -1,11 +1,10 @@
 const {
   APP_SCHEMA_VERSION,
-  DEFAULT_CATEGORY_ID,
-  DEFAULT_CATEGORY_NAME,
   LOG_STATUS,
   TIMER_STATUS
 } = require('./constants');
 const { createId } = require('./id');
+const { normalizeTags } = require('./tags');
 
 function createInitialDatabase(now = Date.now()) {
   const profileId = createId('profile', now);
@@ -16,14 +15,6 @@ function createInitialDatabase(now = Date.now()) {
       createdAt: now,
       updatedAt: now
     },
-    categories: [{
-      id: DEFAULT_CATEGORY_ID,
-      name: DEFAULT_CATEGORY_NAME,
-      status: 'active',
-      isSystem: true,
-      createdAt: now,
-      updatedAt: now
-    }],
     wishes: [],
     projects: [],
     tasks: [],
@@ -49,15 +40,13 @@ function createIdleTimer() {
   };
 }
 
-function createTimeLog(input, now = Date.now()) {
+function createTimeLog(input, now = Date.now(), options = {}) {
   return {
     id: createId('log', now),
     schemaVersion: APP_SCHEMA_VERSION,
     startedAt: input.startedAt,
     endedAt: input.endedAt,
     durationMinutes: input.durationMinutes,
-    categoryId: input.categoryId || DEFAULT_CATEGORY_ID,
-    categoryNameSnapshot: input.categoryNameSnapshot || DEFAULT_CATEGORY_NAME,
     projectId: input.projectId || null,
     projectNameSnapshot: input.projectNameSnapshot || null,
     taskId: input.taskId || null,
@@ -70,7 +59,9 @@ function createTimeLog(input, now = Date.now()) {
     originRuleId: input.originRuleId || null,
     originOccurrenceId: input.originOccurrenceId || null,
     originRuleSummarySnapshot: input.originRuleSummarySnapshot || null,
-    tags: Array.isArray(input.tags) ? input.tags : [],
+    tags: normalizeTags(input.tags === undefined ? [] : input.tags, {
+      enforceLimits: options.enforceTagLimits !== false
+    }),
     createdAt: now,
     updatedAt: now
   };

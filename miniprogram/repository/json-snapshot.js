@@ -1,7 +1,5 @@
 const {
   APP_SCHEMA_VERSION,
-  DEFAULT_CATEGORY_ID,
-  DEFAULT_CATEGORY_NAME,
   LOG_SOURCE,
   LOG_STATUS,
   MAX_PLAN_PRIORITY,
@@ -12,10 +10,10 @@ const {
 } = require('../domain/constants');
 const { clone } = require('../domain/entities');
 const { DomainError } = require('../domain/errors');
+const { normalizeTags, tagsEqual } = require('../domain/tags');
 const { calculateDurationMinutes, calculateTimerDurationMinutes, isFiniteTimestamp } = require('../domain/time');
 
 const ROOT_COLLECTIONS = [
-  'categories',
   'wishes',
   'projects',
   'tasks',
@@ -112,10 +110,6 @@ function normalizeLocalProfile(profile) {
   return pickKnownFields(profile, ['id', 'createdAt', 'updatedAt']);
 }
 
-function normalizeCategory(category) {
-  return pickKnownFields(category, ['id', 'name', 'status', 'isSystem', 'createdAt', 'updatedAt']);
-}
-
 function normalizeWish(wish) {
   return pickKnownFields(wish, ['id', 'title', 'createdAt', 'updatedAt']);
 }
@@ -179,19 +173,35 @@ function normalizeOccurrenceException(exception) {
 }
 
 function normalizeTimeLog(log) {
-  return pickKnownFields(log, [
-    'id', 'schemaVersion', 'startedAt', 'endedAt', 'durationMinutes', 'categoryId', 'categoryNameSnapshot',
+  const normalized = pickKnownFields(log, [
+    'id', 'schemaVersion', 'startedAt', 'endedAt', 'durationMinutes',
     'projectId', 'projectNameSnapshot', 'taskId', 'taskNameSnapshot', 'calendarEventId', 'calendarEventSummarySnapshot',
     'note', 'status', 'source', 'originRuleId', 'originOccurrenceId', 'originRuleSummarySnapshot', 'tags', 'createdAt', 'updatedAt'
   ]);
+  if (isPlainObject(normalized) && hasOwn(normalized, 'tags')) {
+    try {
+      normalized.tags = normalizeTags(normalized.tags, { enforceLimits: false });
+    } catch (error) {
+      invalidSchema();
+    }
+  }
+  return normalized;
 }
 
 function normalizeTimerDraft(draft) {
-  return pickKnownFields(draft, [
-    'categoryId', 'categoryNameSnapshot', 'projectId', 'projectNameSnapshot',
+  const normalized = pickKnownFields(draft, [
+    'projectId', 'projectNameSnapshot',
     'taskId', 'taskNameSnapshot', 'calendarEventId', 'calendarEventSummarySnapshot',
     'originRuleId', 'originOccurrenceId', 'originRuleSummarySnapshot', 'note', 'tags'
   ]);
+  if (isPlainObject(normalized) && hasOwn(normalized, 'tags')) {
+    try {
+      normalized.tags = normalizeTags(normalized.tags, { enforceLimits: false });
+    } catch (error) {
+      invalidSchema();
+    }
+  }
+  return normalized;
 }
 
 function normalizeTimer(timer) {
@@ -214,7 +224,6 @@ function normalizeRecoveryDraft(recoveryDraft) {
 }
 
 const COLLECTION_NORMALIZERS = {
-  categories: normalizeCategory,
   wishes: normalizeWish,
   projects: normalizeProject,
   tasks: normalizeTask,
@@ -254,14 +263,6 @@ function collectId(ids, id) {
 function validateLocalProfile(profile, ids) {
   if (!requireFields(profile, ['id', 'createdAt', 'updatedAt']) || !requiredString(profile.id) || !validateTimestamps(profile)) invalidSchema();
   collectId(ids, profile.id);
-}
-
-function validateCategory(category, ids) {
-  if (!requireFields(category, ['id', 'name', 'status', 'isSystem', 'createdAt', 'updatedAt'])
-    || !requiredString(category.id) || !requiredString(category.name)
-    || !['active', 'archived'].includes(category.status) || typeof category.isSystem !== 'boolean'
-    || !validateTimestamps(category)) invalidSchema();
-  collectId(ids, category.id);
 }
 
 function validateWish(wish, ids) {
@@ -355,27 +356,37 @@ function validateTimeLog(log, ids) {
   const maximumDurationMinutes = log.source === LOG_SOURCE.TIMER
     ? calculateTimerDurationMinutes(log.startedAt, log.endedAt, [])
     : calculateDurationMinutes(log.startedAt, log.endedAt, []);
-  if (!requireFields(log, ['id', 'schemaVersion', 'startedAt', 'endedAt', 'durationMinutes', 'categoryId', 'categoryNameSnapshot', ...nullableFields, 'note', 'status', 'source', 'tags', 'createdAt', 'updatedAt'])
+  if (!requireFields(log, ['id', 'schemaVersion', 'startedAt', 'endedAt', 'durationMinutes', ...nullableFields, 'note', 'status', 'source', 'tags', 'createdAt', 'updatedAt'])
     || !requiredString(log.id) || log.schemaVersion !== APP_SCHEMA_VERSION || !validTimeRange(log.startedAt, log.endedAt)
     || !Number.isInteger(log.durationMinutes) || log.durationMinutes < 0
-    || log.durationMinutes > maximumDurationMinutes || !requiredString(log.categoryId)
-    || typeof log.categoryNameSnapshot !== 'string' || !nullableFields.every((field) => nullableString(log[field]))
+    || log.durationMinutes > maximumDurationMinutes || !nullableFields.every((field) => nullableString(log[field]))
     || typeof log.note !== 'string' || !validEnum(log.status, LOG_STATUS) || !validEnum(log.source, LOG_SOURCE)
-    || !Array.isArray(log.tags) || !log.tags.every((tag) => typeof tag === 'string') || !validateTimestamps(log)
+    || !validNormalizedTags(log.tags) || !validateTimestamps(log)
     || !validPlanAssociationShape(log, { allowDetachedOccurrence: true })) invalidSchema();
   collectId(ids, log.id);
+}
+
+function validNormalizedTags(tags) {
+  if (!Array.isArray(tags) || !tags.every((tag) => typeof tag === 'string')) {
+    return false;
+  }
+  try {
+    return tagsEqual(tags, normalizeTags(tags, { enforceLimits: false }));
+  } catch (error) {
+    return false;
+  }
 }
 
 function validateTimerDraft(draft) {
   if (!isPlainObject(draft)) invalidSchema();
   const nullableFields = [
-    'categoryId', 'categoryNameSnapshot', 'projectId', 'projectNameSnapshot',
+    'projectId', 'projectNameSnapshot',
     'taskId', 'taskNameSnapshot', 'calendarEventId', 'calendarEventSummarySnapshot',
     'originRuleId', 'originOccurrenceId', 'originRuleSummarySnapshot'
   ];
   if (!nullableFields.every((field) => !hasOwn(draft, field) || nullableString(draft[field]))
     || (hasOwn(draft, 'note') && typeof draft.note !== 'string')
-    || (hasOwn(draft, 'tags') && (!Array.isArray(draft.tags) || !draft.tags.every((tag) => typeof tag === 'string')))
+    || (hasOwn(draft, 'tags') && !validNormalizedTags(draft.tags))
     || !validPlanAssociationShape(draft)) invalidSchema();
 }
 
@@ -387,6 +398,7 @@ function validateTimerStructure(timer) {
     if (!requireFields(pause, ['startedAt', 'endedAt']) || !validPauseRange(pause.startedAt, pause.endedAt)) invalidSchema();
   });
   validateTimerDraft(timer.draft);
+  if (timer.status !== TIMER_STATUS.IDLE && !hasOwn(timer.draft, 'tags')) invalidSchema();
 }
 
 function validateTimer(timer) {
@@ -431,7 +443,6 @@ function validateJsonSnapshot(database) {
 
   const ids = new Set();
   validateLocalProfile(database.localProfile, ids);
-  database.categories.forEach((category) => validateCategory(category, ids));
   database.wishes.forEach((wish) => validateWish(wish, ids));
   database.projects.forEach((project) => validateProject(project, ids));
   database.tasks.forEach((task) => validateTask(task, ids));
@@ -441,10 +452,6 @@ function validateJsonSnapshot(database) {
   database.timeLogs.forEach((log) => validateTimeLog(log, ids));
   validateTimer(database.timer);
   validateRecoveryDraft(database.recoveryDraft);
-
-  const systemCategories = database.categories.filter((category) => category.id === DEFAULT_CATEGORY_ID
-    && category.name === DEFAULT_CATEGORY_NAME && category.status === 'active' && category.isSystem === true);
-  if (systemCategories.length !== 1 || database.categories.filter((category) => category.isSystem).length !== 1) invalidSchema();
 }
 
 function parseJsonSnapshot(jsonText) {
