@@ -2,6 +2,7 @@
 
 > 状态：执行中。M0–M5 的主体能力已落地，但各里程碑退出条件仍须结合代码审查缺口复核；M6 发布加固、完整模拟器矩阵和真机验收尚未完成。
 > 编制日期：2026-07-28
+> 最近同步：2026-07-30（计划块—任务—项目与日志关联规则）
 > 产品基线：[product-design.zh-CN.md](./product-design.zh-CN.md)
 > 待复核事项：[document-review-backlog.zh-CN.md](./document-review-backlog.zh-CN.md)
 > 适用范围：第一阶段“纯本地微信小程序闭环”
@@ -49,6 +50,7 @@ MVP 完成时，用户应能在无登录、无开发者后端、无自动业务�
 
 - 采用“页面 → 应用服务 → 领域模型 → `LocalRepository`”分层；页面不得直接读写存储。
 - `CalendarEvent` 只表示计划；`TimeLog` 只表示 `candidate` 或 `confirmed`。
+- 关系只按产品基线 [3.1.1 节](./product-design.zh-CN.md#311-计划与实际偏差) 建立：计划块必须关联任务，项目仅由 `Task.projectId` 派生；日志只直接关联分类和可选计划块，不直接关联任务或项目。
 - 默认统计只包含 `confirmed`；日志来源在编辑或确认后保持不变。
 - 所有关联使用稳定 ID；删除关联对象前保存名称或摘要快照，再清除失效引用。
 - 活动项目上限只使用 `MAX_ACTIVE_PROJECTS = 5`；“放弃项目”是原子删除而非第三种状态。

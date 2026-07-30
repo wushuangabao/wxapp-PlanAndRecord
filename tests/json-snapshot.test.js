@@ -177,6 +177,111 @@ test('导出会移除各层遗留字段，且输出仍可被当前解析器读�
   assert.doesNotThrow(() => parseJsonSnapshot(JSON.stringify(exported)));
 });
 
+test('重复计划实例关联在计时器、恢复草稿和 JSON 往返中保留', () => {
+  const originDraft = {
+    originRuleId: 'rule_1',
+    originOccurrenceId: `rule_1:1:${NOW}`,
+    originRuleSummarySnapshot: '每周重复计划'
+  };
+  const database = copySnapshot();
+  database.timer.draft = { ...originDraft };
+  database.recoveryDraft = {
+    reason: '等待用户恢复',
+    timer: {
+      status: 'running',
+      startedAt: NOW,
+      endedAt: null,
+      pausedAt: null,
+      pauses: [],
+      draft: { ...originDraft }
+    },
+    createdAt: NOW
+  };
+
+  const parsed = parseJsonSnapshot(JSON.stringify(database));
+  const exported = JSON.parse(exportJson(database));
+
+  assert.deepEqual(parsed.timer.draft, originDraft);
+  assert.deepEqual(parsed.recoveryDraft.timer.draft, originDraft);
+  assert.deepEqual(exported.timer.draft, originDraft);
+  assert.deepEqual(exported.recoveryDraft.timer.draft, originDraft);
+});
+
+test('日志 JSON 拒绝具体计划与 origin 混用，并区分完整关联和历史实例追溯', () => {
+  expectSchemaInvalid((database) => {
+    database.timeLogs.push({
+      ...validLog(),
+      calendarEventId: 'event_1',
+      originRuleId: 'rule_1',
+      originOccurrenceId: 'rule_1:1'
+    });
+  });
+  expectSchemaInvalid((database) => {
+    database.timeLogs.push({
+      ...validLog(),
+      originRuleId: 'rule_1'
+    });
+  });
+
+  const historicalTrace = copySnapshot();
+  historicalTrace.timeLogs.push({
+    ...validLog(),
+    projectId: 'legacy_project',
+    taskId: 'legacy_task',
+    originOccurrenceId: 'deleted_rule:1'
+  });
+  assert.doesNotThrow(() => validateJsonSnapshot(historicalTrace));
+
+  const completeOrigin = copySnapshot();
+  completeOrigin.timeLogs.push({
+    ...validLog(),
+    originRuleId: 'rule_1',
+    originOccurrenceId: 'rule_1:1'
+  });
+  assert.doesNotThrow(() => validateJsonSnapshot(completeOrigin));
+});
+
+test('计时与恢复草稿 JSON 要求具体计划和完整 origin 二选一', () => {
+  expectSchemaInvalid((database) => {
+    database.timer = {
+      ...createIdleTimer(),
+      draft: {
+        calendarEventId: 'event_1',
+        originRuleId: 'rule_1',
+        originOccurrenceId: 'rule_1:1'
+      }
+    };
+  });
+  expectSchemaInvalid((database) => {
+    database.timer = {
+      ...createIdleTimer(),
+      draft: { originRuleId: 'rule_1' }
+    };
+  });
+  expectSchemaInvalid((database) => {
+    database.recoveryDraft = {
+      reason: '等待恢复',
+      timer: {
+        ...createIdleTimer(),
+        draft: { originOccurrenceId: 'rule_1:1' }
+      },
+      createdAt: NOW
+    };
+  });
+
+  const database = copySnapshot();
+  database.timer = {
+    ...createIdleTimer(),
+    draft: {
+      projectId: 'legacy_project',
+      taskId: 'legacy_task',
+      originRuleId: 'rule_1',
+      originOccurrenceId: 'rule_1:1'
+    }
+  };
+  assert.doesNotThrow(() => validateJsonSnapshot(database));
+});
+
 test('结构化比较忽略对象属性顺序但保留数组顺序和时间字段', () => {
   assert.equal(persistedValueEquals({ id: 'wish_1', title: 'A' }, { title: 'A', id: 'wish_1' }), true);
   assert.equal(persistedValueEquals({ tags: ['a', 'b'] }, { tags: ['b', 'a'] }), false);
@@ -245,6 +350,9 @@ test('例外、日志、计时器和恢复草稿字段类型严格校验', () =>
   expectSchemaInvalid((database) => { database.timeLogs.push({ ...validLog(), tags: ['ok', 1] }); });
   expectSchemaInvalid((database) => { database.timer = { ...createIdleTimer(), status: 'broken' }; });
   expectSchemaInvalid((database) => { database.timer = { ...createIdleTimer(), draft: { note: 1 } }; });
+  expectSchemaInvalid((database) => { database.timer = { ...createIdleTimer(), draft: { originRuleId: 1 } }; });
+  expectSchemaInvalid((database) => { database.timer = { ...createIdleTimer(), draft: { originOccurrenceId: 1 } }; });
+  expectSchemaInvalid((database) => { database.timer = { ...createIdleTimer(), draft: { originRuleSummarySnapshot: 1 } }; });
   expectSchemaInvalid((database) => { database.recoveryDraft = { reason: 1, timer: createIdleTimer(), createdAt: NOW }; });
   expectSchemaInvalid((database) => { database.recoveryDraft = { reason: '恢复', timer: { ...createIdleTimer(), pauses: {} }, createdAt: NOW }; });
 });

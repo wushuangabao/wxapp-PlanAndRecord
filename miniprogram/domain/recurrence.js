@@ -1,6 +1,10 @@
 const { REPEAT_FREQUENCY } = require('./constants');
 const { createId } = require('./id');
 
+function hasOwn(object, key) {
+  return Boolean(object) && Object.prototype.hasOwnProperty.call(object, key);
+}
+
 function occurrenceKey(ruleId, occurrenceStart) {
   return `${ruleId}:${occurrenceStart}`;
 }
@@ -184,10 +188,14 @@ function projectRule(rule, rangeStart, rangeEnd, exceptions) {
         startedAt: (override && override.startedAt) || startedAt,
         endedAt: (override && override.endedAt) || endedAt,
         priority: (override && override.priority) || revision.priority,
-        projectId: (override && override.projectId) || revision.projectId,
-        projectNameSnapshot: (override && override.projectNameSnapshot) || revision.projectNameSnapshot,
-        taskId: (override && override.taskId) || revision.taskId,
-        taskNameSnapshot: (override && override.taskNameSnapshot) || revision.taskNameSnapshot,
+        projectId: null,
+        projectNameSnapshot: hasOwn(override, 'projectNameSnapshot')
+          ? override.projectNameSnapshot
+          : revision.projectNameSnapshot,
+        taskId: hasOwn(override, 'taskId') ? override.taskId : revision.taskId,
+        taskNameSnapshot: hasOwn(override, 'taskNameSnapshot')
+          ? override.taskNameSnapshot
+          : revision.taskNameSnapshot,
         originRuleSummarySnapshot: rule.title
       });
     }

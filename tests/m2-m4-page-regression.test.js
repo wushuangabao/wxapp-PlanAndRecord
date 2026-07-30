@@ -4,8 +4,24 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const calendarWxmlPath = path.join(__dirname, '../miniprogram/pages/calendar/index.wxml');
+const calendarScriptPath = path.join(__dirname, '../miniprogram/pages/calendar/index.js');
+const calendarPagePath = require.resolve('../miniprogram/pages/calendar/index.js');
 const plansWxmlPath = path.join(__dirname, '../miniprogram/pages/plans/index.wxml');
 const plansWxssPath = path.join(__dirname, '../miniprogram/pages/plans/index.wxss');
+
+function loadCalendarPage() {
+  const originalPage = global.Page;
+  let page;
+  global.Page = (definition) => { page = definition; };
+  delete require.cache[calendarPagePath];
+  require(calendarPagePath);
+  global.Page = originalPage;
+  page.setData = (updates, callback) => {
+    Object.assign(page.data, updates);
+    if (callback) callback();
+  };
+  return page;
+}
 
 test('M3：已归档项目可在页面中恢复', () => {
   const wxml = fs.readFileSync(plansWxmlPath, 'utf8');
@@ -59,7 +75,417 @@ test('M3：TODO 和项目的右上角新建入口为无底色深灰加号，页�
 test('M4：日历提供计划块编辑删除入口，重复实例编辑弹层只渲染一次', () => {
   const wxml = fs.readFileSync(calendarWxmlPath, 'utf8');
   assert.match(wxml, /openPlanEditor/);
+  assert.match(wxml, /item\.type === 'plan' && item\.canEditPlan/);
+  assert.match(wxml, /\(item\.type === 'plan' \|\| item\.virtual\) && item\.canAssociate/);
   assert.match(wxml, /deletePlan/);
   assert.match(wxml, /savePlanEditor/);
   assert.equal((wxml.match(/修改重复实例/g) || []).length, 1);
+});
+
+test('日历计划块只选择必选任务，日志编辑只选择分类和计划块', () => {
+  const script = fs.readFileSync(calendarScriptPath, 'utf8');
+  const wxml = fs.readFileSync(calendarWxmlPath, 'utf8');
+  assert.match(wxml, /任务（必选）/);
+  assert.match(wxml, /项目归属（由任务决定）/);
+  assert.match(wxml, /logCategoryIndex/);
+  assert.match(wxml, /logEventIndex/);
+  assert.match(wxml, /logTagsText/);
+  assert.doesNotMatch(wxml, /data-key="projectIndex"|data-key="planProjectIndex"/);
+  assert.doesNotMatch(script, /projectId:\s*project/);
+  assert.match(script, /originRuleId: item\.ruleId/);
+  assert.match(script, /calendarEventId: item\.id/);
+});
+
+test('日历创建计划只向服务提交任务关联', () => {
+  const originalGetApp = global.getApp;
+  const originalWx = global.wx;
+  let received;
+  global.getApp = () => ({
+    globalData: {
+      bootstrap: {
+        applicationService: {
+          createCalendarEvent(input) { received = input; }
+        }
+      }
+    }
+  });
+  global.wx = { showToast() {} };
+  try {
+    const page = loadCalendarPage();
+    Object.assign(page.data, {
+      title: '写评审',
+      startDate: '2026-07-30',
+      startTime: '09:00',
+      endDate: '2026-07-30',
+      endTime: '10:00',
+      tasks: [{ id: 'task_review', title: '评审任务' }],
+      taskIndex: 0,
+      repeatEnabled: false
+    });
+    page.refresh = () => {};
+    page.createPlan();
+    assert.equal(received.taskId, 'task_review');
+    assert.equal(Object.prototype.hasOwnProperty.call(received, 'projectId'), false);
+  } finally {
+    global.getApp = originalGetApp;
+    global.wx = originalWx;
+  }
+});
+
+test('日历按任务当前 projectId 派生只读项目标题', () => {
+  const originalGetApp = global.getApp;
+  const snapshot = {
+    categories: [],
+    projects: [{ id: 'project_current', title: '重命名后的项目', status: 'active' }],
+    tasks: [{
+      id: 'task_plan',
+      title: '计划任务',
+      status: 'todo',
+      projectId: 'project_current',
+      projectNameSnapshot: '旧项目名'
+    }],
+    calendarEvents: []
+  };
+  global.getApp = () => ({
+    globalData: {
+      bootstrap: {
+        applicationService: {
+          snapshot() { return snapshot; },
+          timeline() { return []; }
+        }
+      }
+    }
+  });
+  try {
+    const page = loadCalendarPage();
+    page.refresh();
+    assert.equal(page.data.tasks[1].derivedProjectName, '重命名后的项目');
+  } finally {
+    global.getApp = originalGetApp;
+  }
+});
+
+test('尚未结束的失效任务计划可补绑任务，历史失效计划保持只读', () => {
+  const originalGetApp = global.getApp;
+  const originalWx = global.wx;
+  const now = Date.now();
+  const updates = [];
+  const toasts = [];
+  const snapshot = {
+    categories: [],
+    projects: [],
+    tasks: [{ id: 'task_live', title: '有效任务', status: 'todo', projectId: null }],
+    calendarEvents: []
+  };
+  const items = [{
+    id: 'event_valid_history',
+    type: 'plan',
+    virtual: false,
+    taskId: 'task_live',
+    title: '有效任务历史计划',
+    startedAt: now - 2 * 60 * 60 * 1_000,
+    endedAt: now - 60 * 60 * 1_000
+  }, {
+    id: 'event_repairable',
+    type: 'plan',
+    virtual: false,
+    taskId: null,
+    title: '待补绑未来计划',
+    startedAt: now + 60 * 60 * 1_000,
+    endedAt: now + 2 * 60 * 60 * 1_000
+  }, {
+    id: 'event_read_only',
+    type: 'plan',
+    virtual: false,
+    taskId: null,
+    title: '只读历史计划',
+    startedAt: now - 2 * 60 * 60 * 1_000,
+    endedAt: now - 60 * 60 * 1_000
+  }, {
+    id: 'rule_taskless:1:123',
+    type: 'candidate',
+    virtual: true,
+    taskId: null,
+    title: '失效虚拟计划',
+    startedAt: now + 60 * 60 * 1_000,
+    endedAt: now + 2 * 60 * 60 * 1_000
+  }];
+  const service = {
+    snapshot() { return snapshot; },
+    timeline() { return items; },
+    updateCalendarEvent(id, input) { updates.push({ id, input }); }
+  };
+  global.getApp = () => ({
+    globalData: {
+      bootstrap: {
+        applicationService: service
+      }
+    }
+  });
+  global.wx = {
+    showToast(options) { toasts.push(options); }
+  };
+  try {
+    const page = loadCalendarPage();
+    page.refresh();
+    const itemById = new Map(page.data.timeline.map((item) => [item.id, item]));
+
+    assert.equal(itemById.get('event_valid_history').canAssociate, true);
+    assert.equal(itemById.get('event_valid_history').canEditPlan, true);
+    assert.equal(itemById.get('event_repairable').canAssociate, false);
+    assert.equal(itemById.get('event_repairable').canEditPlan, true);
+    assert.equal(itemById.get('event_read_only').canAssociate, false);
+    assert.equal(itemById.get('event_read_only').canEditPlan, false);
+    assert.equal(itemById.get('rule_taskless:1:123').canEditPlan, false);
+
+    page.openPlanEditor({
+      currentTarget: { dataset: { item: itemById.get('event_repairable') } }
+    });
+    assert.equal(page.data.planTaskIndex, 0);
+    assert.equal(page.data.planTasks[0].title, '请选择任务');
+
+    page.refresh = () => {};
+    page.savePlanEditor();
+    assert.equal(updates.length, 0);
+    assert.equal(toasts.at(-1).title, '请选择任务');
+
+    page.data.planTasks.push({ id: 'task_missing', title: '已失效任务' });
+    page.data.planTaskIndex = page.data.planTasks.length - 1;
+    page.savePlanEditor();
+    assert.equal(updates.length, 0);
+    assert.equal(toasts.at(-1).title, '请选择任务');
+
+    page.data.planTaskIndex = page.data.planTasks.findIndex((item) => item.id === 'task_live');
+    page.savePlanEditor();
+    assert.equal(updates.length, 1);
+    assert.equal(updates[0].id, 'event_repairable');
+    assert.equal(updates[0].input.taskId, 'task_live');
+  } finally {
+    global.getApp = originalGetApp;
+    global.wx = originalWx;
+  }
+});
+
+test('日历可从具体或虚拟计划块开始计时，并使用对应联合关联', () => {
+  const originalGetApp = global.getApp;
+  const originalWx = global.wx;
+  const associations = [];
+  global.getApp = () => ({
+    globalData: {
+      bootstrap: {
+        applicationService: {
+          startTimer(input) { associations.push(input); }
+        }
+      }
+    }
+  });
+  global.wx = {
+    showToast() {},
+    switchTab() {}
+  };
+  try {
+    const page = loadCalendarPage();
+    page.startTimerFromPlan({
+      currentTarget: {
+        dataset: { item: { id: 'event_plan', virtual: false } }
+      }
+    });
+    page.startTimerFromPlan({
+      currentTarget: {
+        dataset: {
+          item: {
+            id: 'virtual_display_id',
+            virtual: true,
+            ruleId: 'rule_repeat',
+            originOccurrenceId: 'rule_repeat:2:123'
+          }
+        }
+      }
+    });
+    assert.deepEqual(associations, [
+      { calendarEventId: 'event_plan' },
+      {
+        originRuleId: 'rule_repeat',
+        originOccurrenceId: 'rule_repeat:2:123'
+      }
+    ]);
+  } finally {
+    global.getApp = originalGetApp;
+    global.wx = originalWx;
+  }
+});
+
+test('日志编辑可保留或明确解除重复计划实例关联', () => {
+  const originalGetApp = global.getApp;
+  const originalWx = global.wx;
+  const updates = [];
+  const ranges = [];
+  const snapshot = {
+    categories: [{ id: 'category_focus', name: '专注', status: 'active' }],
+    projects: [],
+    tasks: [{ id: 'task_repeat', title: '重复任务', status: 'todo' }],
+    calendarEvents: []
+  };
+  const service = {
+    snapshot() { return snapshot; },
+    timeline() {
+      throw new Error('计划选择器不应使用会按日志去重的 timeline');
+    },
+    planAssociationCandidates(start, end) {
+      ranges.push({ start, end });
+      return [{
+        id: 'event_choice',
+        virtual: false,
+        type: 'plan',
+        taskId: 'task_repeat',
+        title: '可改绑具体计划',
+        startedAt: new Date(2026, 6, 30, 10, 0).getTime(),
+        endedAt: new Date(2026, 6, 30, 11, 0).getTime()
+      }, {
+        id: 'rule_choice:1:123',
+        virtual: true,
+        type: 'candidate',
+        ruleId: 'rule_choice',
+        originOccurrenceId: 'rule_choice:1:123',
+        taskId: 'task_repeat',
+        title: '可改绑循环计划',
+        startedAt: new Date(2026, 6, 30, 11, 0).getTime(),
+        endedAt: new Date(2026, 6, 30, 12, 0).getTime()
+      }, {
+        id: 'rule_taskless:1:123',
+        virtual: true,
+        type: 'candidate',
+        ruleId: 'rule_taskless',
+        originOccurrenceId: 'rule_taskless:1:123',
+        taskId: 'deleted_task',
+        title: '失效循环计划',
+        startedAt: new Date(2026, 6, 30, 11, 0).getTime(),
+        endedAt: new Date(2026, 6, 30, 12, 0).getTime()
+      }];
+    },
+    updateLog(id, input) { updates.push({ id, input }); }
+  };
+  global.getApp = () => ({
+    globalData: {
+      bootstrap: {
+        applicationService: service
+      }
+    }
+  });
+  global.wx = { showToast() {} };
+  try {
+    const page = loadCalendarPage();
+    const log = {
+      id: 'log_repeat',
+      type: 'confirmed',
+      startedAt: new Date(2026, 6, 30, 9, 0).getTime(),
+      endedAt: new Date(2026, 6, 30, 10, 0).getTime(),
+      categoryId: 'category_focus',
+      categoryNameSnapshot: '专注',
+      calendarEventId: null,
+      originRuleId: 'rule_repeat',
+      originOccurrenceId: 'rule_repeat:rev:occurrence',
+      originRuleSummarySnapshot: '每日写作',
+      note: ''
+    };
+    Object.assign(page.data, {
+      categories: snapshot.categories
+    });
+    page.currentSnapshot = snapshot;
+    page.currentService = service;
+    page.refresh = () => {};
+
+    page.openLogEditor({ currentTarget: { dataset: { item: log } } });
+    assert.equal(page.data.logEvents[page.data.logEventIndex].associationType, 'current-origin');
+    assert.equal(page.data.logEvents.some((item) => item.calendarEventId === 'event_choice'), true);
+    assert.equal(page.data.logEvents.some((item) => item.originRuleId === 'rule_choice'), true);
+    assert.equal(page.data.logEvents.some((item) => item.originRuleId === 'rule_taskless'), false);
+    assert.ok(ranges.every((range) => range.end - range.start <= 3 * 24 * 60 * 60 * 1_000));
+    const rangesBeforeTimeChange = ranges.length;
+    page.onEditorField({
+      currentTarget: { dataset: { key: 'logStart' } },
+      detail: { value: '08:30' }
+    });
+    assert.equal(ranges.length, rangesBeforeTimeChange + 1);
+    assert.equal(page.data.logEvents[page.data.logEventIndex].associationType, 'current-origin');
+    page.saveLogEditor();
+    assert.equal(Object.prototype.hasOwnProperty.call(updates[0].input, 'calendarEventId'), false);
+
+    page.openLogEditor({ currentTarget: { dataset: { item: log } } });
+    page.data.logEventIndex = 0;
+    page.saveLogEditor();
+    assert.equal(updates[1].input.calendarEventId, null);
+
+    page.openLogEditor({ currentTarget: { dataset: { item: log } } });
+    page.data.logEventIndex = page.data.logEvents.findIndex(
+      (item) => item.originRuleId === 'rule_choice'
+    );
+    page.saveLogEditor();
+    assert.equal(updates[2].input.originRuleId, 'rule_choice');
+    assert.equal(updates[2].input.originOccurrenceId, 'rule_choice:1:123');
+  } finally {
+    global.getApp = originalGetApp;
+    global.wx = originalWx;
+  }
+});
+
+test('日志编辑器会保留当前已归档分类供原值保存', () => {
+  const originalGetApp = global.getApp;
+  const originalWx = global.wx;
+  let received;
+  const snapshot = {
+    categories: [
+      { id: 'category_default', name: '未分类', status: 'active' },
+      { id: 'category_old', name: '旧分类', status: 'archived' }
+    ],
+    projects: [],
+    tasks: [],
+    calendarEvents: []
+  };
+  const service = {
+    snapshot() { return snapshot; },
+    planAssociationCandidates() { return []; },
+    updateLog(id, input) { received = { id, input }; }
+  };
+  global.getApp = () => ({
+    globalData: {
+      bootstrap: {
+        applicationService: service
+      }
+    }
+  });
+  global.wx = { showToast() {} };
+  try {
+    const page = loadCalendarPage();
+    const archivedCategory = { id: 'category_old', name: '旧分类', status: 'archived' };
+    Object.assign(page.data, {
+      categories: [{ id: 'category_default', name: '未分类', status: 'active' }]
+    });
+    page.currentSnapshot = snapshot;
+    page.currentService = service;
+    page.categoryById = new Map([[archivedCategory.id, archivedCategory]]);
+    page.refresh = () => {};
+    page.openLogEditor({
+      currentTarget: {
+        dataset: {
+          item: {
+            id: 'log_archived_category',
+            type: 'confirmed',
+            startedAt: new Date(2026, 6, 30, 9, 0).getTime(),
+            endedAt: new Date(2026, 6, 30, 10, 0).getTime(),
+            categoryId: archivedCategory.id,
+            categoryNameSnapshot: archivedCategory.name,
+            calendarEventId: null,
+            note: ''
+          }
+        }
+      }
+    });
+    assert.equal(page.data.logCategories[page.data.logCategoryIndex].id, archivedCategory.id);
+    page.saveLogEditor();
+    assert.equal(received.input.categoryId, archivedCategory.id);
+  } finally {
+    global.getApp = originalGetApp;
+    global.wx = originalWx;
+  }
 });

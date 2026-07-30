@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { createInitialDatabase, createIdleTimer } = require('../miniprogram/domain/entities');
+const { projectRule } = require('../miniprogram/domain/recurrence');
 const {
   IMPORT_MODE,
   CONFLICT_POLICY,
@@ -237,8 +238,7 @@ test('八类顶层聚合均按 ID 合并，项目和规则的嵌套聚合随父�
   imported.occurrenceExceptions.push(occurrenceException('exception_imported', 'rule_imported', null));
   imported.timeLogs.push(timeLog('log_imported', {
     projectId: 'project_imported', projectNameSnapshot: '项目', taskId: 'task_imported', taskNameSnapshot: '任务',
-    calendarEventId: 'event_imported', calendarEventSummarySnapshot: '计划', originRuleId: 'rule_imported',
-    originOccurrenceId: 'rule_imported:1', originRuleSummarySnapshot: '重复计划'
+    calendarEventId: 'event_imported', calendarEventSummarySnapshot: '计划'
   }));
 
   const resolved = resolveImportAnalysis(createImportAnalysis(local, imported, {
@@ -311,7 +311,7 @@ test('最终合并结果保留本地实体时，不会误修复导入任务的�
   assert.equal(resolved.summary.repairedReferenceCount, 0);
 });
 
-test('最终引用修复清空失效可选关联、重映射分类、丢弃无规则例外并精确计数', () => {
+test('最终引用修复忽略旧直接关系字段，并只计数当前有效关系的修复', () => {
   const local = database();
   local.tasks.push(task('task_missing_refs', '任务', 'project_missing', '任务所属项目快照'));
   local.calendarEvents.push(calendarEvent('event_missing_refs', '计划', {
@@ -329,10 +329,13 @@ test('最终引用修复清空失效可选关联、重映射分类、丢弃无�
     taskId: 'task_missing', taskNameSnapshot: '例外任务快照'
   }));
   local.occurrenceExceptions.push(occurrenceException('exception_orphan', 'rule_missing', null));
-  local.timeLogs.push(timeLog('log_missing_refs', {
+  local.timeLogs.push(timeLog('log_missing_event', {
     categoryId: 'category_missing', categoryNameSnapshot: '旧分类', projectId: 'project_missing',
     projectNameSnapshot: '日志项目快照', taskId: 'task_missing', taskNameSnapshot: '日志任务快照',
-    calendarEventId: 'event_missing', calendarEventSummarySnapshot: '日志计划快照', originRuleId: 'rule_missing',
+    calendarEventId: 'event_missing', calendarEventSummarySnapshot: '日志计划快照'
+  }));
+  local.timeLogs.push(timeLog('log_missing_rule', {
+    originRuleId: 'rule_missing',
     originOccurrenceId: 'rule_missing:occurrence', originRuleSummarySnapshot: '日志规则快照'
   }));
 
@@ -343,11 +346,29 @@ test('最终引用修复清空失效可选关联、重映射分类、丢弃无�
   const repairedEvent = resolved.database.calendarEvents[0];
   const repairedRevision = resolved.database.repeatRules[0].revisions[0];
   const repairedOverride = resolved.database.occurrenceExceptions[0].override;
-  const repairedLog = resolved.database.timeLogs[0];
+  const repairedEventLog = resolved.database.timeLogs.find((item) => item.id === 'log_missing_event');
+  const repairedRuleLog = resolved.database.timeLogs.find((item) => item.id === 'log_missing_rule');
 
-  assert.deepEqual([repairedTask.projectId, repairedEvent.projectId, repairedEvent.taskId, repairedEvent.repeatRuleId], [null, null, null, null]);
-  assert.deepEqual([repairedRevision.projectId, repairedRevision.taskId, repairedOverride.projectId, repairedOverride.taskId], [null, null, null, null]);
-  assert.deepEqual([repairedLog.projectId, repairedLog.taskId, repairedLog.calendarEventId, repairedLog.originRuleId], [null, null, null, null]);
+  assert.deepEqual(
+    [repairedTask.projectId, repairedEvent.projectId, repairedEvent.taskId, repairedEvent.repeatRuleId],
+    [null, 'project_missing', null, null]
+  );
+  assert.deepEqual(
+    [repairedRevision.projectId, repairedRevision.taskId, repairedOverride.projectId, repairedOverride.taskId],
+    ['project_missing', null, 'project_missing', null]
+  );
+  assert.deepEqual(
+    [
+      repairedEventLog.projectId,
+      repairedEventLog.taskId,
+      repairedEventLog.calendarEventId
+    ],
+    ['project_missing', 'task_missing', null]
+  );
+  assert.deepEqual(
+    [repairedRuleLog.originRuleId, repairedRuleLog.originOccurrenceId],
+    [null, 'rule_missing:occurrence']
+  );
   assert.equal(repairedTask.projectNameSnapshot, '任务所属项目快照');
   assert.equal(repairedEvent.projectNameSnapshot, '计划项目快照');
   assert.equal(repairedEvent.taskNameSnapshot, '计划任务快照');
@@ -356,16 +377,182 @@ test('最终引用修复清空失效可选关联、重映射分类、丢弃无�
   assert.equal(repairedRevision.taskNameSnapshot, '修订任务快照');
   assert.equal(repairedOverride.projectNameSnapshot, '例外项目快照');
   assert.equal(repairedOverride.taskNameSnapshot, '例外任务快照');
-  assert.equal(repairedLog.projectNameSnapshot, '日志项目快照');
-  assert.equal(repairedLog.taskNameSnapshot, '日志任务快照');
-  assert.equal(repairedLog.calendarEventSummarySnapshot, '日志计划快照');
-  assert.equal(repairedLog.originRuleSummarySnapshot, '日志规则快照');
-  assert.equal(repairedLog.categoryId, 'category_uncategorized');
-  assert.equal(repairedLog.categoryNameSnapshot, '未分类');
-  assert.equal(repairedLog.originOccurrenceId, 'rule_missing:occurrence');
+  assert.equal(repairedEventLog.projectNameSnapshot, '日志项目快照');
+  assert.equal(repairedEventLog.taskNameSnapshot, '日志任务快照');
+  assert.equal(repairedEventLog.calendarEventSummarySnapshot, '日志计划快照');
+  assert.equal(repairedRuleLog.originRuleSummarySnapshot, '日志规则快照');
+  assert.equal(repairedEventLog.categoryId, 'category_uncategorized');
+  assert.equal(repairedEventLog.categoryNameSnapshot, '未分类');
   assert.equal(resolved.database.occurrenceExceptions.some((item) => item.id === 'exception_orphan'), false);
-  assert.equal(resolved.summary.repairedReferenceCount, 14);
+  assert.equal(resolved.summary.repairedReferenceCount, 9);
   assert.equal(resolved.summary.discardedExceptionCount, 1);
+});
+
+test('USE_IMPORTED 替换为 taskless 计划后修复本机 timer 关联且不计 legacy direct IDs', () => {
+  const local = database();
+  local.tasks.push(task('task_local', '本机任务'));
+  local.calendarEvents.push(calendarEvent('event_conflict', '本机计划', {
+    taskId: 'task_local',
+    taskNameSnapshot: '本机任务'
+  }));
+  local.timer = {
+    status: 'running',
+    startedAt: NOW - 60_000,
+    endedAt: null,
+    pausedAt: null,
+    pauses: [],
+    draft: {
+      projectId: 'legacy_project',
+      projectNameSnapshot: '旧项目',
+      taskId: 'task_local',
+      taskNameSnapshot: '本机任务',
+      calendarEventId: 'event_conflict',
+      calendarEventSummarySnapshot: '本机计划快照'
+    }
+  };
+  const imported = database();
+  imported.calendarEvents.push(calendarEvent('event_conflict', '导入的无任务计划'));
+
+  const resolved = resolveImportAnalysis(createImportAnalysis(local, imported, {
+    mode: IMPORT_MODE.INCREMENTAL,
+    now: NOW + 1
+  }), CONFLICT_POLICY.USE_IMPORTED);
+
+  assert.deepEqual(
+    [
+      resolved.database.timer.draft.projectId,
+      resolved.database.timer.draft.taskId,
+      resolved.database.timer.draft.calendarEventId,
+      resolved.database.timer.draft.calendarEventSummarySnapshot
+    ],
+    [null, null, null, '本机计划快照']
+  );
+  assert.equal(resolved.summary.repairedReferenceCount, 1);
+});
+
+test('USE_IMPORTED 替换为 taskless 计划后同步修复本机 recovery 草稿', () => {
+  const local = database();
+  local.tasks.push(task('task_local', '本机任务'));
+  local.calendarEvents.push(calendarEvent('event_conflict', '本机计划', {
+    taskId: 'task_local',
+    taskNameSnapshot: '本机任务'
+  }));
+  local.recoveryDraft = {
+    reason: '等待用户恢复',
+    timer: {
+      ...createIdleTimer(),
+      draft: {
+        projectId: 'legacy_project',
+        taskId: 'task_local',
+        calendarEventId: 'event_conflict',
+        calendarEventSummarySnapshot: '恢复计划快照'
+      }
+    },
+    createdAt: NOW
+  };
+  const imported = database();
+  imported.calendarEvents.push(calendarEvent('event_conflict', '导入的无任务计划'));
+
+  const resolved = resolveImportAnalysis(createImportAnalysis(local, imported, {
+    mode: IMPORT_MODE.INCREMENTAL,
+    now: NOW + 1
+  }), CONFLICT_POLICY.USE_IMPORTED);
+
+  const draft = resolved.database.recoveryDraft.timer.draft;
+  assert.deepEqual(
+    [draft.projectId, draft.taskId, draft.calendarEventId, draft.calendarEventSummarySnapshot],
+    [null, null, null, '恢复计划快照']
+  );
+  assert.equal(resolved.summary.repairedReferenceCount, 1);
+});
+
+test('规则冲突使本机 origin 草稿命中 taskless 实例时清除完整 pair', () => {
+  const local = database();
+  local.tasks.push(task('task_local', '本机任务'));
+  local.repeatRules.push(repeatRule('rule_conflict', '本机规则', [{
+    ...revision('revision_conflict', { taskId: 'task_local', taskNameSnapshot: '本机任务' }),
+    frequency: 'daily',
+    weekdays: []
+  }]));
+  local.timer = {
+    status: 'running',
+    startedAt: NOW - 60_000,
+    endedAt: null,
+    pausedAt: null,
+    pauses: [],
+    draft: {
+      originRuleId: 'rule_conflict',
+      originOccurrenceId: `rule_conflict:1:${NOW}`,
+      originRuleSummarySnapshot: '本机规则快照'
+    }
+  };
+  const imported = database();
+  imported.repeatRules.push(repeatRule('rule_conflict', '导入的无任务规则', [{
+    ...revision('revision_conflict'),
+    frequency: 'daily',
+    weekdays: []
+  }], NOW + 1));
+
+  const resolved = resolveImportAnalysis(createImportAnalysis(local, imported, {
+    mode: IMPORT_MODE.INCREMENTAL,
+    now: NOW + 2
+  }), CONFLICT_POLICY.USE_IMPORTED);
+
+  assert.deepEqual(
+    [
+      resolved.database.timer.draft.originRuleId,
+      resolved.database.timer.draft.originOccurrenceId,
+      resolved.database.timer.draft.originRuleSummarySnapshot
+    ],
+    [null, null, '本机规则快照']
+  );
+  assert.equal(resolved.summary.repairedReferenceCount, 1);
+});
+
+test('修复失效 override 任务后投影保留 null，不回落到 revision 任务或兼容项目', () => {
+  const local = database();
+  local.projects.push(project('project_source', '规则项目'));
+  local.tasks.push(task('task_source', '规则任务', 'project_source', '规则项目'));
+  local.repeatRules.push(repeatRule('rule_override', '含失效改绑的规则', [{
+    ...revision('revision_override', {
+      projectId: 'project_source',
+      projectNameSnapshot: '规则项目',
+      taskId: 'task_source',
+      taskNameSnapshot: '规则任务'
+    }),
+    frequency: 'daily',
+    weekdays: []
+  }]));
+  local.occurrenceExceptions.push(occurrenceException(
+    'exception_override',
+    'rule_override',
+    {
+      title: '失效改绑',
+      startedAt: NOW,
+      endedAt: NOW + 30 * 60 * 1000,
+      priority: 1,
+      projectId: 'legacy_project',
+      projectNameSnapshot: '旧改绑项目',
+      taskId: 'missing_task',
+      taskNameSnapshot: '已删除改绑任务'
+    }
+  ));
+
+  const resolved = resolveImportAnalysis(createImportAnalysis(local, database(), {
+    mode: IMPORT_MODE.INCREMENTAL,
+    now: NOW + 1
+  }));
+  const rule = resolved.database.repeatRules[0];
+  const exception = resolved.database.occurrenceExceptions[0];
+  const occurrence = projectRule(rule, NOW, NOW, resolved.database.occurrenceExceptions)[0];
+
+  assert.equal(exception.override.taskId, null);
+  assert.equal(exception.override.projectId, 'legacy_project');
+  assert.deepEqual(
+    [occurrence.taskId, occurrence.taskNameSnapshot, occurrence.projectId],
+    [null, '已删除改绑任务', null]
+  );
+  assert.equal(resolved.summary.repairedReferenceCount, 1);
 });
 
 test('导入六个活动项目不受新增项目上限拒绝，并在摘要中如实报告', () => {

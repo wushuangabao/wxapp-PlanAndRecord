@@ -59,6 +59,19 @@ function nullableString(value) {
   return value === null || typeof value === 'string';
 }
 
+function hasReferenceValue(value) {
+  return typeof value === 'string' && value.length > 0;
+}
+
+function validPlanAssociationShape(entity, { allowDetachedOccurrence = false } = {}) {
+  const hasCalendarEvent = hasReferenceValue(entity.calendarEventId);
+  const hasOriginRule = hasReferenceValue(entity.originRuleId);
+  const hasOriginOccurrence = hasReferenceValue(entity.originOccurrenceId);
+  if (hasCalendarEvent && (hasOriginRule || hasOriginOccurrence)) return false;
+  if (hasOriginRule === hasOriginOccurrence) return true;
+  return allowDetachedOccurrence && !hasOriginRule && hasOriginOccurrence;
+}
+
 function nullableTimestamp(value) {
   return value === null || isFiniteTimestamp(value);
 }
@@ -176,7 +189,8 @@ function normalizeTimeLog(log) {
 function normalizeTimerDraft(draft) {
   return pickKnownFields(draft, [
     'categoryId', 'categoryNameSnapshot', 'projectId', 'projectNameSnapshot',
-    'taskId', 'taskNameSnapshot', 'calendarEventId', 'calendarEventSummarySnapshot', 'note', 'tags'
+    'taskId', 'taskNameSnapshot', 'calendarEventId', 'calendarEventSummarySnapshot',
+    'originRuleId', 'originOccurrenceId', 'originRuleSummarySnapshot', 'note', 'tags'
   ]);
 }
 
@@ -347,16 +361,22 @@ function validateTimeLog(log, ids) {
     || log.durationMinutes > maximumDurationMinutes || !requiredString(log.categoryId)
     || typeof log.categoryNameSnapshot !== 'string' || !nullableFields.every((field) => nullableString(log[field]))
     || typeof log.note !== 'string' || !validEnum(log.status, LOG_STATUS) || !validEnum(log.source, LOG_SOURCE)
-    || !Array.isArray(log.tags) || !log.tags.every((tag) => typeof tag === 'string') || !validateTimestamps(log)) invalidSchema();
+    || !Array.isArray(log.tags) || !log.tags.every((tag) => typeof tag === 'string') || !validateTimestamps(log)
+    || !validPlanAssociationShape(log, { allowDetachedOccurrence: true })) invalidSchema();
   collectId(ids, log.id);
 }
 
 function validateTimerDraft(draft) {
   if (!isPlainObject(draft)) invalidSchema();
-  const nullableFields = ['categoryId', 'categoryNameSnapshot', 'projectId', 'projectNameSnapshot', 'taskId', 'taskNameSnapshot', 'calendarEventId', 'calendarEventSummarySnapshot'];
+  const nullableFields = [
+    'categoryId', 'categoryNameSnapshot', 'projectId', 'projectNameSnapshot',
+    'taskId', 'taskNameSnapshot', 'calendarEventId', 'calendarEventSummarySnapshot',
+    'originRuleId', 'originOccurrenceId', 'originRuleSummarySnapshot'
+  ];
   if (!nullableFields.every((field) => !hasOwn(draft, field) || nullableString(draft[field]))
     || (hasOwn(draft, 'note') && typeof draft.note !== 'string')
-    || (hasOwn(draft, 'tags') && (!Array.isArray(draft.tags) || !draft.tags.every((tag) => typeof tag === 'string')))) invalidSchema();
+    || (hasOwn(draft, 'tags') && (!Array.isArray(draft.tags) || !draft.tags.every((tag) => typeof tag === 'string')))
+    || !validPlanAssociationShape(draft)) invalidSchema();
 }
 
 function validateTimerStructure(timer) {

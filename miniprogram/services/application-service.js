@@ -212,11 +212,14 @@ class ApplicationService {
     return true;
   }
 
-  detachRepeatRuleReference(target, rule) {
+  detachRepeatRuleReference(target, rule, options = {}) {
     if (!target) return false;
     let changed = false;
     if (target.originRuleId === rule.id) {
       target.originRuleId = null;
+      if (options.clearOriginOccurrence === true) {
+        target.originOccurrenceId = null;
+      }
       target.originRuleSummarySnapshot = target.originRuleSummarySnapshot || rule.title;
       changed = true;
     }
@@ -228,14 +231,64 @@ class ApplicationService {
     return changed;
   }
 
-  detachAbandonedProjectDraftReferences(target, project, deletingTasks, deletedEvents, deletedRules) {
+  originReferenceMatchesOccurrence(target, ruleId, occurrenceStart) {
+    return Boolean(
+      target
+      && target.originRuleId === ruleId
+      && logicalOccurrenceStart(ruleId, target.originOccurrenceId) === occurrenceStart
+    );
+  }
+
+  detachOccurrenceReference(target, rule, occurrenceStart, options = {}) {
+    if (!this.originReferenceMatchesOccurrence(target, rule.id, occurrenceStart)) {
+      return false;
+    }
+    target.originRuleId = null;
+    if (options.clearOriginOccurrence === true) {
+      target.originOccurrenceId = null;
+    }
+    target.originRuleSummarySnapshot = target.originRuleSummarySnapshot || rule.title;
+    return true;
+  }
+
+  overrideSlotsForTasks(database, taskIds, excludedRuleIds = []) {
+    const taskIdSet = new Set(taskIds);
+    const excludedRuleIdSet = new Set(excludedRuleIds);
+    const rulesById = new Map(database.repeatRules.map((rule) => [rule.id, rule]));
+    return database.occurrenceExceptions
+      .filter((exception) => (
+        exception.kind === 'override'
+        && exception.override
+        && taskIdSet.has(exception.override.taskId)
+        && !excludedRuleIdSet.has(exception.ruleId)
+      ))
+      .map((exception) => ({
+        exception,
+        rule: rulesById.get(exception.ruleId)
+      }))
+      .filter((slot) => slot.rule);
+  }
+
+  convertOverrideSlotsToSkips(slots, now) {
+    slots.forEach(({ exception }) => {
+      exception.kind = 'skip';
+      exception.override = null;
+      exception.updatedAt = now;
+    });
+  }
+
+  detachAbandonedProjectDraftReferences(target, project, deletingTasks, invalidatedEvents, deletedRules) {
     if (!target) return;
     this.detachProjectReference(target, project);
     const task = deletingTasks.find((item) => item.id === target.taskId);
     if (task) this.detachTaskReference(target, task);
-    const event = deletedEvents.find((item) => item.id === target.calendarEventId);
+    const event = invalidatedEvents.find((item) => item.id === target.calendarEventId);
     if (event) this.detachCalendarEventReference(target, event);
-    deletedRules.forEach((rule) => this.detachRepeatRuleReference(target, rule));
+    deletedRules.forEach((rule) => this.detachRepeatRuleReference(
+      target,
+      rule,
+      { clearOriginOccurrence: true }
+    ));
   }
 
   resolveAssociations(database, input = {}) {
@@ -270,6 +323,266 @@ class ApplicationService {
       calendarEventId: event ? event.id : null,
       calendarEventSummarySnapshot: event ? event.title : null
     };
+  }
+
+  hasReferenceValue(value) {
+    return value !== undefined && value !== null && value !== '';
+  }
+
+  rejectDirectPlanProject(input = {}) {
+    if (this.hasReferenceValue(input.projectId)) {
+      throw new DomainError(
+        'PLAN_PROJECT_DIRECT_FORBIDDEN',
+        '计划块只能关联任务，项目归属由任务推导'
+      );
+    }
+  }
+
+  rejectDirectRecordTaskOrProject(input = {}) {
+    if (this.hasReferenceValue(input.projectId) || this.hasReferenceValue(input.taskId)) {
+      throw new DomainError(
+        'LOG_DIRECT_ASSOCIATION_FORBIDDEN',
+        '时间记录只能关联计划块，不能直接关联项目或任务'
+      );
+    }
+  }
+
+  resolvePlanTaskAssociation(database, taskId) {
+    if (!this.hasReferenceValue(taskId)) {
+      throw new DomainError('PLAN_TASK_REQUIRED', '计划块必须关联任务');
+    }
+    const task = this.requireEntity(database.tasks, taskId, '任务');
+    const project = task.projectId
+      ? this.requireEntity(database.projects, task.projectId, '项目')
+      : null;
+    return {
+      projectId: null,
+      projectNameSnapshot: project ? project.title : null,
+      taskId: task.id,
+      taskNameSnapshot: task.title
+    };
+  }
+
+  resolveActiveCategoryAssociation(database, categoryId) {
+    const category = this.hasReferenceValue(categoryId)
+      ? this.requireEntity(database.categories, categoryId, '分类')
+      : database.categories.find((item) => item.id === DEFAULT_CATEGORY_ID);
+    if (!category || category.status !== 'active') {
+      throw new DomainError('CATEGORY_ARCHIVED', '归档分类不能用于新记录');
+    }
+    return {
+      categoryId: category.id,
+      categoryNameSnapshot: category.name
+    };
+  }
+
+  resolveCalendarEventRecordAssociation(database, calendarEventId) {
+    if (!this.hasReferenceValue(calendarEventId)) {
+      return {
+        projectId: null,
+        projectNameSnapshot: null,
+        taskId: null,
+        taskNameSnapshot: null,
+        calendarEventId: null,
+        calendarEventSummarySnapshot: null,
+        originRuleId: null,
+        originOccurrenceId: null,
+        originRuleSummarySnapshot: null
+      };
+    }
+    const event = this.requireEntity(database.calendarEvents, calendarEventId, '计划块');
+    if (!event.taskId || !database.tasks.some((task) => task.id === event.taskId)) {
+      throw new DomainError(
+        'CALENDAR_EVENT_TASK_UNAVAILABLE',
+        '该计划块关联的任务已失效，不能用于新的时间记录'
+      );
+    }
+    const taskAssociation = this.resolvePlanTaskAssociation(database, event.taskId);
+    return {
+      projectId: null,
+      projectNameSnapshot: taskAssociation.projectNameSnapshot,
+      taskId: null,
+      taskNameSnapshot: taskAssociation.taskNameSnapshot,
+      calendarEventId: event.id,
+      calendarEventSummarySnapshot: event.title,
+      originRuleId: null,
+      originOccurrenceId: null,
+      originRuleSummarySnapshot: null
+    };
+  }
+
+  resolveOriginOccurrenceRecordAssociation(database, originRuleId, originOccurrenceId) {
+    const occurrenceStart = logicalOccurrenceStart(originRuleId, originOccurrenceId);
+    if (occurrenceStart === null) {
+      throw new DomainError('OCCURRENCE_REFERENCE_INVALID', '重复计划实例标识无效');
+    }
+    const rule = this.requireEntity(database.repeatRules, originRuleId, '重复规则');
+    const occurrence = projectRule(
+      rule,
+      occurrenceStart,
+      occurrenceStart,
+      database.occurrenceExceptions
+    ).find((item) => item.originOccurrenceId === originOccurrenceId);
+    if (!occurrence) {
+      throw new DomainError('OCCURRENCE_NOT_FOUND', '该重复实例已跳过、已修改或不再有效');
+    }
+    const taskAssociation = this.resolvePlanTaskAssociation(database, occurrence.taskId);
+    return {
+      projectId: null,
+      projectNameSnapshot: taskAssociation.projectNameSnapshot,
+      taskId: null,
+      taskNameSnapshot: taskAssociation.taskNameSnapshot,
+      calendarEventId: null,
+      calendarEventSummarySnapshot: null,
+      originRuleId: rule.id,
+      originOccurrenceId: occurrence.originOccurrenceId,
+      originRuleSummarySnapshot: rule.title
+    };
+  }
+
+  emptyRecordPlanAssociation(current = {}) {
+    return {
+      projectId: null,
+      projectNameSnapshot: current.projectNameSnapshot || null,
+      taskId: null,
+      taskNameSnapshot: current.taskNameSnapshot || null,
+      calendarEventId: null,
+      calendarEventSummarySnapshot: current.calendarEventSummarySnapshot || null,
+      originRuleId: null,
+      originOccurrenceId: null,
+      originRuleSummarySnapshot: current.originRuleSummarySnapshot || null
+    };
+  }
+
+  resolveRequestedRecordPlanAssociation(database, input = {}, current = {}) {
+    const calendarEventId = this.hasReferenceValue(input.calendarEventId)
+      ? input.calendarEventId
+      : null;
+    const originRuleId = this.hasReferenceValue(input.originRuleId)
+      ? input.originRuleId
+      : null;
+    const originOccurrenceId = this.hasReferenceValue(input.originOccurrenceId)
+      ? input.originOccurrenceId
+      : null;
+    if (calendarEventId && (originRuleId || originOccurrenceId)) {
+      throw new DomainError(
+        'PLAN_ASSOCIATION_CONFLICT',
+        '计划块与重复计划实例只能选择一个'
+      );
+    }
+    if (Boolean(originRuleId) !== Boolean(originOccurrenceId)) {
+      throw new DomainError(
+        'OCCURRENCE_REFERENCE_PAIR_REQUIRED',
+        '重复计划关联必须同时提供规则与实例标识'
+      );
+    }
+    if (calendarEventId) {
+      if (
+        calendarEventId === (current.calendarEventId || null)
+        && !current.originRuleId
+        && !current.originOccurrenceId
+      ) {
+        return this.preserveRecordPlanAssociation(database, current);
+      }
+      return this.resolveCalendarEventRecordAssociation(database, calendarEventId);
+    }
+    if (originRuleId) {
+      if (
+        originRuleId === (current.originRuleId || null)
+        && originOccurrenceId === (current.originOccurrenceId || null)
+        && !current.calendarEventId
+      ) {
+        return this.preserveRecordPlanAssociation(database, current);
+      }
+      return this.resolveOriginOccurrenceRecordAssociation(
+        database,
+        originRuleId,
+        originOccurrenceId
+      );
+    }
+    if (
+      !current.calendarEventId
+      && !current.originRuleId
+      && this.hasReferenceValue(current.originOccurrenceId)
+    ) {
+      return this.preserveRecordPlanAssociation(database, current);
+    }
+    return this.emptyRecordPlanAssociation(current);
+  }
+
+  resolveNewRecordAssociations(database, input = {}) {
+    this.rejectDirectRecordTaskOrProject(input);
+    return {
+      ...this.resolveActiveCategoryAssociation(database, input.categoryId),
+      ...this.resolveRequestedRecordPlanAssociation(database, input)
+    };
+  }
+
+  preserveRecordCategoryAssociation(database, current = {}) {
+    const defaultCategory = database.categories.find((item) => item.id === DEFAULT_CATEGORY_ID);
+    const category = database.categories.find((item) => item.id === current.categoryId)
+      || defaultCategory;
+    return {
+      categoryId: category.id,
+      categoryNameSnapshot: current.categoryNameSnapshot || category.name
+    };
+  }
+
+  preserveRecordPlanAssociation(database, current = {}) {
+    const event = current.calendarEventId
+      ? database.calendarEvents.find((item) => item.id === current.calendarEventId)
+      : null;
+    const task = event && event.taskId
+      ? database.tasks.find((item) => item.id === event.taskId)
+      : null;
+    const project = task && task.projectId
+      ? database.projects.find((item) => item.id === task.projectId)
+      : null;
+    const hasConcretePlan = Boolean(event);
+    return {
+      projectId: null,
+      projectNameSnapshot: hasConcretePlan
+        ? (project ? project.title : null)
+          || event.projectNameSnapshot
+          || current.projectNameSnapshot
+          || null
+        : current.projectNameSnapshot || null,
+      taskId: null,
+      taskNameSnapshot: hasConcretePlan
+        ? (task ? task.title : null)
+          || event.taskNameSnapshot
+          || current.taskNameSnapshot
+          || null
+        : current.taskNameSnapshot || null,
+      calendarEventId: event ? event.id : null,
+      calendarEventSummarySnapshot: current.calendarEventSummarySnapshot
+        || (event ? event.title : null),
+      originRuleId: hasConcretePlan ? null : current.originRuleId || null,
+      originOccurrenceId: hasConcretePlan ? null : current.originOccurrenceId || null,
+      originRuleSummarySnapshot: current.originRuleSummarySnapshot || null
+    };
+  }
+
+  resolveRecordUpdateAssociations(database, current = {}, input = {}) {
+    this.rejectDirectRecordTaskOrProject(input);
+    const currentCategoryId = current.categoryId || DEFAULT_CATEGORY_ID;
+    const requestedCategoryId = this.hasReferenceValue(input.categoryId)
+      ? input.categoryId
+      : DEFAULT_CATEGORY_ID;
+    const categoryAssociation = input.categoryId !== undefined
+      && requestedCategoryId !== currentCategoryId
+      ? this.resolveActiveCategoryAssociation(database, requestedCategoryId)
+      : this.preserveRecordCategoryAssociation(database, current);
+
+    const planAssociationInputSpecified = [
+      input.calendarEventId,
+      input.originRuleId,
+      input.originOccurrenceId
+    ].some((value) => value !== undefined);
+    const planAssociation = planAssociationInputSpecified
+      ? this.resolveRequestedRecordPlanAssociation(database, input, current)
+      : this.preserveRecordPlanAssociation(database, current);
+    return { ...categoryAssociation, ...planAssociation };
   }
 
   createCategory(name) {
@@ -444,19 +757,59 @@ class ApplicationService {
     const now = this.now();
     return this.repository.transaction((database) => {
       const project = this.requireEntity(database.projects, id, '项目');
-      const deletingTasks = database.tasks
-        .filter((task) => task.projectId === id && task.status !== TASK_STATUS.COMPLETED);
+      const projectTasks = database.tasks.filter((task) => task.projectId === id);
+      const projectTaskIds = projectTasks.map((task) => task.id);
+      const deletingTasks = projectTasks
+        .filter((task) => task.status !== TASK_STATUS.COMPLETED);
       const deletingTaskIds = deletingTasks.map((task) => task.id);
-      const deletedEvents = database.calendarEvents
-        .filter((event) => (event.projectId === id || deletingTaskIds.includes(event.taskId)) && event.endedAt > now);
+      const relatedEvents = database.calendarEvents
+        .filter((event) => projectTaskIds.includes(event.taskId));
+      const relatedEventIds = relatedEvents.map((event) => event.id);
+      const deletedEvents = relatedEvents.filter((event) => event.endedAt > now);
       const deletedEventIds = deletedEvents.map((event) => event.id);
       const deletedRules = database.repeatRules
-        .filter((rule) => rule.revisions.some((revision) => revision.projectId === id || deletingTaskIds.includes(revision.taskId)));
+        .filter((rule) => rule.revisions.some(
+          (revision) => projectTaskIds.includes(revision.taskId)
+        ));
       const deletedRuleIds = deletedRules.map((rule) => rule.id);
+      const overrideSlots = this.overrideSlotsForTasks(
+        database,
+        projectTaskIds,
+        deletedRuleIds
+      );
+      this.convertOverrideSlotsToSkips(overrideSlots, now);
+      const invalidatedDraftEvents = relatedEvents.filter((event) => (
+        deletedEventIds.includes(event.id)
+        || deletingTaskIds.includes(event.taskId)
+      ));
 
-      this.detachAbandonedProjectDraftReferences(database.timer && database.timer.draft, project, deletingTasks, deletedEvents, deletedRules);
+      this.detachAbandonedProjectDraftReferences(
+        database.timer && database.timer.draft,
+        project,
+        deletingTasks,
+        invalidatedDraftEvents,
+        deletedRules
+      );
+      overrideSlots.forEach(({ exception, rule }) => this.detachOccurrenceReference(
+        database.timer && database.timer.draft,
+        rule,
+        exception.occurrenceStart,
+        { clearOriginOccurrence: true }
+      ));
       if (database.recoveryDraft && database.recoveryDraft.timer) {
-        this.detachAbandonedProjectDraftReferences(database.recoveryDraft.timer.draft, project, deletingTasks, deletedEvents, deletedRules);
+        this.detachAbandonedProjectDraftReferences(
+          database.recoveryDraft.timer.draft,
+          project,
+          deletingTasks,
+          invalidatedDraftEvents,
+          deletedRules
+        );
+        overrideSlots.forEach(({ exception, rule }) => this.detachOccurrenceReference(
+          database.recoveryDraft.timer.draft,
+          rule,
+          exception.occurrenceStart,
+          { clearOriginOccurrence: true }
+        ));
       }
 
       database.projects = database.projects.filter((item) => item.id !== id);
@@ -475,49 +828,94 @@ class ApplicationService {
         if (deletedEventIds.includes(event.id)) {
           return false;
         }
-        if (event.projectId === id || deletingTaskIds.includes(event.taskId)) {
-          if (event.projectId === id) {
+        let changed = false;
+        if (event.projectId === id) {
+          event.projectNameSnapshot = event.projectNameSnapshot || project.title;
+          event.projectId = null;
+          changed = true;
+        }
+        if (relatedEventIds.includes(event.id)) {
+          if (!event.projectNameSnapshot) {
             event.projectNameSnapshot = project.title;
-            event.projectId = null;
+            changed = true;
           }
           if (deletingTaskIds.includes(event.taskId)) {
-            event.taskNameSnapshot = event.taskNameSnapshot || '已删除任务';
+            const task = deletingTasks.find((item) => item.id === event.taskId);
+            event.taskNameSnapshot = event.taskNameSnapshot || (task ? task.title : '已删除任务');
             event.taskId = null;
+            changed = true;
           }
-          if (event.repeatRuleId && deletedRuleIds.includes(event.repeatRuleId)) {
-            event.repeatRuleSummarySnapshot = event.repeatRuleSummarySnapshot || '已删除重复规则';
-            event.repeatRuleId = null;
-          }
-          event.updatedAt = now;
         }
+        if (event.repeatRuleId && deletedRuleIds.includes(event.repeatRuleId)) {
+          const rule = deletedRules.find((item) => item.id === event.repeatRuleId);
+          event.repeatRuleSummarySnapshot = event.repeatRuleSummarySnapshot
+            || (rule ? rule.title : '已删除重复规则');
+          event.repeatRuleId = null;
+          changed = true;
+        }
+        if (changed) event.updatedAt = now;
         return true;
       });
       database.repeatRules = database.repeatRules.filter((rule) => !deletedRuleIds.includes(rule.id));
-      database.occurrenceExceptions = database.occurrenceExceptions.filter((item) => !deletedRuleIds.includes(item.ruleId));
+      database.repeatRules.forEach((rule) => {
+        let changed = false;
+        rule.revisions.forEach((revision) => {
+          if (revision.projectId === id) {
+            revision.projectNameSnapshot = revision.projectNameSnapshot || project.title;
+            revision.projectId = null;
+            changed = true;
+          }
+        });
+        if (changed) rule.updatedAt = now;
+      });
+      database.occurrenceExceptions = database.occurrenceExceptions
+        .filter((item) => !deletedRuleIds.includes(item.ruleId));
+      database.occurrenceExceptions.forEach((exception) => {
+        if (exception.override && exception.override.projectId === id) {
+          exception.override.projectNameSnapshot = exception.override.projectNameSnapshot
+            || project.title;
+          exception.override.projectId = null;
+          exception.updatedAt = now;
+        }
+      });
       database.timeLogs = database.timeLogs.filter((log) => {
-        const related = log.projectId === id || deletingTaskIds.includes(log.taskId) || deletedEventIds.includes(log.calendarEventId) || deletedRuleIds.includes(log.originRuleId);
+        const overrideSlot = overrideSlots.find(({ exception, rule }) => (
+          this.originReferenceMatchesOccurrence(log, rule.id, exception.occurrenceStart)
+        ));
+        const related = relatedEventIds.includes(log.calendarEventId)
+          || deletedRuleIds.includes(log.originRuleId)
+          || Boolean(overrideSlot);
         if (related && log.status === LOG_STATUS.CANDIDATE) {
           return false;
         }
-        if (related && log.status === LOG_STATUS.CONFIRMED) {
-          if (log.projectId === id) {
-            log.projectNameSnapshot = log.projectNameSnapshot || project.title;
-            log.projectId = null;
-          }
-          if (deletingTaskIds.includes(log.taskId)) {
-            log.taskNameSnapshot = log.taskNameSnapshot || '已删除任务';
-            log.taskId = null;
-          }
-          if (deletedEventIds.includes(log.calendarEventId)) {
-            log.calendarEventSummarySnapshot = log.calendarEventSummarySnapshot || '已删除计划';
-            log.calendarEventId = null;
-          }
-          if (deletedRuleIds.includes(log.originRuleId)) {
-            log.originRuleSummarySnapshot = log.originRuleSummarySnapshot || '已删除重复规则';
-            log.originRuleId = null;
-          }
-          log.updatedAt = now;
+        let changed = false;
+        if (log.projectId === id) {
+          log.projectNameSnapshot = log.projectNameSnapshot || project.title;
+          log.projectId = null;
+          changed = true;
         }
+        if (deletingTaskIds.includes(log.taskId)) {
+          const task = deletingTasks.find((item) => item.id === log.taskId);
+          log.taskNameSnapshot = log.taskNameSnapshot || (task ? task.title : '已删除任务');
+          log.taskId = null;
+          changed = true;
+        }
+        if (deletedEventIds.includes(log.calendarEventId)) {
+          const event = deletedEvents.find((item) => item.id === log.calendarEventId);
+          changed = this.detachCalendarEventReference(log, event) || changed;
+        }
+        if (deletedRuleIds.includes(log.originRuleId)) {
+          const rule = deletedRules.find((item) => item.id === log.originRuleId);
+          changed = this.detachRepeatRuleReference(log, rule) || changed;
+        }
+        if (overrideSlot) {
+          changed = this.detachOccurrenceReference(
+            log,
+            overrideSlot.rule,
+            overrideSlot.exception.occurrenceStart
+          ) || changed;
+        }
+        if (changed) log.updatedAt = now;
         return true;
       });
       return { projectTitle: project.title, deletedTaskCount: deletingTaskIds.length, deletedEventCount: deletedEventIds.length };
@@ -573,12 +971,14 @@ class ApplicationService {
     const now = this.now();
     return this.repository.transaction((database) => {
       const task = this.requireEntity(database.tasks, id, '任务');
-      const deletedEventIds = database.calendarEvents
-        .filter((event) => event.taskId === id && event.endedAt > now)
-        .map((event) => event.id);
-      const deletedRuleIds = database.repeatRules
-        .filter((rule) => rule.revisions.some((revision) => revision.taskId === id))
-        .map((rule) => rule.id);
+      const taskEvents = database.calendarEvents.filter((event) => event.taskId === id);
+      const deletedEvents = taskEvents.filter((event) => event.endedAt > now);
+      const deletedEventIds = deletedEvents.map((event) => event.id);
+      const deletedRules = database.repeatRules
+        .filter((rule) => rule.revisions.some((revision) => revision.taskId === id));
+      const deletedRuleIds = deletedRules.map((rule) => rule.id);
+      const overrideSlots = this.overrideSlotsForTasks(database, [id], deletedRuleIds);
+      this.convertOverrideSlotsToSkips(overrideSlots, now);
 
       database.calendarEvents = database.calendarEvents.filter((event) => {
         if (deletedEventIds.includes(event.id)) return false;
@@ -605,11 +1005,42 @@ class ApplicationService {
           log.originRuleId = null;
           changed = true;
         }
+        overrideSlots.forEach(({ exception, rule }) => {
+          changed = this.detachOccurrenceReference(
+            log,
+            rule,
+            exception.occurrenceStart
+          ) || changed;
+        });
         if (changed) log.updatedAt = now;
       });
       this.detachTaskReference(database.timer.draft, task);
+      taskEvents.forEach((event) => this.detachCalendarEventReference(database.timer.draft, event));
+      deletedRules.forEach((rule) => this.detachRepeatRuleReference(
+        database.timer.draft,
+        rule,
+        { clearOriginOccurrence: true }
+      ));
+      overrideSlots.forEach(({ exception, rule }) => this.detachOccurrenceReference(
+        database.timer.draft,
+        rule,
+        exception.occurrenceStart,
+        { clearOriginOccurrence: true }
+      ));
       if (database.recoveryDraft && database.recoveryDraft.timer) {
         this.detachTaskReference(database.recoveryDraft.timer.draft, task);
+        taskEvents.forEach((event) => this.detachCalendarEventReference(database.recoveryDraft.timer.draft, event));
+        deletedRules.forEach((rule) => this.detachRepeatRuleReference(
+          database.recoveryDraft.timer.draft,
+          rule,
+          { clearOriginOccurrence: true }
+        ));
+        overrideSlots.forEach(({ exception, rule }) => this.detachOccurrenceReference(
+          database.recoveryDraft.timer.draft,
+          rule,
+          exception.occurrenceStart,
+          { clearOriginOccurrence: true }
+        ));
       }
       database.tasks = database.tasks.filter((item) => item.id !== id);
       return { id: task.id, title: task.title };
@@ -618,12 +1049,13 @@ class ApplicationService {
 
   createCalendarEvent(input) {
     const now = this.now();
+    this.rejectDirectPlanProject(input);
     const title = requiredTitle(input.title, '计划标题');
     const startedAt = Number(input.startedAt);
     const endedAt = Number(input.endedAt);
     validTimeRange(startedAt, endedAt, '计划时间');
     return this.repository.transaction((database) => {
-      const association = this.resolveAssociations(database, input);
+      const association = this.resolvePlanTaskAssociation(database, input.taskId);
       const event = createCalendarEvent({ ...input, ...association, title, startedAt, endedAt, priority: validPriority(input.priority) }, now);
       database.calendarEvents.push(event);
       return event;
@@ -632,17 +1064,24 @@ class ApplicationService {
 
   updateCalendarEvent(id, input) {
     const now = this.now();
+    this.rejectDirectPlanProject(input);
     return this.repository.transaction((database) => {
       const event = this.requireEntity(database.calendarEvents, id, '计划块');
+      const eventTaskExists = event.taskId
+        && database.tasks.some((task) => task.id === event.taskId);
+      if (!eventTaskExists && event.endedAt <= now) {
+        throw new DomainError(
+          'CALENDAR_EVENT_READ_ONLY',
+          '历史计划块关联的任务已失效，只能查看，不能编辑'
+        );
+      }
       const startedAt = input.startedAt === undefined ? event.startedAt : Number(input.startedAt);
       const endedAt = input.endedAt === undefined ? event.endedAt : Number(input.endedAt);
       validTimeRange(startedAt, endedAt, '计划时间');
-      const association = this.resolveAssociations(database, {
-        projectId: input.projectId === undefined ? event.projectId : input.projectId,
-        taskId: input.taskId === undefined ? event.taskId : input.taskId,
-        calendarEventId: undefined,
-        categoryId: DEFAULT_CATEGORY_ID
-      });
+      const association = this.resolvePlanTaskAssociation(
+        database,
+        input.taskId === undefined ? event.taskId : input.taskId
+      );
       event.title = input.title === undefined ? event.title : requiredTitle(input.title, '计划标题');
       event.startedAt = startedAt;
       event.endedAt = endedAt;
@@ -670,12 +1109,17 @@ class ApplicationService {
         log.calendarEventId = null;
         log.updatedAt = now;
       });
+      this.detachCalendarEventReference(database.timer && database.timer.draft, event);
+      if (database.recoveryDraft && database.recoveryDraft.timer) {
+        this.detachCalendarEventReference(database.recoveryDraft.timer.draft, event);
+      }
       return { id };
     }).result;
   }
 
   createRecurringPlan(input) {
     const now = this.now();
+    this.rejectDirectPlanProject(input);
     const title = requiredTitle(input.title, '固定日程标题');
     const startedAt = Number(input.startedAt);
     const endedAt = Number(input.endedAt);
@@ -683,7 +1127,7 @@ class ApplicationService {
     const frequency = validRepeatFrequency(input.frequency);
     const interval = validInterval(input.interval);
     return this.repository.transaction((database) => {
-      const association = this.resolveAssociations(database, input);
+      const association = this.resolvePlanTaskAssociation(database, input.taskId);
       const rule = createRepeatRule({
         ...input,
         ...association,
@@ -713,6 +1157,7 @@ class ApplicationService {
 
   reviseRuleFollowing(ruleId, occurrenceStart, input) {
     const now = this.now();
+    this.rejectDirectPlanProject(input);
     return this.repository.transaction((database) => {
       const rule = this.requireEntity(database.repeatRules, ruleId, '重复规则');
       const activeRevision = rule.revisions.find((revision) => revision.effectiveFrom <= occurrenceStart && (!revision.effectiveUntil || revision.effectiveUntil >= occurrenceStart));
@@ -734,6 +1179,10 @@ class ApplicationService {
       }
       const revision = {
         ...activeRevision,
+        ...this.resolvePlanTaskAssociation(
+          database,
+          input.taskId === undefined ? activeRevision.taskId : input.taskId
+        ),
         id: createId('revision', now),
         revision: nextRevision,
         effectiveFrom: occurrenceStart,
@@ -752,39 +1201,109 @@ class ApplicationService {
     }).result;
   }
 
-  saveOccurrenceException(ruleId, occurrenceStart, kind, override) {
+  skipOccurrence(ruleId, occurrenceStart) {
     const now = this.now();
     return this.repository.transaction((database) => {
-      this.requireEntity(database.repeatRules, ruleId, '重复规则');
+      const rule = this.requireEntity(database.repeatRules, ruleId, '重复规则');
+      const occurrence = projectRule(
+        rule,
+        occurrenceStart,
+        occurrenceStart,
+        database.occurrenceExceptions
+      ).find((item) => item.occurrenceStart === occurrenceStart);
+      if (!occurrence) {
+        throw new DomainError('OCCURRENCE_NOT_FOUND', '找不到需要跳过的重复实例');
+      }
+      if (!occurrence.taskId || !database.tasks.some((task) => task.id === occurrence.taskId)) {
+        throw new DomainError(
+          'OCCURRENCE_TASK_UNAVAILABLE',
+          '该重复实例没有有效任务，不能写入跳过标记'
+        );
+      }
       database.occurrenceExceptions = database.occurrenceExceptions.filter((item) => !(item.ruleId === ruleId && item.occurrenceStart === occurrenceStart));
-      const exception = createOccurrenceException(ruleId, occurrenceStart, kind, override, now);
+      const exception = createOccurrenceException(ruleId, occurrenceStart, 'skip', null, now);
       database.occurrenceExceptions.push(exception);
       return exception;
     }).result;
   }
 
-  skipOccurrence(ruleId, occurrenceStart) {
-    return this.saveOccurrenceException(ruleId, occurrenceStart, 'skip');
-  }
-
   overrideOccurrence(ruleId, occurrenceStart, input) {
+    this.rejectDirectPlanProject(input);
     const startedAt = Number(input.startedAt);
     const endedAt = Number(input.endedAt);
     validTimeRange(startedAt, endedAt, '单次修改时间');
-    return this.saveOccurrenceException(ruleId, occurrenceStart, 'override', {
-      title: requiredTitle(input.title, '计划标题'),
-      startedAt,
-      endedAt,
-      priority: validPriority(input.priority),
-      projectId: input.projectId || null,
-      projectNameSnapshot: input.projectNameSnapshot || null,
-      taskId: input.taskId || null,
-      taskNameSnapshot: input.taskNameSnapshot || null
-    });
+    const title = requiredTitle(input.title, '计划标题');
+    const priority = validPriority(input.priority);
+    const now = this.now();
+    return this.repository.transaction((database) => {
+      const rule = this.requireEntity(database.repeatRules, ruleId, '重复规则');
+      const occurrence = projectRule(
+        rule,
+        occurrenceStart,
+        occurrenceStart,
+        database.occurrenceExceptions
+      ).find((item) => item.occurrenceStart === occurrenceStart);
+      if (!occurrence) {
+        throw new DomainError('OCCURRENCE_NOT_FOUND', '找不到需要修改的重复实例');
+      }
+      const taskAssociation = this.resolvePlanTaskAssociation(
+        database,
+        input.taskId === undefined ? occurrence.taskId : input.taskId
+      );
+      database.occurrenceExceptions = database.occurrenceExceptions.filter(
+        (item) => !(item.ruleId === ruleId && item.occurrenceStart === occurrenceStart)
+      );
+      const exception = createOccurrenceException(ruleId, occurrenceStart, 'override', {
+        title,
+        startedAt,
+        endedAt,
+        priority,
+        ...taskAssociation
+      }, now);
+      database.occurrenceExceptions.push(exception);
+      return exception;
+    }).result;
+  }
+
+  planAssociationCandidates(rangeStart, rangeEnd) {
+    const database = this.snapshot();
+    const validTaskIds = new Set(database.tasks.map((task) => task.id));
+    const repeatRulesById = new Map(database.repeatRules.map((rule) => [rule.id, rule]));
+    const materializedEventOccurrences = new Set(database.calendarEvents
+      .filter((event) => event.repeatRuleId)
+      .map((event) => {
+        const occurrenceStart = initialRuleOccurrenceStart(
+          repeatRulesById.get(event.repeatRuleId)
+        );
+        return occurrenceStart === null
+          ? null
+          : occurrenceKey(event.repeatRuleId, occurrenceStart);
+      })
+      .filter(Boolean));
+    const concreteEvents = database.calendarEvents
+      .filter((event) => event.taskId && validTaskIds.has(event.taskId))
+      .filter((event) => intervalIntersectsRange(event, rangeStart, rangeEnd))
+      .map((event) => ({ ...event, type: 'plan', virtual: false }));
+    const recurringOccurrences = database.repeatRules
+      .flatMap((rule) => projectRuleIntersectingRange(
+        rule,
+        rangeStart,
+        rangeEnd,
+        database.occurrenceExceptions
+      ))
+      .filter((item) => item.taskId && validTaskIds.has(item.taskId))
+      .filter((item) => !materializedEventOccurrences.has(occurrenceKey(
+        item.ruleId,
+        item.occurrenceStart
+      )));
+    return concreteEvents
+      .concat(recurringOccurrences)
+      .sort((first, second) => first.startedAt - second.startedAt);
   }
 
   timeline(rangeStart, rangeEnd) {
     const database = this.snapshot();
+    const validTaskIds = new Set(database.tasks.map((task) => task.id));
     const repeatRulesById = new Map(database.repeatRules.map((rule) => [rule.id, rule]));
     const materializedEventOccurrences = new Set(database.calendarEvents
       .filter((event) => event.repeatRuleId)
@@ -812,6 +1331,7 @@ class ApplicationService {
         rangeEnd,
         database.occurrenceExceptions
       ))
+      .filter((item) => item.taskId && validTaskIds.has(item.taskId))
       .filter((item) => !materializedEventOccurrences.has(occurrenceKey(
         item.ruleId,
         item.occurrenceStart
@@ -849,7 +1369,11 @@ class ApplicationService {
       ))) {
         throw new DomainError('OCCURRENCE_ALREADY_CONFIRMED', '该重复实例已确认，不能重复生成记录');
       }
-      const association = this.resolveAssociations(database, { projectId: occurrence.projectId, taskId: occurrence.taskId, categoryId: input.categoryId });
+      const association = this.resolveNewRecordAssociations(database, {
+        categoryId: input.categoryId,
+        originRuleId: rule.id,
+        originOccurrenceId: occurrence.originOccurrenceId
+      });
       const log = createTimeLog({
         ...association,
         startedAt: occurrence.startedAt,
@@ -874,7 +1398,7 @@ class ApplicationService {
     const endedAt = Number(input.endedAt);
     validTimeRange(startedAt, endedAt, '手工补录时间');
     return this.repository.transaction((database) => {
-      const association = this.resolveAssociations(database, input);
+      const association = this.resolveNewRecordAssociations(database, input);
       const log = createTimeLog({
         ...association,
         startedAt,
@@ -901,12 +1425,7 @@ class ApplicationService {
       const startedAt = input.startedAt === undefined ? log.startedAt : Number(input.startedAt);
       const endedAt = input.endedAt === undefined ? log.endedAt : Number(input.endedAt);
       validTimeRange(startedAt, endedAt, '记录时间');
-      const association = this.resolveAssociations(database, {
-        projectId: input.projectId === undefined ? log.projectId : input.projectId,
-        taskId: input.taskId === undefined ? log.taskId : input.taskId,
-        calendarEventId: input.calendarEventId === undefined ? log.calendarEventId : input.calendarEventId,
-        categoryId: input.categoryId === undefined ? log.categoryId : input.categoryId
-      });
+      const association = this.resolveRecordUpdateAssociations(database, log, input);
       Object.assign(log, association, {
         startedAt,
         endedAt,
@@ -927,8 +1446,14 @@ class ApplicationService {
       if (log.status !== LOG_STATUS.CANDIDATE) {
         throw new DomainError('LOG_NOT_CANDIDATE', '只有候选记录可以核实');
       }
-      log.status = LOG_STATUS.CONFIRMED;
-      log.updatedAt = now;
+      const association = this.resolveRecordUpdateAssociations(database, log, {});
+      if (association.originRuleId && !association.originOccurrenceId) {
+        association.originRuleId = null;
+      }
+      Object.assign(log, association, {
+        status: LOG_STATUS.CONFIRMED,
+        updatedAt: now
+      });
       return log;
     }).result;
   }
@@ -950,7 +1475,7 @@ class ApplicationService {
       if (database.timer.status !== TIMER_STATUS.IDLE) {
         throw new DomainError('TIMER_ALREADY_ACTIVE', '已有进行中的计时，请先结束或生成记录');
       }
-      const association = this.resolveAssociations(database, input);
+      const association = this.resolveNewRecordAssociations(database, input);
       database.timer = {
         status: TIMER_STATUS.RUNNING,
         startedAt: now,
@@ -969,7 +1494,7 @@ class ApplicationService {
       if (database.timer.status === TIMER_STATUS.IDLE) {
         throw new DomainError('TIMER_NOT_ACTIVE', '没有可编辑的计时记录');
       }
-      const association = this.resolveAssociations(database, input);
+      const association = this.resolveRecordUpdateAssociations(database, database.timer.draft, input);
       database.timer.draft = {
         ...database.timer.draft,
         ...association,
@@ -1029,8 +1554,10 @@ class ApplicationService {
         throw new DomainError('TIMER_NOT_ENDED', '请先结束计时，再生成记录');
       }
       const durationMinutes = calculateTimerDurationMinutes(timer.startedAt, timer.endedAt, timer.pauses);
+      const association = this.resolveRecordUpdateAssociations(database, timer.draft, {});
       const log = createTimeLog({
         ...timer.draft,
+        ...association,
         startedAt: timer.startedAt,
         endedAt: timer.endedAt,
         durationMinutes,
@@ -1054,12 +1581,7 @@ class ApplicationService {
         throw new DomainError('RECOVERY_DRAFT_NOT_FOUND', '没有需要修正的恢复草稿');
       }
       const originalDraft = recoveryDraft.timer.draft || {};
-      const association = this.resolveAssociations(database, {
-        projectId: input.projectId === undefined ? originalDraft.projectId : input.projectId,
-        taskId: input.taskId === undefined ? originalDraft.taskId : input.taskId,
-        calendarEventId: input.calendarEventId === undefined ? originalDraft.calendarEventId : input.calendarEventId,
-        categoryId: input.categoryId === undefined ? originalDraft.categoryId : input.categoryId
-      });
+      const association = this.resolveRecordUpdateAssociations(database, originalDraft, input);
       const log = createTimeLog({
         ...association,
         startedAt,
@@ -1083,6 +1605,10 @@ class ApplicationService {
     }
     return this.repository.transaction((database) => {
       const timer = database.timer;
+      timer.draft = {
+        ...timer.draft,
+        ...this.resolveRecordUpdateAssociations(database, timer.draft, {})
+      };
       const pausesAreValid = Array.isArray(timer.pauses) && timer.pauses.every((pause, index, pauses) => {
         const precedingEnd = index === 0 ? timer.startedAt : pauses[index - 1].endedAt;
         return isFiniteTimestamp(pause.startedAt) && isFiniteTimestamp(pause.endedAt) && pause.endedAt >= pause.startedAt && pause.startedAt >= precedingEnd && pause.endedAt <= now;

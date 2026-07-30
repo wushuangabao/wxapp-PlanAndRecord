@@ -39,7 +39,9 @@ function createBoundaryRule({
   endedAt,
   frequency,
   weekdays = [],
-  monthDay = null
+  monthDay = null,
+  taskId = null,
+  taskNameSnapshot = null
 }) {
   return createRepeatRule({
     title: '跨边界事项',
@@ -49,7 +51,9 @@ function createBoundaryRule({
     frequency,
     interval: 1,
     weekdays,
-    monthDay
+    monthDay,
+    taskId,
+    taskNameSnapshot
   }, startedAt - 1);
 }
 
@@ -78,28 +82,43 @@ function recurringDatabase(now = 1_700_000_000_000) {
   const database = createInitialDatabase(now);
   const startedAt = now + HOUR_MS;
   const endedAt = startedAt + HOUR_MS;
+  const task = {
+    id: 'task_recurring',
+    title: '每日复盘任务',
+    status: 'todo',
+    projectId: null,
+    projectNameSnapshot: null,
+    completedAt: null,
+    createdAt: now,
+    updatedAt: now
+  };
   const rule = createRepeatRule({
     title: '每日复盘',
     startedAt,
     endedAt,
     priority: 1,
     frequency: 'daily',
-    interval: 1
+    interval: 1,
+    taskId: task.id,
+    taskNameSnapshot: task.title
   }, now + 1);
   const event = createCalendarEvent({
     title: rule.title,
     startedAt,
     endedAt,
     priority: 1,
+    taskId: task.id,
+    taskNameSnapshot: task.title,
     repeatRuleId: rule.id,
     repeatRuleSummarySnapshot: rule.title
   }, now + 2);
+  database.tasks.push(task);
   database.repeatRules.push(rule);
   database.calendarEvents.push(event);
   return { database, rule, startedAt };
 }
 
-test('统计开启候选估算时按需纳入未物化的重复规则实例', () => {
+test('未物化的重复规则实例只作为计划，不计入候选实际', () => {
   const { database, startedAt } = recurringDatabase();
   const options = {
     rangeStart: startedAt,
@@ -113,16 +132,21 @@ test('统计开启候选估算时按需纳入未物化的重复规则实例', ()
   });
 
   assert.equal(confirmedOnly.totalMinutes, 0);
-  assert.equal(withCandidates.totalMinutes, 120);
-  assert.equal(withCandidates.weeklyReview.logCount, 2);
-  assert.deepEqual(
-    withCandidates.categories.map((item) => [item.name, item.durationMinutes]),
-    [['未分类', 120]]
+  assert.equal(withCandidates.totalMinutes, 0);
+  assert.equal(withCandidates.weeklyReview.logCount, 0);
+  assert.deepEqual(withCandidates.categories, []);
+  assert.equal(
+    withCandidates.planVariance.events.reduce((total, item) => total + item.plannedMinutes, 0),
+    180
+  );
+  assert.equal(
+    withCandidates.planVariance.events.every((item) => item.actualMinutes === 0),
+    true
   );
   assert.equal(withCandidates.planVariance.nonPlannedMinutes, 0);
 });
 
-test('统计不会重复计算已有计划块或已物化日志对应的重复实例', () => {
+test('已物化日志只计一次，其他重复计划不会虚增实际投入', () => {
   const { database, rule, startedAt } = recurringDatabase();
   const occurrences = projectRule(
     rule,
@@ -149,8 +173,12 @@ test('统计不会重复计算已有计划块或已物化日志对应的重复�
     includeCandidates: true
   });
 
-  assert.equal(statistics.totalMinutes, 120);
-  assert.equal(statistics.weeklyReview.logCount, 2);
+  assert.equal(statistics.totalMinutes, 60);
+  assert.equal(statistics.weeklyReview.logCount, 1);
+  assert.equal(
+    statistics.planVariance.events.reduce((total, item) => total + item.actualMinutes, 0),
+    60
+  );
 });
 
 test('统计按规则与原始发生时间跨修订去重已确认实例', () => {
@@ -196,7 +224,7 @@ test('统计按规则与原始发生时间跨修订去重已确认实例', () =>
   assert.equal(statistics.weeklyReview.logCount, 1);
 });
 
-test('统计不会让格式异常的导入实例 ID 误命中逻辑去重键', () => {
+test('格式异常且不在范围内的历史实例日志不会替代当前计划实例', () => {
   const { database, rule, startedAt } = recurringDatabase();
   const occurrenceStart = startedAt + DAY_MS;
   database.timeLogs.push(createTimeLog({
@@ -217,11 +245,13 @@ test('统计不会让格式异常的导入实例 ID 误命中逻辑去重键', (
     includeCandidates: true
   });
 
-  assert.equal(statistics.totalMinutes, 60);
-  assert.equal(statistics.weeklyReview.logCount, 1);
+  assert.equal(statistics.totalMinutes, 0);
+  assert.equal(statistics.weeklyReview.logCount, 0);
+  assert.equal(statistics.planVariance.events.length, 1);
+  assert.equal(statistics.planVariance.events[0].actualMinutes, 0);
 });
 
-test('统计按单次改期后的最终区间纳入或排除虚拟候选', () => {
+test('统计按单次改期后的最终区间纳入或排除重复计划，但不伪造实际日志', () => {
   const movedOut = recurringDatabase();
   const originalStart = movedOut.startedAt + DAY_MS;
   movedOut.database.occurrenceExceptions.push(createOccurrenceException(
@@ -237,12 +267,13 @@ test('统计按单次改期后的最终区间纳入或排除虚拟候选', () =>
     originalStart
   ));
 
-  assert.equal(includedLogs(
-    movedOut.database,
-    originalStart,
-    originalStart + HOUR_MS,
-    true
-  ).length, 0);
+  const movedOutStatistics = buildStatistics(movedOut.database, {
+    rangeStart: originalStart,
+    rangeEnd: originalStart + HOUR_MS,
+    includeCandidates: true
+  });
+  assert.equal(movedOutStatistics.totalMinutes, 0);
+  assert.deepEqual(movedOutStatistics.planVariance.events, []);
 
   const movedIn = recurringDatabase();
   const targetStart = movedIn.startedAt + DAY_MS;
@@ -263,15 +294,20 @@ test('统计按单次改期后的最终区间纳入或排除虚拟候选', () =>
     )
   );
 
-  const movedInLogs = includedLogs(
-    movedIn.database,
-    targetStart,
-    targetStart + HOUR_MS,
-    true
-  );
+  const movedInStatistics = buildStatistics(movedIn.database, {
+    rangeStart: targetStart,
+    rangeEnd: targetStart + HOUR_MS,
+    includeCandidates: true
+  });
+  assert.equal(movedInStatistics.totalMinutes, 0);
+  assert.equal(movedInStatistics.planVariance.events.length, 1);
   assert.deepEqual(
-    movedInLogs.map((log) => [log.occurrenceStart, log.startedAt, log.durationMinutes]),
-    [[movedOccurrenceStart, targetStart + 15 * 60 * 1000, 60]]
+    [
+      movedInStatistics.planVariance.events[0].title,
+      movedInStatistics.planVariance.events[0].plannedMinutes,
+      movedInStatistics.planVariance.events[0].actualMinutes
+    ],
+    ['移入范围', 60, 0]
   );
 });
 
@@ -367,14 +403,27 @@ test('查询级重复投影纳入跨日、周、月、年范围起点的完整�
   }
 });
 
-test('统计跨范围起点候选时保留完整持续时间而不按查询边界裁剪', () => {
+test('统计跨范围起点的重复计划时保留完整计划时长且不计为实际', () => {
   const queryStart = localTimestamp(2026, 7, 8);
   const startedAt = localTimestamp(2026, 7, 7, 23, 30);
   const database = createInitialDatabase(startedAt - 2);
+  const task = {
+    id: 'task_boundary',
+    title: '跨边界任务',
+    status: 'todo',
+    projectId: null,
+    projectNameSnapshot: null,
+    completedAt: null,
+    createdAt: startedAt - 1,
+    updatedAt: startedAt - 1
+  };
+  database.tasks.push(task);
   database.repeatRules.push(createBoundaryRule({
     startedAt,
     endedAt: queryStart + 30 * MINUTE_MS,
-    frequency: 'daily'
+    frequency: 'daily',
+    taskId: task.id,
+    taskNameSnapshot: task.title
   }));
 
   const statistics = buildStatistics(database, {
@@ -383,8 +432,143 @@ test('统计跨范围起点候选时保留完整持续时间而不按查询边�
     includeCandidates: true
   });
 
-  assert.equal(statistics.totalMinutes, 60);
-  assert.equal(statistics.weeklyReview.logCount, 1);
+  assert.equal(statistics.totalMinutes, 0);
+  assert.equal(statistics.weeklyReview.logCount, 0);
+  assert.equal(statistics.planVariance.events.length, 1);
+  assert.equal(statistics.planVariance.events[0].plannedMinutes, 60);
+  assert.equal(statistics.planVariance.events[0].actualMinutes, 0);
+});
+
+test('项目统计只沿计划块到任务再到项目派生，忽略日志旧直接关联', () => {
+  const startedAt = localTimestamp(2026, 7, 8, 9);
+  const database = createInitialDatabase(startedAt - DAY_MS);
+  const project = { id: 'project_plan', title: '计划项目', status: 'active' };
+  const task = {
+    id: 'task_plan',
+    title: '计划任务',
+    status: 'todo',
+    projectId: project.id,
+    projectNameSnapshot: project.title,
+    completedAt: null
+  };
+  const event = createCalendarEvent({
+    title: '任务计划块',
+    startedAt,
+    endedAt: startedAt + HOUR_MS,
+    priority: 1,
+    taskId: task.id,
+    taskNameSnapshot: task.title
+  }, startedAt - 1);
+  database.projects.push(project);
+  database.tasks.push(task);
+  database.calendarEvents.push(event);
+  database.timeLogs.push(
+    createTimeLog({
+      startedAt,
+      endedAt: startedAt + HOUR_MS,
+      durationMinutes: 60,
+      calendarEventId: event.id,
+      calendarEventSummarySnapshot: event.title,
+      projectId: 'project_legacy_wrong',
+      projectNameSnapshot: '错误旧项目',
+      taskId: 'task_legacy_wrong',
+      taskNameSnapshot: '错误旧任务',
+      status: LOG_STATUS.CONFIRMED,
+      source: LOG_SOURCE.MANUAL
+    }, startedAt + HOUR_MS),
+    createTimeLog({
+      startedAt: startedAt + HOUR_MS,
+      endedAt: startedAt + HOUR_MS + 30 * MINUTE_MS,
+      durationMinutes: 30,
+      projectId: project.id,
+      projectNameSnapshot: project.title,
+      taskId: task.id,
+      taskNameSnapshot: task.title,
+      status: LOG_STATUS.CONFIRMED,
+      source: LOG_SOURCE.MANUAL
+    }, startedAt + 2 * HOUR_MS)
+  );
+
+  const statistics = buildStatistics(database, {
+    rangeStart: startedAt,
+    rangeEnd: startedAt + 2 * HOUR_MS
+  });
+  const projectsById = new Map(statistics.projects.map((item) => [item.id, item]));
+
+  assert.equal(projectsById.get(project.id).durationMinutes, 60);
+  assert.equal(projectsById.get('unassigned').durationMinutes, 30);
+  assert.equal(statistics.planVariance.nonPlannedMinutes, 30);
+});
+
+test('重复计划实例的项目归属由规则修订任务派生且不计为非计划实际', () => {
+  const seedStart = localTimestamp(2026, 7, 8, 9);
+  const occurrenceStart = seedStart + DAY_MS;
+  const database = createInitialDatabase(seedStart - DAY_MS);
+  const project = { id: 'project_rule', title: '重复计划项目', status: 'active' };
+  const task = {
+    id: 'task_rule',
+    title: '重复计划任务',
+    status: 'todo',
+    projectId: project.id,
+    projectNameSnapshot: project.title,
+    completedAt: null
+  };
+  const rule = createRepeatRule({
+    title: '每日计划',
+    startedAt: seedStart,
+    endedAt: seedStart + HOUR_MS,
+    priority: 1,
+    frequency: 'daily',
+    interval: 1,
+    taskId: task.id,
+    taskNameSnapshot: task.title
+  }, seedStart - 1);
+  const occurrence = projectRule(rule, occurrenceStart, occurrenceStart, [])[0];
+  database.projects.push(project);
+  database.tasks.push(task);
+  database.repeatRules.push(rule);
+  database.timeLogs.push(createTimeLog({
+    startedAt: occurrence.startedAt,
+    endedAt: occurrence.endedAt,
+    durationMinutes: 60,
+    status: LOG_STATUS.CONFIRMED,
+    source: LOG_SOURCE.RULE,
+    originRuleId: rule.id,
+    originOccurrenceId: occurrence.originOccurrenceId,
+    originRuleSummarySnapshot: rule.title
+  }, occurrenceStart + HOUR_MS));
+
+  const statistics = buildStatistics(database, {
+    rangeStart: occurrenceStart,
+    rangeEnd: occurrenceStart + HOUR_MS
+  });
+
+  assert.deepEqual(
+    statistics.projects.map((item) => [item.id, item.durationMinutes]),
+    [[project.id, 60]]
+  );
+  assert.equal(statistics.planVariance.nonPlannedMinutes, 0);
+  assert.equal(statistics.planVariance.events.length, 1);
+  assert.equal(statistics.planVariance.events[0].actualMinutes, 60);
+});
+
+test('没有有效任务的旧重复规则不再投影新的候选计划实例', () => {
+  const startedAt = localTimestamp(2026, 7, 8, 9);
+  const database = createInitialDatabase(startedAt - DAY_MS);
+  database.repeatRules.push(createBoundaryRule({
+    startedAt,
+    endedAt: startedAt + HOUR_MS,
+    frequency: 'daily'
+  }));
+
+  const statistics = buildStatistics(database, {
+    rangeStart: startedAt,
+    rangeEnd: startedAt + DAY_MS,
+    includeCandidates: true
+  });
+
+  assert.equal(statistics.totalMinutes, 0);
+  assert.deepEqual(statistics.planVariance.events, []);
 });
 
 test('查询级重复投影按修订实际时长回看超过 24 小时的候选', () => {

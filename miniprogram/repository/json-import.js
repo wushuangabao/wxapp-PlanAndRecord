@@ -5,6 +5,7 @@ const {
 } = require('../domain/constants');
 const { clone, createInitialDatabase } = require('../domain/entities');
 const { DomainError } = require('../domain/errors');
+const { logicalOccurrenceStart, projectRule } = require('../domain/recurrence');
 const { validateJsonSnapshot, persistedValueEquals } = require('./json-snapshot');
 
 const ENTITY_COLLECTIONS = [
@@ -139,17 +140,58 @@ function repairFinalReferences(database) {
     }
   }
 
+  function hasReferenceValue(value) {
+    return value !== undefined && value !== null && value !== '';
+  }
+
+  function normalizeRuntimeDraft(draft) {
+    if (!draft || typeof draft !== 'object') return;
+    if (Object.prototype.hasOwnProperty.call(draft, 'projectId')) draft.projectId = null;
+    if (Object.prototype.hasOwnProperty.call(draft, 'taskId')) draft.taskId = null;
+
+    if (hasReferenceValue(draft.calendarEventId)) {
+      const event = database.calendarEvents.find((item) => item.id === draft.calendarEventId);
+      if (!event || !event.taskId || !taskIds.has(event.taskId)) {
+        draft.calendarEventSummarySnapshot = draft.calendarEventSummarySnapshot
+          || (event ? event.title : null);
+        draft.calendarEventId = null;
+        repairedReferenceCount += 1;
+      }
+    }
+
+    if (hasReferenceValue(draft.originRuleId) || hasReferenceValue(draft.originOccurrenceId)) {
+      const rule = database.repeatRules.find((item) => item.id === draft.originRuleId);
+      const occurrenceStart = logicalOccurrenceStart(
+        draft.originRuleId,
+        draft.originOccurrenceId
+      );
+      const occurrence = rule && occurrenceStart !== null
+        ? projectRule(
+          rule,
+          occurrenceStart,
+          occurrenceStart,
+          database.occurrenceExceptions
+        ).find((item) => item.originOccurrenceId === draft.originOccurrenceId)
+        : null;
+      if (!occurrence || !occurrence.taskId || !taskIds.has(occurrence.taskId)) {
+        draft.originRuleSummarySnapshot = draft.originRuleSummarySnapshot
+          || (rule ? rule.title : null);
+        draft.originRuleId = null;
+        draft.originOccurrenceId = null;
+        repairedReferenceCount += 1;
+      }
+    }
+  }
+
   database.tasks.forEach((item) => clearMissing(item, 'projectId', projectIds));
 
   database.calendarEvents.forEach((item) => {
-    clearMissing(item, 'projectId', projectIds);
     clearMissing(item, 'taskId', taskIds);
     clearMissing(item, 'repeatRuleId', ruleIds);
   });
 
   database.repeatRules.forEach((rule) => {
     rule.revisions.forEach((item) => {
-      clearMissing(item, 'projectId', projectIds);
       clearMissing(item, 'taskId', taskIds);
     });
   });
@@ -161,7 +203,6 @@ function repairFinalReferences(database) {
       return false;
     }
     if (item.override) {
-      clearMissing(item.override, 'projectId', projectIds);
       clearMissing(item.override, 'taskId', taskIds);
     }
     return true;
@@ -173,11 +214,19 @@ function repairFinalReferences(database) {
       item.categoryNameSnapshot = defaultCategory.name;
       repairedReferenceCount += 1;
     }
-    clearMissing(item, 'projectId', projectIds);
-    clearMissing(item, 'taskId', taskIds);
     clearMissing(item, 'calendarEventId', eventIds);
-    clearMissing(item, 'originRuleId', ruleIds);
+    if (item.originRuleId !== null && !ruleIds.has(item.originRuleId)) {
+      item.originRuleId = null;
+      repairedReferenceCount += 1;
+    }
   });
+
+  normalizeRuntimeDraft(database.timer && database.timer.draft);
+  normalizeRuntimeDraft(
+    database.recoveryDraft
+      && database.recoveryDraft.timer
+      && database.recoveryDraft.timer.draft
+  );
 
   return { repairedReferenceCount, discardedExceptionCount };
 }
