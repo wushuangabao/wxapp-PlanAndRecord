@@ -6,6 +6,8 @@ const TODO_COLUMN_SIZE = 3;
 const TODO_SWIPE_DISTANCE = 18;
 const TODO_RETURN_ANIMATION_DURATION = 600;
 const TODO_RETURN_ANIMATION_FRAME = 16;
+const TODO_BOUNDARY_PULL_RESISTANCE = 0.45;
+const TODO_BOUNDARY_MAX_OFFSET = 72;
 const TODO_TITLE_UNLINKED_FONT_SIZE = 32;
 const TODO_TITLE_LINKED_FONT_SIZE = 28;
 const TODO_TITLE_MIN_FONT_SIZE = 18;
@@ -78,6 +80,8 @@ Page({
     todoColumnStep: 0,
     todoScrollLeft: 0,
     todoScrollWithAnimation: true,
+    todoBoundaryOffset: 0,
+    todoBoundaryIsDragging: false,
     activeProjects: [],
     archivedProjects: [],
     projectTitle: '',
@@ -95,7 +99,12 @@ Page({
     editWishTitle: '',
     isWishExpanded: false,
     isProjectCreateOpen: false,
+    isTaskEditorOpen: false,
+    isOkrEditorOpen: false,
+    isProjectEditorOpen: false,
+    pendingTaskProjectLinkId: '',
     taskEditor: null,
+    taskProjectPicker: null,
     okrEditor: null,
     projectTaskPanel: null,
     projectEditor: null,
@@ -237,9 +246,28 @@ Page({
 
   onTodoTouchStart(event) {
     this.clearTodoScrollAnimation();
+    if (this.data.todoBoundaryOffset || this.data.todoBoundaryIsDragging) {
+      this.setData({ todoBoundaryOffset: 0, todoBoundaryIsDragging: false });
+    }
     const touch = event.touches && event.touches[0];
     this.todoTouchStartX = touch ? touch.pageX : null;
     this.todoScrollLeft = this.data.todoScrollLeft;
+  },
+
+  onTodoTouchMove(event) {
+    const touch = event.touches && event.touches[0];
+    if (!touch || this.todoTouchStartX === null || this.todoTouchStartX === undefined) return;
+    const dragDistance = touch.pageX - this.todoTouchStartX;
+    if (this.data.todoColumnIndex !== 0 || dragDistance <= 0) {
+      if (this.data.todoBoundaryOffset || this.data.todoBoundaryIsDragging) {
+        this.setData({ todoBoundaryOffset: 0, todoBoundaryIsDragging: false });
+      }
+      return;
+    }
+    this.setData({
+      todoBoundaryOffset: Math.min(TODO_BOUNDARY_MAX_OFFSET, dragDistance * TODO_BOUNDARY_PULL_RESISTANCE),
+      todoBoundaryIsDragging: true
+    });
   },
 
   onTodoScroll(event) {
@@ -252,10 +280,18 @@ Page({
     const deltaX = this.todoTouchStartX === null || endX === null ? 0 : this.todoTouchStartX - endX;
     const currentLeft = this.todoScrollLeft === undefined ? this.data.todoScrollLeft : this.todoScrollLeft;
     const nearestIndex = this.data.todoColumnStep ? Math.round(currentLeft / this.data.todoColumnStep) : this.data.todoColumnIndex;
-    const nextIndex = Math.abs(deltaX) > TODO_SWIPE_DISTANCE
-      ? this.data.todoColumnIndex + (deltaX > 0 ? 1 : -1)
-      : nearestIndex;
+    const swipeDirection = deltaX > 0 ? 1 : -1;
+    const requestedIndex = this.data.todoColumnIndex + swipeDirection;
+    const isFirstColumnPull = this.data.todoColumnIndex === 0 && this.data.todoBoundaryIsDragging;
     this.todoTouchStartX = null;
+    if (isFirstColumnPull) {
+      this.setData({ todoBoundaryOffset: 0, todoBoundaryIsDragging: false });
+      this.snapTodoColumn(this.data.todoColumnIndex);
+      return;
+    }
+    const nextIndex = Math.abs(deltaX) > TODO_SWIPE_DISTANCE
+      ? requestedIndex
+      : nearestIndex;
     this.snapTodoColumn(nextIndex);
   },
 
@@ -264,17 +300,21 @@ Page({
   },
 
   openProjectCreate() {
-    this.setData({ isProjectCreateOpen: true });
+    this.setData({ isProjectCreateOpen: true, pendingTaskProjectLinkId: '' });
   },
 
   closeProjectCreate() {
-    this.setData({ isProjectCreateOpen: false });
+    this.setData({ isProjectCreateOpen: false, pendingTaskProjectLinkId: '' });
   },
 
   addProject() {
     try {
       const deadlineAt = parseLocalDateTime(this.data.projectDate, this.data.projectTime);
-      getService().createProject({
+      const pendingTaskProjectLinkId = this.data.pendingTaskProjectLinkId;
+      if (pendingTaskProjectLinkId && !getService().snapshot().tasks.some((task) => task.id === pendingTaskProjectLinkId)) {
+        throw new Error('要关联的 TODO 已不存在，请重新选择');
+      }
+      const project = getService().createProject({
         title: this.data.projectTitle,
         deadlineAt,
         objectives: [{
@@ -282,14 +322,16 @@ Page({
           keyResults: [{ title: this.data.projectKeyResult, currentValue: Number(this.data.projectCurrent) }]
         }]
       });
+      if (pendingTaskProjectLinkId) getService().updateTask(pendingTaskProjectLinkId, { projectId: project.id });
       this.setData({
         isProjectCreateOpen: false,
+        pendingTaskProjectLinkId: '',
         projectTitle: '',
         projectObjective: '',
         projectKeyResult: '',
         projectCurrent: ''
       });
-      showSaved('项目已创建');
+      showSaved(pendingTaskProjectLinkId ? '项目已创建并关联 TODO' : '项目已创建');
       this.refresh();
     } catch (error) {
       showError(error);
@@ -297,23 +339,44 @@ Page({
   },
 
   openStandaloneTask() {
-    this.setData({ taskEditor: buildTaskEditor(this.data.activeProjects), taskTitle: '' });
+    const editor = this.data.taskEditor;
+    if (editor && !this.data.isTaskEditorOpen && editor.mode === 'create' && !editor.taskId) {
+      this.setData({ isTaskEditorOpen: true });
+      return;
+    }
+    this.setData({ taskEditor: buildTaskEditor(this.data.activeProjects), taskTitle: '', isTaskEditorOpen: true });
   },
 
   openChildTask(event) {
     const project = this.data.activeProjects.find((item) => item.id === event.currentTarget.dataset.id);
     if (!project) return;
-    this.setData({ taskEditor: buildTaskEditor(this.data.activeProjects, null, project.id), taskTitle: '' });
+    const editor = this.data.taskEditor;
+    const selectedProject = editor && editor.projectOptions[editor.projectIndex];
+    if (editor && !this.data.isTaskEditorOpen && editor.mode === 'create' && !editor.taskId && selectedProject && selectedProject.id === project.id) {
+      this.setData({ isTaskEditorOpen: true });
+      return;
+    }
+    this.setData({ taskEditor: buildTaskEditor(this.data.activeProjects, null, project.id), taskTitle: '', isTaskEditorOpen: true });
   },
 
   openTaskEditor(event) {
     const task = this.data.tasks.find((item) => item.id === event.currentTarget.dataset.id);
     if (!task) return;
-    this.setData({ taskEditor: buildTaskEditor(this.data.activeProjects, task), taskTitle: task.title });
+    const editor = this.data.taskEditor;
+    if (editor && !this.data.isTaskEditorOpen && editor.mode === 'edit' && editor.taskId === task.id) {
+      this.setData({ isTaskEditorOpen: true });
+      return;
+    }
+    this.setData({ taskEditor: buildTaskEditor(this.data.activeProjects, task), taskTitle: task.title, isTaskEditorOpen: true });
   },
 
   closeTaskEditor() {
-    this.setData({ taskEditor: null, taskTitle: '' });
+    this.setData({ taskEditor: null, taskTitle: '', isTaskEditorOpen: false });
+  },
+
+  dismissTaskEditor() {
+    if (!this.data.taskEditor) return;
+    this.setData({ isTaskEditorOpen: false });
   },
 
   onTaskProjectChange(event) {
@@ -364,22 +427,56 @@ Page({
   },
 
   chooseTaskProject(event) {
-    const id = event.currentTarget.dataset.id;
-    const projects = this.data.activeProjects.slice();
-    wx.showActionSheet({
-      itemList: ['取消关联'].concat(projects.map((project) => project.title)),
-      success: (result) => {
-        if (!Number.isInteger(result.tapIndex)) return;
-        try {
-          const project = result.tapIndex === 0 ? null : projects[result.tapIndex - 1];
-          getService().updateTask(id, { projectId: project ? project.id : null });
-          showSaved(project ? '已关联项目' : '已取消关联');
-          this.refresh();
-        } catch (error) {
-          showError(error);
-        }
+    const task = this.data.tasks.find((item) => item.id === event.currentTarget.dataset.id);
+    if (!task) return;
+    const activeProjects = this.data.activeProjects;
+    if (!activeProjects.length) {
+      this.setData({ isProjectCreateOpen: true, pendingTaskProjectLinkId: task.id });
+      return;
+    }
+    const projects = activeProjects
+      .filter((project) => project.id !== task.projectId)
+      .map((project) => ({ id: project.id, title: project.title }));
+    this.setData({
+      taskProjectPicker: {
+        taskId: task.id,
+        title: task.projectId ? '更改所属项目' : '添加到项目…',
+        projects,
+        optionsHeight: Math.min((projects.length + (task.projectId ? 1 : 0)) * 96, 480),
+        canUnlink: Boolean(task.projectId)
       }
     });
+  },
+
+  closeTaskProjectPicker() {
+    this.setData({ taskProjectPicker: null });
+  },
+
+  selectTaskProject(event) {
+    try {
+      const picker = this.data.taskProjectPicker;
+      const project = picker && this.data.activeProjects.find((item) => item.id === event.currentTarget.dataset.id);
+      if (!picker || !project) return;
+      getService().updateTask(picker.taskId, { projectId: project.id });
+      this.closeTaskProjectPicker();
+      showSaved('已关联项目');
+      this.refresh();
+    } catch (error) {
+      showError(error);
+    }
+  },
+
+  unlinkTaskProject() {
+    try {
+      const picker = this.data.taskProjectPicker;
+      if (!picker || !picker.canUnlink) return;
+      getService().updateTask(picker.taskId, { projectId: null });
+      this.closeTaskProjectPicker();
+      showSaved('已取消关联');
+      this.refresh();
+    } catch (error) {
+      showError(error);
+    }
   },
 
   confirmDeleteTask(event) {
@@ -420,11 +517,21 @@ Page({
   openKeyResult(event) {
     const project = this.data.activeProjects.find((item) => item.id === event.currentTarget.dataset.id);
     if (!project) return;
-    this.setData({ okrEditor: project, objectiveTitle: '', keyResultTitle: '', currentValue: '' });
+    const editor = this.data.okrEditor;
+    if (editor && !this.data.isOkrEditorOpen && editor.id === project.id) {
+      this.setData({ isOkrEditorOpen: true });
+      return;
+    }
+    this.setData({ okrEditor: project, objectiveTitle: '', keyResultTitle: '', currentValue: '', isOkrEditorOpen: true });
   },
 
   closeKeyResult() {
-    this.setData({ okrEditor: null, objectiveTitle: '', keyResultTitle: '', currentValue: '' });
+    this.setData({ okrEditor: null, objectiveTitle: '', keyResultTitle: '', currentValue: '', isOkrEditorOpen: false });
+  },
+
+  dismissKeyResult() {
+    if (!this.data.okrEditor) return;
+    this.setData({ isOkrEditorOpen: false });
   },
 
   saveKeyResult() {
@@ -463,11 +570,27 @@ Page({
 
   openProjectEditorByProject(project) {
     const deadline = defaultDateTime(project.deadlineAt);
-    this.setData({ projectEditor: project, projectEditorTitle: project.title, projectEditorDate: deadline.date, projectEditorTime: deadline.time });
+    const editor = this.data.projectEditor;
+    if (editor && !this.data.isProjectEditorOpen && editor.id === project.id) {
+      this.setData({ isProjectEditorOpen: true });
+      return;
+    }
+    this.setData({
+      projectEditor: project,
+      projectEditorTitle: project.title,
+      projectEditorDate: deadline.date,
+      projectEditorTime: deadline.time,
+      isProjectEditorOpen: true
+    });
   },
 
   closeProjectEditor() {
-    this.setData({ projectEditor: null });
+    this.setData({ projectEditor: null, isProjectEditorOpen: false });
+  },
+
+  dismissProjectEditor() {
+    if (!this.data.projectEditor) return;
+    this.setData({ isProjectEditorOpen: false });
   },
 
   saveProjectEditor() {

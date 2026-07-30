@@ -1,3 +1,6 @@
 {
-  "navigationBarTitleText": "快速记录"
+  "navigationBarTitleText": "快速记录",
+  "usingComponents": {
+    "sheet-header": "/components/sheet-header/index"
+  }
 }

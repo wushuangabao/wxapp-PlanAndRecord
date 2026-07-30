@@ -1,3 +1,6 @@
 {
-  "navigationBarTitleText": "愿望与项目"
+  "navigationBarTitleText": "愿望与项目",
+  "usingComponents": {
+    "sheet-header": "/components/sheet-header/index"
+  }
 }

@@ -42,7 +42,7 @@
 
   <view wx:if="{{showManual}}" class="modal-mask">
     <view class="modal" catchtap="noop">
-      <view class="modal-title">{{manualMode === 'recovery' ? '修正恢复草稿' : '手工补录'}}</view>
+      <sheet-header title="{{manualMode === 'recovery' ? '修正恢复草稿' : '手工补录'}}" show-confirm="{{true}}" bind:confirm="onManualSave" bind:cancel="closeManual" />
       <picker mode="date" value="{{manualStartDate}}" data-key="manualStartDate" bindchange="onManualField"><view class="picker-field">开始日期：{{manualStartDate}}</view></picker>
       <picker mode="time" value="{{manualStartTime}}" data-key="manualStartTime" bindchange="onManualField"><view class="picker-field">开始：{{manualStartTime}}</view></picker>
       <picker mode="date" value="{{manualEndDate}}" data-key="manualEndDate" bindchange="onManualField"><view class="picker-field">结束日期：{{manualEndDate}}</view></picker>
@@ -55,7 +55,6 @@
         <view wx:else class="tag-chip tag-add" role="button" data-tags-key="manualTags" data-input-visible-key="manualTagInputVisible" bindtap="openTagInput" aria-label="添加标签">+</view>
       </view>
       <view class="tag-hint">最多 {{maxTagsPerLog}} 个，每个 {{maxTagLength}} 个字符</view>
-      <view class="modal-actions"><button class="secondary" bindtap="closeManual">取消</button><button class="primary small" bindtap="onManualSave">{{manualMode === 'recovery' ? '创建候选记录' : '保存记录'}}</button></view>
     </view>
   </view>
 </view>

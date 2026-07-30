@@ -8,6 +8,12 @@ const { TASK_STATUS } = require('../miniprogram/domain/constants');
 const plansPagePath = require.resolve('../miniprogram/pages/plans/index.js');
 const plansWxmlPath = path.join(__dirname, '../miniprogram/pages/plans/index.wxml');
 const plansWxssPath = path.join(__dirname, '../miniprogram/pages/plans/index.wxss');
+const plansJsonPath = path.join(__dirname, '../miniprogram/pages/plans/index.json');
+const sheetHeaderDirectory = path.join(__dirname, '../miniprogram/components/sheet-header');
+const sheetHeaderJsPath = path.join(sheetHeaderDirectory, 'index.js');
+const sheetHeaderJsonPath = path.join(sheetHeaderDirectory, 'index.json');
+const sheetHeaderWxmlPath = path.join(sheetHeaderDirectory, 'index.wxml');
+const sheetHeaderWxssPath = path.join(sheetHeaderDirectory, 'index.wxss');
 
 function loadPlansPage() {
   const originalPage = global.Page;
@@ -19,6 +25,16 @@ function loadPlansPage() {
   return page;
 }
 
+function loadSheetHeader() {
+  const originalComponent = global.Component;
+  let component;
+  global.Component = (definition) => { component = definition; };
+  delete require.cache[sheetHeaderJsPath];
+  require(sheetHeaderJsPath);
+  global.Component = originalComponent;
+  return component;
+}
+
 function event(id, status) {
   return { currentTarget: { dataset: { id, status } } };
 }
@@ -27,18 +43,25 @@ function inputEvent(key, value) {
   return { currentTarget: { dataset: { key } }, detail: { value } };
 }
 
-function createHarness({ tasks: providedTasks } = {}) {
+function createHarness({ tasks: providedTasks, projects: providedProjects } = {}) {
   const originalGetApp = global.getApp;
   const originalWx = global.wx;
   const project = { id: 'project_1', title: '项目一', status: 'active', deadlineAt: 1_700_100_000_000, deadlineText: '2023-11-15 00:00', objectives: [] };
+  const projects = providedProjects || [project];
   const tasks = providedTasks || [
     { id: 'task_todo', title: '未完成', status: TASK_STATUS.TODO, projectId: project.id, projectNameSnapshot: project.title, updatedAt: 20 },
     { id: 'task_done', title: '已完成', status: TASK_STATUS.COMPLETED, projectId: project.id, projectNameSnapshot: project.title, updatedAt: 10 }
   ];
-  const calls = { createTask: [], updateTask: [], deleteTask: [] };
+  const calls = { createProject: [], createTask: [], updateTask: [], deleteTask: [] };
   const wxState = {};
   const service = {
-    snapshot() { return { projects: [project], wishes: [], tasks }; },
+    snapshot() { return { projects, wishes: [], tasks }; },
+    createProject(input) {
+      calls.createProject.push(input);
+      const createdProject = { id: 'project_created', title: input.title, status: 'active', deadlineAt: input.deadlineAt, objectives: input.objectives };
+      projects.push(createdProject);
+      return createdProject;
+    },
     createTask(input) { calls.createTask.push(input); },
     updateTask(id, input) { calls.updateTask.push([id, input]); },
     deleteTask(id, confirmed) { calls.deleteTask.push([id, confirmed]); }
@@ -51,7 +74,7 @@ function createHarness({ tasks: providedTasks } = {}) {
     showActionSheet(config) { wxState.actionSheet = config; },
     showModal(config) { wxState.modal = config; }
   };
-  page.data = { ...page.data, activeProjects: [project], tasks };
+  page.data = { ...page.data, activeProjects: projects.filter((item) => item.status === 'active'), tasks };
   page.setData = (updates, callback) => {
     Object.assign(page.data, updates);
     if (callback) callback();
@@ -113,13 +136,124 @@ test('计划页：任务标题区域可打开编辑表单，表单提供关联�
   assert.match(wxml, /taskEditor.mode === 'edit' \? '编辑 TODO' : '新建 TODO'/);
 });
 
-test('计划页：关联菜单首项取消关联，删除必须确认', () => {
+test('计划页：项目选择弹窗按关联状态显示标题和取消关联项', () => {
+  const firstProject = { id: 'project_1', title: '项目一', status: 'active', deadlineAt: 1_700_100_000_000, objectives: [] };
+  const secondProject = { id: 'project_2', title: '项目二', status: 'active', deadlineAt: 1_700_200_000_000, objectives: [] };
+  const harness = createHarness({
+    projects: [firstProject, secondProject],
+    tasks: [{ id: 'task_todo', title: '已关联 TODO', status: TASK_STATUS.TODO, projectId: firstProject.id, projectNameSnapshot: firstProject.title, updatedAt: 20 }]
+  });
+  try {
+    harness.page.chooseTaskProject(event('task_todo'));
+    assert.deepEqual(harness.page.data.taskProjectPicker, {
+      taskId: 'task_todo',
+      title: '更改所属项目',
+      projects: [{ id: 'project_2', title: '项目二' }],
+      optionsHeight: 192,
+      canUnlink: true
+    });
+  } finally {
+    harness.restore();
+  }
+
+  const unlinkedHarness = createHarness({
+    projects: [firstProject, secondProject],
+    tasks: [{ id: 'task_unlinked', title: '独立 TODO', status: TASK_STATUS.TODO, projectId: null, projectNameSnapshot: '', updatedAt: 10 }]
+  });
+  try {
+    unlinkedHarness.page.chooseTaskProject(event('task_unlinked'));
+    assert.deepEqual(unlinkedHarness.page.data.taskProjectPicker, {
+      taskId: 'task_unlinked',
+      title: '添加到项目…',
+      projects: [{ id: 'project_1', title: '项目一' }, { id: 'project_2', title: '项目二' }],
+      optionsHeight: 192,
+      canUnlink: false
+    });
+  } finally {
+    unlinkedHarness.restore();
+  }
+});
+
+test('计划页：仅当前关联项目仍打开更改所属项目弹窗', () => {
+  const project = { id: 'project_1', title: '项目一', status: 'active', deadlineAt: 1_700_100_000_000, objectives: [] };
+  const harness = createHarness({
+    projects: [project],
+    tasks: [{ id: 'task_todo', title: '已关联 TODO', status: TASK_STATUS.TODO, projectId: project.id, projectNameSnapshot: project.title, updatedAt: 20 }]
+  });
+  try {
+    harness.page.chooseTaskProject(event('task_todo'));
+    assert.deepEqual(harness.page.data.taskProjectPicker, {
+      taskId: 'task_todo',
+      title: '更改所属项目',
+      projects: [],
+      optionsHeight: 96,
+      canUnlink: true
+    });
+    assert.equal(harness.page.data.isProjectCreateOpen, false);
+  } finally {
+    harness.restore();
+  }
+});
+
+test('计划页：项目选择弹窗可关联项目，已关联 TODO 才可取消关联', () => {
   const harness = createHarness();
   try {
     harness.page.chooseTaskProject(event('task_todo'));
-    assert.deepEqual(harness.wxState.actionSheet.itemList, ['取消关联', '项目一']);
-    harness.wxState.actionSheet.success({ tapIndex: 0 });
+    harness.page.selectTaskProject(event('project_1'));
+    assert.deepEqual(harness.calls.updateTask.at(-1), ['task_todo', { projectId: 'project_1' }]);
+
+    harness.page.chooseTaskProject(event('task_todo'));
+    harness.page.unlinkTaskProject();
     assert.deepEqual(harness.calls.updateTask.at(-1), ['task_todo', { projectId: null }]);
+  } finally {
+    harness.restore();
+  }
+});
+
+test('计划页：没有活动项目时新建项目并自动关联发起选择的 TODO', () => {
+  const harness = createHarness({
+    projects: [],
+    tasks: [{ id: 'task_unlinked', title: '独立 TODO', status: TASK_STATUS.TODO, projectId: null, projectNameSnapshot: '', updatedAt: 10 }]
+  });
+  try {
+    harness.page.chooseTaskProject(event('task_unlinked'));
+    assert.deepEqual(
+      { open: harness.page.data.isProjectCreateOpen, pendingTaskId: harness.page.data.pendingTaskProjectLinkId },
+      { open: true, pendingTaskId: 'task_unlinked' }
+    );
+
+    harness.page.setData({
+      projectTitle: '新项目',
+      projectDate: '2026-07-31',
+      projectTime: '09:00',
+      projectObjective: '首个目标',
+      projectKeyResult: '首个关键结果',
+      projectCurrent: '0'
+    });
+    harness.page.addProject();
+    assert.equal(harness.calls.createProject.length, 1);
+    assert.deepEqual(harness.calls.updateTask.at(-1), ['task_unlinked', { projectId: 'project_created' }]);
+  } finally {
+    harness.restore();
+  }
+});
+
+test('计划页：项目选择弹窗使用可滚动的原生动作面板式选项', () => {
+  const wxml = fs.readFileSync(plansWxmlPath, 'utf8');
+  const wxss = fs.readFileSync(plansWxssPath, 'utf8');
+
+  assert.match(wxml, /wx:if="{{taskProjectPicker}}"[\s\S]*{{taskProjectPicker.title}}/);
+  assert.match(wxml, /<scroll-view class="task-project-options" scroll-y="{{true}}" style="height: {{taskProjectPicker.optionsHeight}}rpx;">/);
+  assert.match(wxml, /wx:if="{{taskProjectPicker.canUnlink}}"[\s\S]*class="task-project-option task-project-unlink"[\s\S]*取消关联/);
+  assert.match(wxss, /\.task-project-options\s*\{[^}]*max-height:\s*56vh/s);
+  assert.match(wxss, /\.task-project-option\s*\{[^}]*background:\s*#ffffff;[^}]*color:\s*#000000;[^}]*text-align:\s*center/s);
+  assert.match(wxss, /\.task-project-option\s*\+\s*\.task-project-option\s*\{[^}]*border-top:\s*1rpx solid #e5e7eb/s);
+  assert.match(wxss, /\.task-project-unlink\s*\{[^}]*color:\s*#c73a38/s);
+});
+
+test('计划页：删除任务必须确认', () => {
+  const harness = createHarness();
+  try {
 
     harness.page.confirmDeleteTask(event('task_todo'));
     assert.equal(harness.wxState.modal.content, '未结束的关联计划会一并删除；已结束计划和计时记录会保留。');
@@ -301,6 +435,43 @@ test('计划页：TODO 每三条分列，横向拖动按方向吸附整列', () 
   }
 });
 
+test('计划页：TODO 首列右拖时跟随手势，松手后回弹归位', () => {
+  const tasks = Array.from({ length: 7 }, (_, index) => ({
+    id: `task_${index + 1}`,
+    title: `任务 ${index + 1}`,
+    status: TASK_STATUS.TODO,
+    projectId: null,
+    projectNameSnapshot: '',
+    updatedAt: 100 - index
+  }));
+  const harness = createHarness({ tasks });
+  try {
+    harness.page.refresh();
+    harness.page.setData({ todoColumnStep: 240, todoColumnIndex: 0, todoScrollLeft: 0 });
+    harness.page.onTodoTouchStart({ touches: [{ pageX: 100 }] });
+    harness.page.onTodoTouchMove({ touches: [{ pageX: 140 }] });
+    assert.deepEqual(
+      { index: harness.page.data.todoColumnIndex, left: harness.page.data.todoScrollLeft, offset: harness.page.data.todoBoundaryOffset, dragging: harness.page.data.todoBoundaryIsDragging },
+      { index: 0, left: 0, offset: 18, dragging: true }
+    );
+    harness.page.onTodoTouchEnd({ changedTouches: [{ pageX: 140 }] });
+    assert.deepEqual(
+      { index: harness.page.data.todoColumnIndex, left: harness.page.data.todoScrollLeft, offset: harness.page.data.todoBoundaryOffset, dragging: harness.page.data.todoBoundaryIsDragging },
+      { index: 0, left: 0, offset: 0, dragging: false }
+    );
+
+    harness.page.setData({ todoColumnIndex: 2, todoScrollLeft: 480 });
+    harness.page.onTodoTouchStart({ touches: [{ pageX: 100 }] });
+    harness.page.onTodoTouchEnd({ changedTouches: [{ pageX: 70 }] });
+    assert.deepEqual(
+      { index: harness.page.data.todoColumnIndex, left: harness.page.data.todoScrollLeft, offset: harness.page.data.todoBoundaryOffset, dragging: harness.page.data.todoBoundaryIsDragging },
+      { index: 2, left: 480, offset: 0, dragging: false }
+    );
+  } finally {
+    harness.restore();
+  }
+});
+
 test('计划页：TODO 测量相邻列起点作为含间距的吸附步长', () => {
   const harness = createHarness();
   try {
@@ -365,4 +536,28 @@ test('计划页：TODO 连续左划可吸附到最后一列，四条任务可吸
   } finally {
     fourTaskHarness.restore();
   }
+});
+
+test('计划页：共享底部弹窗头部承接创建和关闭事件', () => {
+  const wxml = fs.readFileSync(plansWxmlPath, 'utf8');
+  const pageConfig = JSON.parse(fs.readFileSync(plansJsonPath, 'utf8'));
+
+  assert.equal(fs.existsSync(sheetHeaderJsPath), true);
+  assert.deepEqual(JSON.parse(fs.readFileSync(sheetHeaderJsonPath, 'utf8')), { component: true });
+  assert.equal(pageConfig.usingComponents['sheet-header'], '/components/sheet-header/index');
+  assert.match(wxml, /<sheet-header title="新建项目" show-confirm="{{true}}" bind:confirm="addProject" bind:cancel="closeProjectCreate"\s*\/>/);
+  assert.match(wxml, /<sheet-header title="{{taskProjectPicker\.title}}" bind:cancel="closeTaskProjectPicker"\s*\/>/);
+  assert.doesNotMatch(wxml, /onProjectCreateModalTap|project-create-confirm|project-create-cancel/);
+
+  const component = loadSheetHeader();
+  const events = [];
+  component.methods.onConfirm.call({ triggerEvent: (name) => events.push(name) });
+  component.methods.onCancel.call({ triggerEvent: (name) => events.push(name) });
+
+  assert.deepEqual(events, ['confirm', 'cancel']);
+  assert.equal(component.properties.showConfirm.value, false);
+  assert.equal(component.properties.confirmText.value, '确定');
+  assert.match(fs.readFileSync(sheetHeaderWxmlPath, 'utf8'), /wx:if="{{showConfirm}}"[\s\S]*{{confirmText}}/);
+  assert.match(fs.readFileSync(sheetHeaderWxssPath, 'utf8'), /\.sheet-confirm\s*\{[^}]*width:\s*80rpx/s);
+  assert.match(fs.readFileSync(sheetHeaderWxssPath, 'utf8'), /\.sheet-cancel\s*\{[^}]*width:\s*56rpx/s);
 });

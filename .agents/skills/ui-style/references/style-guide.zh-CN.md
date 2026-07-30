@@ -73,3 +73,45 @@ page {
 - 流程型页面将主操作锚定在底部，使用 `padding-bottom: calc(32rpx + env(safe-area-inset-bottom))`。
 - 插画展示区域通常为 `240rpx` 到 `360rpx` 高，四周预留空气；不要用插画塞满首屏。
 - 并列选项采用等宽网格或自然换行；每项文字必须完整可见，不能依赖省略号隐藏核心差异。
+
+## 4. 底部弹窗头部标准
+
+所有底部弹窗头部必须使用项目共享组件 `miniprogram/components/sheet-header/`。组件是标题、紧凑 `确定` 和 `取消` 的唯一视觉来源；页面不得再复制其 WXML、WXSS 或用未约束宽度的原生 `<button>` 重建该组合。
+
+- 共享组件固定实现“左侧标题 + 右侧紧凑确定 + 取消”：标题为 `36rpx`、`700`、`#0f172a`；确定为 `80rpx × 52rpx` 的绿色主操作；取消为 `56rpx × 52rpx` 的无背景绿色文本操作。
+- 仅有关闭语义的选择类弹窗不显示确定，但仍使用同一组件显示标题和取消。
+- 页面不得覆盖 `.sheet-header`、`.sheet-title`、`.sheet-confirm` 或 `.sheet-cancel` 的布局与尺寸。需要调整全局视觉时，只修改共享组件并回归所有使用页面。
+- 组件只负责展示和发出事件，不读取或写入表单数据；创建、保存、关闭等业务逻辑必须继续由页面处理。
+- 弹窗遮罩使用 `bindtap` 关闭时，弹窗内容容器应使用 `catchtap="noop"`，避免头部点击冒泡到遮罩层。
+
+在使用页面的 JSON 中注册组件：
+
+```json
+{
+  "usingComponents": {
+    "sheet-header": "/components/sheet-header/index"
+  }
+}
+```
+
+需要确认的表单弹窗使用如下结构：
+
+```wxml
+<sheet-header
+  title="新建项目"
+  show-confirm="{{true}}"
+  bind:confirm="addProject"
+  bind:cancel="closeProjectCreate"
+/>
+```
+
+仅需关闭的选择类弹窗省略 `show-confirm`：
+
+```wxml
+<sheet-header
+  title="{{taskProjectPicker.title}}"
+  bind:cancel="closeTaskProjectPicker"
+/>
+```
+
+组件属性为 `title`、`showConfirm`、`confirmText` 和 `cancelText`；其中 `showConfirm` 默认 `false`，两个文案默认分别为“确定”和“取消”。组件分别触发 `confirm` 和 `cancel` 事件。

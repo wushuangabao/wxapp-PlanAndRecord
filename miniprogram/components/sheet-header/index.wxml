@@ -1,0 +1,7 @@
+<view class="sheet-header">
+  <view class="sheet-title">{{title}}</view>
+  <view class="sheet-actions">
+    <view wx:if="{{showConfirm}}" class="sheet-confirm" role="button" aria-label="{{confirmText}}" bindtap="onConfirm">{{confirmText}}</view>
+    <view class="sheet-cancel" role="button" aria-label="{{cancelText}}" bindtap="onCancel">{{cancelText}}</view>
+  </view>
+</view>
