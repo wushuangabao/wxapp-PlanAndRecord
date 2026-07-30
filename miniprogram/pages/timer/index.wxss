@@ -12,7 +12,13 @@
 .section { margin-top: 40rpx; padding: 32rpx; border-radius: 24rpx; background: #ffffff; }
 .section-title { margin-bottom: 20rpx; font-size: 32rpx; font-weight: 700; }
 .text-input { box-sizing: border-box; width: 100%; min-height: 76rpx; padding: 16rpx; border: 1rpx solid #cbd5e1; border-radius: 12rpx; background: #ffffff; }
-.tags-input { margin-top: 14rpx; }
+.tag-editor { display: flex; flex-wrap: wrap; gap: 14rpx; margin-top: 14rpx; }
+.tag-chip { display: flex; align-items: center; justify-content: center; min-width: 0; min-height: 64rpx; margin: 0; padding: 0 22rpx; border: 0; border-radius: 12rpx; background: #dcfce7; color: #166534; font-size: 26rpx; line-height: 1.2; }
+.tag-chip-removable { max-width: 100%; }
+.tag-chip-remove { margin-left: 10rpx; color: #15803d; font-size: 30rpx; line-height: 1; }
+.tag-add { flex: 0 0 64rpx; width: 64rpx; min-width: 64rpx; height: 64rpx; padding: 0; background: #f0fdf4; border: 1rpx dashed #86efac; color: #15803d; font-size: 34rpx; font-weight: 400; }
+.tag-input { box-sizing: border-box; width: 176rpx; text-align: left; }
+.tag-hint { margin-top: 12rpx; color: #64748b; font-size: 24rpx; line-height: 1.5; }
 .picker-row { margin-top: 18rpx; color: #334155; font-size: 26rpx; }
 .picker-row picker { padding: 14rpx 0; border-bottom: 1rpx solid #e2e8f0; }
 .link-button { margin-top: 18rpx; background: transparent; color: #15803d; font-size: 26rpx; text-align: left; }

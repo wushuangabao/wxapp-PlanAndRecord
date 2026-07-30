@@ -1,6 +1,6 @@
 const { MAX_TAGS_PER_LOG, MAX_TAG_LENGTH } = require('../../domain/constants');
 const { parseLocalDateTime } = require('../../domain/time');
-const { formatTagsText, parseTagsText } = require('../../domain/tags');
+const { normalizeTags } = require('../../domain/tags');
 const { rangeForView, shiftAnchor } = require('../../utils/date-range');
 const { defaultDateTime, formatDateTime, getService, showError, showSaved } = require('../../utils/page');
 
@@ -157,9 +157,8 @@ Page({
     logStart: '',
     logEnd: '',
     logNote: '',
-    logTagsText: '',
-    logOriginalTags: [],
-    logOriginalTagsText: '',
+    logTags: [],
+    logTagInputVisible: false,
     planEditor: null,
     planTitle: '',
     planStartDate: '',
@@ -477,7 +476,6 @@ Page({
     const start = defaultDateTime(item.startedAt);
     const end = defaultDateTime(item.endedAt);
     const originalTags = Array.isArray(item.tags) ? item.tags.slice() : [];
-    const originalTagsText = formatTagsText(originalTags);
     const service = this.currentService || getService();
     const snapshot = this.currentSnapshot || service.snapshot();
     const planSelection = planOptionsForRange(
@@ -518,9 +516,8 @@ Page({
       logStart: start.time,
       logEnd: end.time,
       logNote: item.note || '',
-      logTagsText: originalTagsText,
-      logOriginalTags: originalTags,
-      logOriginalTagsText: originalTagsText,
+      logTags: originalTags,
+      logTagInputVisible: false,
       logEvents: currentPlan.options,
       logEventIndex: currentPlan.index
     });
@@ -549,18 +546,56 @@ Page({
     this.setData({ logEditor: null });
   },
 
+  openTagInput(event) {
+    this.setData({ [event.currentTarget.dataset.inputVisibleKey]: true });
+  },
+
+  addTag(event) {
+    const { tagsKey, inputVisibleKey } = event.currentTarget.dataset;
+    if (!this.data[inputVisibleKey]) return;
+    try {
+      const [tag] = normalizeTags([event.detail.value]);
+      if (!tag) {
+        this.setData({ [inputVisibleKey]: false });
+        return;
+      }
+      const currentTags = this.data[tagsKey] || [];
+      if (currentTags.includes(tag)) {
+        wx.showToast({ title: '标签已存在', icon: 'none' });
+        return;
+      }
+      this.setData({
+        [tagsKey]: normalizeTags(currentTags.concat(tag)),
+        [inputVisibleKey]: false
+      });
+    } catch (error) {
+      showError(error);
+    }
+  },
+
+  onTagInputBlur(event) {
+    if (String(event.detail.value || '').trim()) {
+      this.addTag(event);
+      return;
+    }
+    this.setData({ [event.currentTarget.dataset.inputVisibleKey]: false });
+  },
+
+  removeTag(event) {
+    const { tagsKey } = event.currentTarget.dataset;
+    const index = Number(event.currentTarget.dataset.index);
+    this.setData({ [tagsKey]: (this.data[tagsKey] || []).filter((_, itemIndex) => itemIndex !== index) });
+  },
+
   saveLogEditor() {
     try {
       const item = this.data.logEditor;
       const calendarEvent = this.data.logEvents[this.data.logEventIndex];
-      const tags = this.data.logTagsText === this.data.logOriginalTagsText
-        ? this.data.logOriginalTags.slice()
-        : parseTagsText(this.data.logTagsText, { enforceLimits: false });
       const input = {
         startedAt: parseLocalDateTime(this.data.logDate, this.data.logStart),
         endedAt: parseLocalDateTime(this.data.logDate, this.data.logEnd),
         note: this.data.logNote,
-        tags
+        tags: this.data.logTags.slice()
       };
       Object.assign(input, associationInput(calendarEvent));
       getService().updateLog(item.id, input);

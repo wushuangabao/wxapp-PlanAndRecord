@@ -3,7 +3,7 @@ const {
   MAX_TAG_LENGTH,
   TIMER_STATUS
 } = require('../../domain/constants');
-const { formatTagsText, parseTagsText } = require('../../domain/tags');
+const { normalizeTags } = require('../../domain/tags');
 const { calculateTimerDurationMinutes, parseLocalDateTime, sumPausedMilliseconds } = require('../../domain/time');
 const { defaultDateTime, formatDateTime, getService, showError, showSaved } = require('../../utils/page');
 
@@ -169,18 +169,16 @@ Page({
     events: [],
     eventIndex: 0,
     note: '',
-    tagsText: '',
-    originalTags: [],
-    originalTagsText: '',
+    tags: [],
+    tagInputVisible: false,
     showManual: false,
     manualStartDate: '',
     manualStartTime: '',
     manualEndDate: '',
     manualEndTime: '',
     manualNote: '',
-    manualTagsText: '',
-    manualOriginalTags: [],
-    manualOriginalTagsText: '',
+    manualTags: [],
+    manualTagInputVisible: false,
     manualEvents: [],
     manualEventIndex: 0,
     manualMode: 'manual',
@@ -231,7 +229,6 @@ Page({
       const snapshot = service.snapshot();
       const draft = snapshot.timer.draft || {};
       const draftTags = Array.isArray(draft.tags) ? draft.tags.slice() : [];
-      const draftTagsText = formatTagsText(draftTags);
       const hasActiveDraft = snapshot.timer.status !== TIMER_STATUS.IDLE;
       const now = Date.now();
       const planSelection = planOptionsForRange(service, snapshot, now, now);
@@ -270,11 +267,7 @@ Page({
         eventIndex: currentPlan.index,
         recentLogs,
         note: snapshot.timer.status === TIMER_STATUS.IDLE ? this.data.note : (draft.note || ''),
-        tagsText: !hasActiveDraft
-          ? this.data.tagsText
-          : draftTagsText,
-        originalTags: hasActiveDraft ? draftTags : [],
-        originalTagsText: hasActiveDraft ? draftTagsText : ''
+        tags: hasActiveDraft ? draftTags : this.data.tags
       }, () => {
         this.updateElapsed();
         this.startTicker();
@@ -305,8 +298,46 @@ Page({
     this.setData({ note: event.detail.value });
   },
 
-  onTagsInput(event) {
-    this.setData({ tagsText: event.detail.value });
+  openTagInput(event) {
+    const inputVisibleKey = event.currentTarget.dataset.inputVisibleKey;
+    this.setData({ [inputVisibleKey]: true });
+  },
+
+  addTag(event) {
+    const { tagsKey, inputVisibleKey } = event.currentTarget.dataset;
+    if (!this.data[inputVisibleKey]) return;
+    try {
+      const [tag] = normalizeTags([event.detail.value]);
+      if (!tag) {
+        this.setData({ [inputVisibleKey]: false });
+        return;
+      }
+      const currentTags = this.data[tagsKey] || [];
+      if (currentTags.includes(tag)) {
+        wx.showToast({ title: '标签已存在', icon: 'none' });
+        return;
+      }
+      this.setData({
+        [tagsKey]: normalizeTags(currentTags.concat(tag)),
+        [inputVisibleKey]: false
+      });
+    } catch (error) {
+      showError(error);
+    }
+  },
+
+  onTagInputBlur(event) {
+    if (String(event.detail.value || '').trim()) {
+      this.addTag(event);
+      return;
+    }
+    this.setData({ [event.currentTarget.dataset.inputVisibleKey]: false });
+  },
+
+  removeTag(event) {
+    const { tagsKey } = event.currentTarget.dataset;
+    const index = Number(event.currentTarget.dataset.index);
+    this.setData({ [tagsKey]: (this.data[tagsKey] || []).filter((_, itemIndex) => itemIndex !== index) });
   },
 
   onPickerChange(event) {
@@ -314,23 +345,17 @@ Page({
   },
 
   selectedInput() {
-    const tags = this.data.tagsText === this.data.originalTagsText
-      ? this.data.originalTags.slice()
-      : parseTagsText(this.data.tagsText, { enforceLimits: false });
     return {
       ...associationInput(this.data.events, this.data.eventIndex),
       note: this.data.note,
-      tags
+      tags: this.data.tags.slice()
     };
   },
 
   selectedManualInput() {
-    const tags = this.data.manualTagsText === this.data.manualOriginalTagsText
-      ? this.data.manualOriginalTags.slice()
-      : parseTagsText(this.data.manualTagsText, { enforceLimits: false });
     return {
       ...associationInput(this.data.manualEvents, this.data.manualEventIndex),
-      tags
+      tags: this.data.manualTags.slice()
     };
   },
 
@@ -343,7 +368,7 @@ Page({
       if (status === TIMER_STATUS.PAUSED) service.resumeTimer();
       if (status === TIMER_STATUS.ENDED) {
         const result = service.generateTimerRecord();
-        this.setData({ eventIndex: 0, note: '', tagsText: '' });
+        this.setData({ eventIndex: 0, note: '', tags: [], tagInputVisible: false });
         showSaved(result.hasOverlap ? '已保存：存在重叠时间' : '记录已生成');
       }
       this.refresh();
@@ -409,9 +434,8 @@ Page({
       showManual: true,
       manualMode: 'manual',
       manualNote: '',
-      manualTagsText: '',
-      manualOriginalTags: [],
-      manualOriginalTagsText: '',
+      manualTags: [],
+      manualTagInputVisible: false,
       manualEvents: currentPlan.options,
       manualEventIndex: currentPlan.index
     });
@@ -425,7 +449,6 @@ Page({
     const end = defaultDateTime(endedAt);
     const draft = timer.draft || {};
     const originalTags = Array.isArray(draft.tags) ? draft.tags.slice() : [];
-    const originalTagsText = formatTagsText(originalTags);
     const service = this.currentService || getService();
     const snapshot = this.currentSnapshot || service.snapshot();
     const planSelection = planOptionsForRange(service, snapshot, startedAt, endedAt);
@@ -439,9 +462,8 @@ Page({
       manualEndDate: end.date,
       manualEndTime: end.time,
       manualNote: draft.note || '',
-      manualTagsText: originalTagsText,
-      manualOriginalTags: originalTags,
-      manualOriginalTagsText: originalTagsText,
+      manualTags: originalTags,
+      manualTagInputVisible: false,
       manualEvents: currentPlan.options,
       manualEventIndex: currentPlan.index
     });
@@ -473,9 +495,8 @@ Page({
         showManual: false,
         manualMode: 'manual',
         manualNote: '',
-        manualTagsText: '',
-        manualOriginalTags: [],
-        manualOriginalTagsText: ''
+        manualTags: [],
+        manualTagInputVisible: false
       });
       showSaved(wasRecovery ? '已创建待核实的恢复记录' : (result.hasOverlap ? '已保存：存在重叠时间' : '补录已保存'));
       this.refresh();

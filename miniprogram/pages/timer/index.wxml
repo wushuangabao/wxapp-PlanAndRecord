@@ -17,7 +17,12 @@
   <view class="section">
     <view class="section-title">本次记录</view>
     <input class="text-input" placeholder="备注（可稍后补充）" value="{{note}}" bindinput="onNoteInput" />
-    <input class="text-input tags-input" placeholder="标签（可选，逗号分隔，最多 {{maxTagsPerLog}} 个，每个 {{maxTagLength}} 个字符）" value="{{tagsText}}" bindinput="onTagsInput" />
+    <view class="tag-editor" aria-label="标签">
+      <view wx:for="{{tags}}" wx:key="*this" class="tag-chip tag-chip-removable" role="button" data-tags-key="tags" data-input-visible-key="tagInputVisible" data-index="{{index}}" bindtap="removeTag" aria-label="移除标签 {{item}}">{{item}}<text class="tag-chip-remove">×</text></view>
+      <input wx:if="{{tagInputVisible}}" class="tag-chip tag-input" focus placeholder="输入一个标签" data-tags-key="tags" data-input-visible-key="tagInputVisible" bindconfirm="addTag" bindblur="onTagInputBlur" />
+      <view wx:else class="tag-chip tag-add" role="button" data-tags-key="tags" data-input-visible-key="tagInputVisible" bindtap="openTagInput" aria-label="添加标签">+</view>
+    </view>
+    <view class="tag-hint">最多 {{maxTagsPerLog}} 个，每个 {{maxTagLength}} 个字符</view>
     <view class="picker-row">
       <picker range="{{events}}" range-key="title" value="{{eventIndex}}" data-key="eventIndex" bindchange="onPickerChange"><view>计划块：{{events[eventIndex].title || '非计划实际'}}</view></picker>
     </view>
@@ -44,7 +49,12 @@
       <picker mode="time" value="{{manualEndTime}}" data-key="manualEndTime" bindchange="onManualField"><view class="picker-field">结束：{{manualEndTime}}</view></picker>
       <picker range="{{manualEvents}}" range-key="title" value="{{manualEventIndex}}" data-key="manualEventIndex" bindchange="onPickerChange"><view class="picker-field">计划块：{{manualEvents[manualEventIndex].title || '非计划实际'}}</view></picker>
       <input class="text-input" placeholder="备注（可选）" value="{{manualNote}}" data-key="manualNote" bindinput="onManualField" />
-      <input class="text-input tags-input" placeholder="标签（可选，逗号分隔，最多 {{maxTagsPerLog}} 个，每个 {{maxTagLength}} 个字符）" value="{{manualTagsText}}" data-key="manualTagsText" bindinput="onManualField" />
+      <view class="tag-editor" aria-label="标签">
+        <view wx:for="{{manualTags}}" wx:key="*this" class="tag-chip tag-chip-removable" role="button" data-tags-key="manualTags" data-input-visible-key="manualTagInputVisible" data-index="{{index}}" bindtap="removeTag" aria-label="移除标签 {{item}}">{{item}}<text class="tag-chip-remove">×</text></view>
+        <input wx:if="{{manualTagInputVisible}}" class="tag-chip tag-input" focus placeholder="输入一个标签" data-tags-key="manualTags" data-input-visible-key="manualTagInputVisible" bindconfirm="addTag" bindblur="onTagInputBlur" />
+        <view wx:else class="tag-chip tag-add" role="button" data-tags-key="manualTags" data-input-visible-key="manualTagInputVisible" bindtap="openTagInput" aria-label="添加标签">+</view>
+      </view>
+      <view class="tag-hint">最多 {{maxTagsPerLog}} 个，每个 {{maxTagLength}} 个字符</view>
       <view class="modal-actions"><button class="secondary" bindtap="closeManual">取消</button><button class="primary small" bindtap="onManualSave">{{manualMode === 'recovery' ? '创建候选记录' : '保存记录'}}</button></view>
     </view>
   </view>

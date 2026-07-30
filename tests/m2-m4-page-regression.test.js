@@ -88,15 +88,14 @@ test('日历计划块只选择必选任务，日志编辑只选择标签和计�
   assert.match(wxml, /任务（必选）/);
   assert.match(wxml, /项目归属（由任务决定）/);
   assert.match(wxml, /logEventIndex/);
-  assert.match(wxml, /logTagsText/);
-  assert.match(
-    wxml,
-    /标签（可选，逗号分隔，最多 \{\{maxTagsPerLog\}\} 个，每个 \{\{maxTagLength\}\} 个字符）/
-  );
+  assert.match(wxml, /wx:for="\{\{logTags\}\}"/);
+  assert.match(wxml, /class="tag-chip tag-add"/);
+  assert.doesNotMatch(wxml, /逗号分隔/);
   assert.doesNotMatch(wxml, /分类|logCategoryIndex|data-key="projectIndex"|data-key="planProjectIndex"/);
   assert.doesNotMatch(script, /categoryById|logCategories|logCategoryIndex/);
   assert.doesNotMatch(script, /projectId:\s*project/);
-  assert.match(script, /parseTagsText\(this\.data\.logTagsText,\s*\{\s*enforceLimits:\s*false\s*\}\)/s);
+  assert.match(script, /normalizeTags/);
+  assert.match(script, /tags:\s*this\.data\.logTags\.slice\(\)/);
   assert.match(script, /originRuleId: item\.ruleId/);
   assert.match(script, /calendarEventId: item\.id/);
   const page = loadCalendarPage();
@@ -484,7 +483,7 @@ test('日志编辑器只改备注时不限额规范化并保留导入的超限�
         }
       }
     });
-    assert.equal(page.data.logTagsText.startsWith('"a,b"，"复,盘"'), true);
+    assert.deepEqual(page.data.logTags, importedTags);
     page.data.logNote = '只改备注';
     page.saveLogEditor();
     assert.equal(received.input.note, '只改备注');

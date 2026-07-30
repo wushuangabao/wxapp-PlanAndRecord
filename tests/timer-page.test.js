@@ -94,7 +94,7 @@ test('计时页只提交可选标签和计划块，不暴露分类、项目或�
     events: [{ id: '', title: '非计划实际' }, { id: 'event_plan', title: '写方案' }],
     eventIndex: 1,
     note: '按计划执行',
-    tagsText: ' 深度 ，写作, 深度，ＡＩ '
+    tags: ['深度', '写作', 'AI']
   };
   assert.deepEqual(page.selectedInput(), {
     calendarEventId: 'event_plan',
@@ -107,13 +107,13 @@ test('计时页只提交可选标签和计划块，不暴露分类、项目或�
   const wxml = fs.readFileSync(timerWxmlPath, 'utf8');
   assert.match(wxml, /计划块：/);
   assert.doesNotMatch(wxml, /分类：|项目：|任务：/);
-  assert.match(
-    wxml,
-    /标签（可选，逗号分隔，最多 \{\{maxTagsPerLog\}\} 个，每个 \{\{maxTagLength\}\} 个字符）/
-  );
+  assert.match(wxml, /wx:for="\{\{tags\}\}"/);
+  assert.match(wxml, /class="tag-chip tag-add"/);
+  assert.match(wxml, /bindtap="removeTag"/);
+  assert.doesNotMatch(wxml, /逗号分隔/);
 });
 
-test('计时页把完整超限标签交给应用服务拒绝并沿用领域错误提示', () => {
+test('计时页保留导入的超限标签交给应用服务按领域规则判断', () => {
   const originalGetApp = global.getApp;
   const originalWx = global.wx;
   const calls = [];
@@ -143,7 +143,7 @@ test('计时页把完整超限标签交给应用服务拒绝并沿用领域错�
       timer: { status: TIMER_STATUS.IDLE },
       events: [{ id: '', title: '非计划实际', associationType: 'none' }],
       eventIndex: 0,
-      tagsText: '一，二，三，四，五，六，七，八，九，十，十一'
+      tags: ['一', '二', '三', '四', '五', '六', '七', '八', '九', '十', '十一']
     });
 
     page.onPrimary();
@@ -158,25 +158,50 @@ test('计时页把完整超限标签交给应用服务拒绝并沿用领域错�
   }
 });
 
-test('计时页不限额解析导入标签，由应用服务按规范化结果判断是否实际修改', () => {
+test('计时页保留导入的超限标签数组，由应用服务按规范化结果判断是否实际修改', () => {
   const page = loadTimerPage();
   const importedTags = Array.from({ length: 11 }, (_, index) => `标签${index}`);
-  const originalTagsText = importedTags.join('，');
   Object.assign(page.data, {
     events: [{ id: '', title: '非计划实际', associationType: 'none' }],
     eventIndex: 0,
-    originalTags: importedTags,
-    originalTagsText,
-    tagsText: ` ${importedTags[0]} ，${importedTags.slice(1).join('，')}`,
+    tags: importedTags,
     manualEvents: [{ id: '', title: '非计划实际', associationType: 'none' }],
     manualEventIndex: 0,
-    manualOriginalTags: importedTags,
-    manualOriginalTagsText: originalTagsText,
-    manualTagsText: `${importedTags.slice(0, -1).join('，')}， ${importedTags.at(-1)} `
+    manualTags: importedTags
   });
 
   assert.deepEqual(page.selectedInput().tags, importedTags);
   assert.deepEqual(page.selectedManualInput().tags, importedTags);
+});
+
+test('计时页以标签块添加、规范化和移除标签', () => {
+  const originalWx = global.wx;
+  const toasts = [];
+  global.wx = { showToast(options) { toasts.push(options); } };
+  try {
+    const page = loadTimerPage();
+    page.setData = (updates) => Object.assign(page.data, updates);
+    page.openTagInput({ currentTarget: { dataset: { inputVisibleKey: 'tagInputVisible' } } });
+    page.addTag({
+      currentTarget: { dataset: { tagsKey: 'tags', inputVisibleKey: 'tagInputVisible' } },
+      detail: { value: ' ＡＩ ' }
+    });
+    assert.deepEqual(page.data.tags, ['AI']);
+    assert.equal(page.data.tagInputVisible, false);
+
+    page.openTagInput({ currentTarget: { dataset: { inputVisibleKey: 'tagInputVisible' } } });
+    page.addTag({
+      currentTarget: { dataset: { tagsKey: 'tags', inputVisibleKey: 'tagInputVisible' } },
+      detail: { value: 'AI' }
+    });
+    assert.equal(toasts.at(-1).title, '标签已存在');
+    assert.equal(page.data.tagInputVisible, true);
+
+    page.removeTag({ currentTarget: { dataset: { tagsKey: 'tags', index: 0 } } });
+    assert.deepEqual(page.data.tags, []);
+  } finally {
+    global.wx = originalWx;
+  }
 });
 
 test('计时页会显示并保留当前重复计划，已有同源日志后仍可再次选择该实例', () => {
@@ -269,14 +294,14 @@ test('计时页会显示并保留当前重复计划，已有同源日志后仍�
     assert.equal(page.data.events.some((item) => item.originRuleId === 'rule_choice'), true);
     assert.equal(page.data.events.some((item) => item.originRuleId === 'rule_taskless'), false);
     assert.ok(ranges.every((range) => range.end - range.start <= 3 * 24 * 60 * 60 * 1_000));
-    assert.equal(page.data.tagsText, '"a,b"，"复,盘"');
+    assert.deepEqual(page.data.tags, ['a,b', '复,盘']);
     assert.deepEqual(page.selectedInput(), {
       note: '',
       tags: ['a,b', '复,盘']
     });
-    page.data.tagsText = `${page.data.tagsText}，新增`;
+    page.data.tags = page.data.tags.concat('新增');
     assert.deepEqual(page.selectedInput().tags, ['a,b', '复,盘', '新增']);
-    page.data.tagsText = page.data.originalTagsText;
+    page.data.tags = ['a,b', '复,盘'];
     const virtualIndex = page.data.events.findIndex(
       (item) => item.originRuleId === 'rule_choice'
     );
