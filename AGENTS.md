@@ -33,6 +33,7 @@
 - 微信开发者工具安装路径含空格时，安装诊断脚本与 CLI 调用必须使用带引号的绝对路径，并将路径作为单一参数传递；否则路径会被截断，导致“CLI 不可用”的误判。
 - WXML 文件中的 `&` 不需要转义为 `&amp;` 就能显示，写成 `&amp;` 反而会显示错误内容。
 - `wx.shareFileMessage` 必须由用户点击手势直接触发，不要在 `writeFile`、`downloadFile`、Promise 或定时器等异步回调中直接调用，否则可能返回 `shareFileMessage:fail can only be invoked by user TAP gesture.`。若必须异步，可以在回调中让用户再次点击确认，并在该点击的回调中调用 `wx.shareFileMessage`。
+- 为横向 `scroll-view` 实现手动吸附时，不得把最后一次 `bindscroll` 的 `scrollLeft` 作为松手位置的唯一依据：慢速短拖时 `scroll` 事件可能晚于 `touchend`，造成列表先归位、再被迟到的原生滚动拉回。应在 `touchstart` 保存起始位置，并在 `touchend` 以手指位移计算动画起点；回到原列必须使用不越过目标的单调缓动，只有真正换列时才可使用轻微过冲。测试至少覆盖“`touchend` 早于最后一次 `scroll`”以及“回原列过程中不跨越目标位置”。
 
 ## 验证与交付
 

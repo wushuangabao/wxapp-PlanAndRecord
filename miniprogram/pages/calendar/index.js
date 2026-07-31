@@ -62,7 +62,7 @@ function planOptionsForRange(service, snapshot, startedAt, endedAt) {
   const range = boundedPlanRange(startedAt, endedAt);
   const options = [{
     id: '',
-    title: '非计划实际（不关联计划块）',
+    title: '计划外（不关联计划块）',
     associationType: 'none'
   }];
   const seen = new Set();

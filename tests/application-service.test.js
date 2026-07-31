@@ -45,7 +45,7 @@ class TrackingStorage extends MemoryStorageAdapter {
   }
 }
 
-function createHarness(start = 1_700_000_000_000, storage = new TrackingStorage()) {
+function createHarness(start = 1_700_000_000_000, storage = new TrackingStorage(), applicationOptions = {}) {
   let now = start;
   const repository = new LocalRepository(storage, { now: () => now });
   const exportTempFileStore = {
@@ -57,7 +57,8 @@ function createHarness(start = 1_700_000_000_000, storage = new TrackingStorage(
   };
   const service = new ApplicationService(repository, {
     now: () => now,
-    exportTempFileStore
+    exportTempFileStore,
+    ...applicationOptions
   });
   service.initialize();
   return {
@@ -69,6 +70,23 @@ function createHarness(start = 1_700_000_000_000, storage = new TrackingStorage(
     now() { return now; }
   };
 }
+
+test('开发验收可用两秒恢复窗口创建一条候选记录', () => {
+  const { service, setNow, now } = createHarness(undefined, undefined, {
+    recoveryTimerSpanMs: 2_000,
+    minimumRecoveryDurationMinutes: 1
+  });
+  const startedAt = now();
+  service.startTimer({ note: '开发验收候选记录' });
+  setNow(startedAt + 3_000);
+
+  const recovered = service.recoverTimer(now());
+
+  assert.equal(recovered.state, 'candidate');
+  assert.equal(recovered.log.status, LOG_STATUS.CANDIDATE);
+  assert.equal(recovered.log.durationMinutes, 1);
+  assert.equal(service.snapshot().timer.status, TIMER_STATUS.IDLE);
+});
 
 function requiredObjectives() {
   return [{ title: '完成目标', keyResults: [{ title: '整体进度', currentValue: 0 }] }];
@@ -250,7 +268,7 @@ test('导入的超限计时草稿在不改标签时可生成记录或恢复为�
       createdAt: now()
     };
   });
-  const recovered = service.createRecoveryCandidate({
+  const recovered = service.createRecoveryConfirmedLog({
     startedAt: now() - 50_000,
     endedAt: now() - 10_000
   });
@@ -329,7 +347,7 @@ test('M2：计时记录超过整分钟后向上取整', () => {
   }
 });
 
-test('M2：恢复草稿经用户修正后创建候选记录并清除草稿', () => {
+test('M2：恢复草稿经用户修正并保存后创建实际记录、纳入默认统计且清除草稿', () => {
   const { service, setNow, now } = createHarness();
   const startedAt = now();
   service.startTimer({ note: '需修正的计时' });
@@ -338,15 +356,47 @@ test('M2：恢复草稿经用户修正后创建候选记录并清除草稿', () 
   assert.equal(recovered.state, 'draft');
 
   setNow(startedAt + 60_000);
-  const log = service.createRecoveryCandidate({
+  const log = service.createRecoveryConfirmedLog({
     startedAt,
     endedAt: now(),
     note: '已修正的计时'
   });
-  assert.equal(log.status, LOG_STATUS.CANDIDATE);
+  assert.equal(log.status, LOG_STATUS.CONFIRMED);
   assert.equal(log.source, LOG_SOURCE.TIMER);
   assert.equal(log.note, '已修正的计时');
   assert.equal(service.snapshot().recoveryDraft, null);
+  const statistics = service.statistics({ rangeStart: startedAt - 1, rangeEnd: now() + 1 });
+  assert.equal(statistics.totalMinutes, 1);
+  assert.equal(statistics.weeklyReview.logCount, 1);
+});
+
+test('开发调试可即时构造需要手工修正的恢复草稿', () => {
+  const { service, now } = createHarness();
+
+  const recovered = service.simulateTimerRecoveryFailureForDebug();
+  const snapshot = service.snapshot();
+
+  assert.equal(recovered.state, 'draft');
+  assert.equal(snapshot.timer.status, TIMER_STATUS.IDLE);
+  assert.equal(snapshot.timeLogs.length, 0);
+  assert.equal(snapshot.recoveryDraft.reason, '时间戳无法还原，请手工修正并确认记录');
+  assert.equal(snapshot.recoveryDraft.timer.status, TIMER_STATUS.RUNNING);
+  assert.equal(snapshot.recoveryDraft.timer.pausedAt, now());
+  assert.deepEqual(snapshot.recoveryDraft.timer.draft.tags, []);
+  assert.throws(
+    () => service.simulateTimerRecoveryFailureForDebug(),
+    (error) => error.code === 'DEBUG_RECOVERY_DRAFT_EXISTS'
+  );
+});
+
+test('开发调试不会覆盖进行中或待确认的计时', () => {
+  const { service } = createHarness();
+  service.startTimer({ note: '正在计时' });
+
+  assert.throws(
+    () => service.simulateTimerRecoveryFailureForDebug(),
+    (error) => error.code === 'DEBUG_TIMER_TEST_REQUIRES_IDLE'
+  );
 });
 
 test('M2：超过 24 小时的计时恢复为候选记录', () => {
@@ -1534,14 +1584,14 @@ test('重复计划实例可作为日志和计时的统一计划关联，并校�
   assert.equal(service.recoverTimer(recoveryStart - 1).state, 'draft');
   setNow(recoveryStart + 60_000);
   assert.throws(
-    () => service.createRecoveryCandidate({
+    () => service.createRecoveryConfirmedLog({
       startedAt: recoveryStart,
       endedAt: recoveryStart + 60_000,
       taskId: task.id
     }),
     (error) => error.code === 'LOG_DIRECT_ASSOCIATION_FORBIDDEN'
   );
-  const recovered = service.createRecoveryCandidate({
+  const recovered = service.createRecoveryConfirmedLog({
     startedAt: recoveryStart,
     endedAt: recoveryStart + 60_000
   });

@@ -39,6 +39,12 @@ class ApplicationService {
     this.repository = repository;
     this.now = options.now || Date.now;
     this.exportTempFileStore = options.exportTempFileStore || null;
+    this.recoveryTimerSpanMs = Number.isFinite(options.recoveryTimerSpanMs) && options.recoveryTimerSpanMs > 0
+      ? options.recoveryTimerSpanMs
+      : MAX_TIMER_SPAN_MS;
+    this.minimumRecoveryDurationMinutes = Number.isInteger(options.minimumRecoveryDurationMinutes) && options.minimumRecoveryDurationMinutes > 0
+      ? options.minimumRecoveryDurationMinutes
+      : 0;
     this.pendingJsonImport = null;
   }
 
@@ -1497,7 +1503,7 @@ class ApplicationService {
     }).result;
   }
 
-  createRecoveryCandidate(input) {
+  createRecoveryConfirmedLog(input) {
     const now = this.now();
     const startedAt = Number(input.startedAt);
     const endedAt = Number(input.endedAt);
@@ -1517,13 +1523,38 @@ class ApplicationService {
         durationMinutes: calculateDurationMinutes(startedAt, endedAt, []),
         note: input.note === undefined ? (originalDraft.note || '') : input.note,
         tags,
-        status: LOG_STATUS.CANDIDATE,
+        status: LOG_STATUS.CONFIRMED,
         source: LOG_SOURCE.TIMER
       }, now, { enforceTagLimits: false });
       database.timeLogs.push(log);
       database.recoveryDraft = null;
       return log;
     }).result;
+  }
+
+  simulateTimerRecoveryFailureForDebug() {
+    const snapshot = this.snapshot();
+    if (snapshot.recoveryDraft) {
+      throw new DomainError('DEBUG_RECOVERY_DRAFT_EXISTS', '已有待修正的恢复草稿，请先完成修正后再测试');
+    }
+    if (!snapshot.timer || snapshot.timer.status !== TIMER_STATUS.IDLE) {
+      throw new DomainError('DEBUG_TIMER_TEST_REQUIRES_IDLE', '请先生成当前计时记录，再测试计时失败');
+    }
+
+    const now = this.now();
+    this.repository.transaction((database) => {
+      database.timer = {
+        ...createIdleTimer(),
+        status: TIMER_STATUS.RUNNING,
+        startedAt: now - 10 * 60 * 1_000,
+        pausedAt: now,
+        draft: {
+          note: '开发调试：计时状态异常',
+          tags: []
+        }
+      };
+    });
+    return this.recoverTimer(now);
   }
 
   recoverTimer(now) {
@@ -1554,15 +1585,15 @@ class ApplicationService {
           && isFiniteTimestamp(timer.pausedAt)
           && timer.pausedAt >= precedingPauseEnd
           && timer.pausedAt <= now;
-      if (basicValid && pausesAreValid && statusFieldsValid && activePauseValid && now - timer.startedAt <= MAX_TIMER_SPAN_MS) {
+      if (basicValid && pausesAreValid && statusFieldsValid && activePauseValid && now - timer.startedAt <= this.recoveryTimerSpanMs) {
         return { state: 'resumed', timer };
       }
       database.timer = createIdleTimer();
       if (!basicValid || !pausesAreValid || !statusFieldsValid || !activePauseValid) {
-        database.recoveryDraft = { reason: '时间戳无法还原，请手工修正后再创建候选记录', timer, createdAt: now };
+        database.recoveryDraft = { reason: '时间戳无法还原，请手工修正并确认记录', timer, createdAt: now };
         return { state: 'draft', recoveryDraft: database.recoveryDraft };
       }
-      const endedAt = Math.min(now, timer.startedAt + MAX_TIMER_SPAN_MS);
+      const endedAt = Math.min(now, timer.startedAt + this.recoveryTimerSpanMs);
       const pauses = timer.pauses.filter((pause) => pause.startedAt < endedAt).map((pause) => ({
         startedAt: pause.startedAt,
         endedAt: Math.min(pause.endedAt, endedAt)
@@ -1570,9 +1601,12 @@ class ApplicationService {
       if (timer.status === TIMER_STATUS.PAUSED && timer.pausedAt < endedAt) {
         pauses.push({ startedAt: timer.pausedAt, endedAt });
       }
-      const durationMinutes = calculateDurationMinutes(timer.startedAt, endedAt, pauses);
+      const durationMinutes = Math.max(
+        this.minimumRecoveryDurationMinutes,
+        calculateDurationMinutes(timer.startedAt, endedAt, pauses)
+      );
       if (durationMinutes <= 0) {
-        database.recoveryDraft = { reason: '可恢复时间无效，请手工修正后再创建候选记录', timer, createdAt: now };
+        database.recoveryDraft = { reason: '可恢复时间无效，请手工修正并确认记录', timer, createdAt: now };
         return { state: 'draft', recoveryDraft: database.recoveryDraft };
       }
       const log = createTimeLog({

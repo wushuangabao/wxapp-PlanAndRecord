@@ -6,7 +6,7 @@
 
   <view class="card">
     <view class="section-title">本周复盘</view>
-    <view wx:if="{{review}}" class="review-grid"><view><text class="metric">{{review.totalMinutes}}</text><text>投入分钟</text></view><view><text class="metric">{{review.logCount}}</text><text>记录数</text></view><view><text class="metric">{{review.completedTaskCount}}</text><text>完成任务</text></view><view><text class="metric">{{review.nonPlannedMinutes}}</text><text>非计划实际</text></view></view>
+    <view wx:if="{{review}}" class="review-grid"><view><text class="metric">{{review.totalMinutes}}</text><text>投入分钟</text></view><view><text class="metric">{{review.logCount}}</text><text>记录数</text></view><view><text class="metric">{{review.completedTaskCount}}</text><text>完成任务</text></view><view><text class="metric">{{review.nonPlannedMinutes}}</text><text>计划外</text></view></view>
     <view class="switch-row"><view>包含候选估算</view><switch checked="{{includeCandidates}}" color="#16a34a" bindchange="onCandidatesChange" /></view>
   </view>
 

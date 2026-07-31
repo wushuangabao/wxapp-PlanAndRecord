@@ -3,8 +3,10 @@ const { parseLocalDateTime } = require('../../domain/time');
 const { defaultDateTime, formatDateTime, getService, showError, showSaved } = require('../../utils/page');
 
 const TODO_COLUMN_SIZE = 3;
-const TODO_SWIPE_DISTANCE = 18;
+const TODO_SWIPE_DISTANCE_RATIO = 0.15;
+const TODO_SWIPE_DISTANCE_FALLBACK = 36;
 const TODO_RETURN_ANIMATION_DURATION = 600;
+const TODO_SNAP_ANIMATION_DURATION = 420;
 const TODO_RETURN_ANIMATION_FRAME = 16;
 const TODO_BOUNDARY_PULL_RESISTANCE = 0.45;
 const TODO_BOUNDARY_MAX_OFFSET = 72;
@@ -40,6 +42,20 @@ function buildTodoColumns(tasks) {
 function clampTodoColumnIndex(index, columnCount) {
   if (columnCount <= 0) return 0;
   return Math.max(0, Math.min(index, columnCount - 1));
+}
+
+function todoSwipeDistance(columnStep) {
+  return columnStep > 0 ? columnStep * TODO_SWIPE_DISTANCE_RATIO : TODO_SWIPE_DISTANCE_FALLBACK;
+}
+
+function easeOutCubic(progress) {
+  return 1 - Math.pow(1 - progress, 3);
+}
+
+function easeOutBack(progress) {
+  const overshoot = 1.3;
+  const shifted = progress - 1;
+  return 1 + (overshoot + 1) * Math.pow(shifted, 3) + overshoot * Math.pow(shifted, 2);
 }
 
 function buildProjectTaskPanel(project, tasks, tab = 'active') {
@@ -213,34 +229,48 @@ Page({
     this.todoScrollAnimationId = null;
   },
 
-  animateTodoScrollLeft(targetScrollLeft) {
+  animateTodoScrollLeft(targetScrollLeft, options = {}) {
     this.clearTodoScrollAnimation();
-    const startScrollLeft = this.data.todoScrollLeft;
-    if (startScrollLeft === targetScrollLeft) return;
+    const startScrollLeft = Number.isFinite(options.startScrollLeft) ? options.startScrollLeft : this.data.todoScrollLeft;
+    const duration = options.duration || TODO_RETURN_ANIMATION_DURATION;
+    const easing = options.easing || easeOutCubic;
+    if (startScrollLeft === targetScrollLeft) {
+      this.setData({ todoScrollLeft: targetScrollLeft, todoScrollWithAnimation: false });
+      return;
+    }
 
     const startedAt = Date.now();
-    this.setData({ todoScrollWithAnimation: false });
+    this.setData({ todoScrollLeft: startScrollLeft, todoScrollWithAnimation: false });
     const step = () => {
-      const progress = Math.min(1, (Date.now() - startedAt) / TODO_RETURN_ANIMATION_DURATION);
-      const easedProgress = 1 - Math.pow(1 - progress, 3);
-      this.setData({ todoScrollLeft: startScrollLeft + (targetScrollLeft - startScrollLeft) * easedProgress });
+      const progress = Math.min(1, (Date.now() - startedAt) / duration);
+      const scrollLeft = progress === 0
+        ? startScrollLeft
+        : startScrollLeft + (targetScrollLeft - startScrollLeft) * easing(progress);
+      this.setData({ todoScrollLeft: scrollLeft });
       if (progress < 1) {
         this.todoScrollAnimationId = setTimeout(step, TODO_RETURN_ANIMATION_FRAME);
         return;
       }
       this.todoScrollAnimationId = null;
-      this.setData({ todoScrollLeft: targetScrollLeft, todoScrollWithAnimation: true });
+      this.setData({ todoScrollLeft: targetScrollLeft, todoScrollWithAnimation: false });
     };
     step();
   },
 
-  snapTodoColumn(index) {
+  snapTodoColumn(index, currentScrollLeft) {
     this.clearTodoScrollAnimation();
+    const currentIndex = clampTodoColumnIndex(this.data.todoColumnIndex, this.data.todoListColumns.length);
     const nextIndex = clampTodoColumnIndex(index, this.data.todoListColumns.length);
-    this.setData({
-      todoColumnIndex: nextIndex,
-      todoScrollLeft: this.data.todoColumnStep ? nextIndex * this.data.todoColumnStep : 0,
-      todoScrollWithAnimation: true
+    const targetScrollLeft = this.data.todoColumnStep ? nextIndex * this.data.todoColumnStep : 0;
+    this.setData({ todoColumnIndex: nextIndex });
+    if (!Number.isFinite(currentScrollLeft)) {
+      this.setData({ todoScrollLeft: targetScrollLeft, todoScrollWithAnimation: true });
+      return;
+    }
+    this.animateTodoScrollLeft(targetScrollLeft, {
+      startScrollLeft: currentScrollLeft,
+      duration: TODO_SNAP_ANIMATION_DURATION,
+      easing: nextIndex === currentIndex ? easeOutCubic : easeOutBack
     });
   },
 
@@ -251,6 +281,7 @@ Page({
     }
     const touch = event.touches && event.touches[0];
     this.todoTouchStartX = touch ? touch.pageX : null;
+    this.todoTouchStartScrollLeft = this.data.todoScrollLeft;
     this.todoScrollLeft = this.data.todoScrollLeft;
   },
 
@@ -278,21 +309,24 @@ Page({
     const touch = event.changedTouches && event.changedTouches[0];
     const endX = touch ? touch.pageX : null;
     const deltaX = this.todoTouchStartX === null || endX === null ? 0 : this.todoTouchStartX - endX;
-    const currentLeft = this.todoScrollLeft === undefined ? this.data.todoScrollLeft : this.todoScrollLeft;
-    const nearestIndex = this.data.todoColumnStep ? Math.round(currentLeft / this.data.todoColumnStep) : this.data.todoColumnIndex;
+    const touchStartScrollLeft = Number.isFinite(this.todoTouchStartScrollLeft)
+      ? this.todoTouchStartScrollLeft
+      : this.data.todoScrollLeft;
+    const currentLeft = Math.max(0, touchStartScrollLeft + deltaX);
     const swipeDirection = deltaX > 0 ? 1 : -1;
     const requestedIndex = this.data.todoColumnIndex + swipeDirection;
     const isFirstColumnPull = this.data.todoColumnIndex === 0 && this.data.todoBoundaryIsDragging;
     this.todoTouchStartX = null;
+    this.todoTouchStartScrollLeft = null;
     if (isFirstColumnPull) {
       this.setData({ todoBoundaryOffset: 0, todoBoundaryIsDragging: false });
       this.snapTodoColumn(this.data.todoColumnIndex);
       return;
     }
-    const nextIndex = Math.abs(deltaX) > TODO_SWIPE_DISTANCE
+    const nextIndex = Math.abs(deltaX) >= todoSwipeDistance(this.data.todoColumnStep)
       ? requestedIndex
-      : nearestIndex;
-    this.snapTodoColumn(nextIndex);
+      : this.data.todoColumnIndex;
+    this.snapTodoColumn(nextIndex, currentLeft);
   },
 
   onField(event) {

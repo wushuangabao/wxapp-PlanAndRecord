@@ -402,35 +402,158 @@ test('计划页：TODO 每三条分列，横向拖动按方向吸附整列', () 
     harness.page.setData({ todoColumnStep: 240, todoColumnIndex: 0, todoScrollLeft: 0 });
     harness.page.onTodoTouchStart({ touches: [{ pageX: 100 }] });
     harness.page.onTodoScroll({ detail: { scrollLeft: 40 } });
-    harness.page.onTodoTouchEnd({ changedTouches: [{ pageX: 70 }] });
-    assert.deepEqual(
-      { index: harness.page.data.todoColumnIndex, left: harness.page.data.todoScrollLeft },
-      { index: 1, left: 240 }
-    );
+    harness.page.onTodoTouchEnd({ changedTouches: [{ pageX: 10 }] });
+    assert.equal(harness.page.data.todoColumnIndex, 1);
+    harness.page.clearTodoScrollAnimation();
 
+    harness.page.setData({ todoScrollLeft: 240 });
     harness.page.onTodoTouchStart({ touches: [{ pageX: 70 }] });
     harness.page.onTodoTouchEnd({ changedTouches: [{ pageX: 70 }] });
-    assert.deepEqual(
-      { index: harness.page.data.todoColumnIndex, left: harness.page.data.todoScrollLeft },
-      { index: 1, left: 240 }
-    );
+    assert.equal(harness.page.data.todoColumnIndex, 1);
 
     harness.page.onTodoTouchStart({ touches: [{ pageX: 70 }] });
-    harness.page.onTodoTouchEnd({ changedTouches: [{ pageX: 110 }] });
-    assert.deepEqual(
-      { index: harness.page.data.todoColumnIndex, left: harness.page.data.todoScrollLeft },
-      { index: 0, left: 0 }
-    );
+    harness.page.onTodoTouchEnd({ changedTouches: [{ pageX: 170 }] });
+    assert.equal(harness.page.data.todoColumnIndex, 0);
+    harness.page.clearTodoScrollAnimation();
 
     harness.page.setData({ todoColumnIndex: 1, todoScrollLeft: 240 });
     harness.page.onTodoTouchStart({ touches: [{ pageX: 100 }] });
     harness.page.onTodoScroll({ detail: { scrollLeft: 250 } });
     harness.page.onTodoTouchEnd({ changedTouches: [{ pageX: 82 }] });
-    assert.deepEqual(
-      { index: harness.page.data.todoColumnIndex, left: harness.page.data.todoScrollLeft },
-      { index: 1, left: 240 }
-    );
+    assert.equal(harness.page.data.todoColumnIndex, 1);
+    harness.page.clearTodoScrollAnimation();
   } finally {
+    harness.restore();
+  }
+});
+
+test('计划页：TODO 轻拖未过一成半列宽时从实际松手位置回弹', () => {
+  const tasks = Array.from({ length: 4 }, (_, index) => ({
+    id: `task_${index + 1}`,
+    title: `任务 ${index + 1}`,
+    status: TASK_STATUS.TODO,
+    projectId: null,
+    projectNameSnapshot: '',
+    updatedAt: 100 - index
+  }));
+  const harness = createHarness({ tasks });
+  const originalDateNow = Date.now;
+  const originalSetTimeout = global.setTimeout;
+  const scheduled = [];
+  let now = 1_700_000_000_000;
+  Date.now = () => now;
+  global.setTimeout = (callback, delay) => {
+    scheduled.push({ callback, delay });
+    return scheduled.length;
+  };
+  try {
+    harness.page.refresh();
+    harness.page.setData({ todoColumnStep: 240, todoColumnIndex: 0, todoScrollLeft: 0 });
+    harness.page.onTodoTouchStart({ touches: [{ pageX: 200 }] });
+    harness.page.onTodoScroll({ detail: { scrollLeft: 24 } });
+    harness.page.onTodoTouchEnd({ changedTouches: [{ pageX: 180 }] });
+
+    assert.deepEqual(
+      { index: harness.page.data.todoColumnIndex, left: harness.page.data.todoScrollLeft, nativeAnimation: harness.page.data.todoScrollWithAnimation },
+      { index: 0, left: 20, nativeAnimation: false }
+    );
+    assert.deepEqual(scheduled.map((item) => item.delay), [16]);
+
+    now += 300;
+    scheduled.shift().callback();
+    assert.ok(harness.page.data.todoScrollLeft >= 0 && harness.page.data.todoScrollLeft < 20);
+    now += 120;
+    scheduled.shift().callback();
+    assert.equal(harness.page.data.todoScrollLeft, 0);
+  } finally {
+    Date.now = originalDateNow;
+    global.setTimeout = originalSetTimeout;
+    harness.restore();
+  }
+});
+
+test('计划页：TODO 松手早于 scroll 事件时仍从手势位移平滑回弹', () => {
+  const tasks = Array.from({ length: 4 }, (_, index) => ({
+    id: `task_${index + 1}`,
+    title: `任务 ${index + 1}`,
+    status: TASK_STATUS.TODO,
+    projectId: null,
+    projectNameSnapshot: '',
+    updatedAt: 100 - index
+  }));
+  const harness = createHarness({ tasks });
+  const originalDateNow = Date.now;
+  const originalSetTimeout = global.setTimeout;
+  const scheduled = [];
+  let now = 1_700_000_000_000;
+  Date.now = () => now;
+  global.setTimeout = (callback, delay) => {
+    scheduled.push({ callback, delay });
+    return scheduled.length;
+  };
+  try {
+    harness.page.refresh();
+    harness.page.setData({ todoColumnStep: 240, todoColumnIndex: 0, todoScrollLeft: 0 });
+    harness.page.onTodoTouchStart({ touches: [{ pageX: 200 }] });
+    harness.page.onTodoTouchMove({ touches: [{ pageX: 180 }] });
+    harness.page.onTodoTouchEnd({ changedTouches: [{ pageX: 180 }] });
+
+    assert.deepEqual(
+      { index: harness.page.data.todoColumnIndex, left: harness.page.data.todoScrollLeft, nativeAnimation: harness.page.data.todoScrollWithAnimation },
+      { index: 0, left: 20, nativeAnimation: false }
+    );
+    assert.deepEqual(scheduled.map((item) => item.delay), [16]);
+
+    harness.page.onTodoScroll({ detail: { scrollLeft: 20 } });
+    now += 420;
+    scheduled.shift().callback();
+    assert.equal(harness.page.data.todoScrollLeft, 0);
+  } finally {
+    Date.now = originalDateNow;
+    global.setTimeout = originalSetTimeout;
+    harness.restore();
+  }
+});
+
+test('计划页：TODO 快速横划也只受控进入相邻列', () => {
+  const tasks = Array.from({ length: 7 }, (_, index) => ({
+    id: `task_${index + 1}`,
+    title: `任务 ${index + 1}`,
+    status: TASK_STATUS.TODO,
+    projectId: null,
+    projectNameSnapshot: '',
+    updatedAt: 100 - index
+  }));
+  const harness = createHarness({ tasks });
+  const originalDateNow = Date.now;
+  const originalSetTimeout = global.setTimeout;
+  const scheduled = [];
+  let now = 1_700_000_000_000;
+  Date.now = () => now;
+  global.setTimeout = (callback, delay) => {
+    scheduled.push({ callback, delay });
+    return scheduled.length;
+  };
+  try {
+    harness.page.refresh();
+    harness.page.setData({ todoColumnStep: 240, todoColumnIndex: 0, todoScrollLeft: 0 });
+    harness.page.onTodoTouchStart({ touches: [{ pageX: 240 }] });
+    harness.page.onTodoScroll({ detail: { scrollLeft: 510 } });
+    harness.page.onTodoTouchEnd({ changedTouches: [{ pageX: 80 }] });
+
+    assert.deepEqual(
+      { index: harness.page.data.todoColumnIndex, left: harness.page.data.todoScrollLeft, nativeAnimation: harness.page.data.todoScrollWithAnimation },
+      { index: 1, left: 160, nativeAnimation: false }
+    );
+    now += 300;
+    scheduled.shift().callback();
+    assert.ok(harness.page.data.todoScrollLeft > 240);
+    now += 120;
+    scheduled.shift().callback();
+    assert.equal(harness.page.data.todoScrollLeft, 240);
+  } finally {
+    Date.now = originalDateNow;
+    global.setTimeout = originalSetTimeout;
     harness.restore();
   }
 });
@@ -463,10 +586,10 @@ test('计划页：TODO 首列右拖时跟随手势，松手后回弹归位', () 
     harness.page.setData({ todoColumnIndex: 2, todoScrollLeft: 480 });
     harness.page.onTodoTouchStart({ touches: [{ pageX: 100 }] });
     harness.page.onTodoTouchEnd({ changedTouches: [{ pageX: 70 }] });
-    assert.deepEqual(
-      { index: harness.page.data.todoColumnIndex, left: harness.page.data.todoScrollLeft, offset: harness.page.data.todoBoundaryOffset, dragging: harness.page.data.todoBoundaryIsDragging },
-      { index: 2, left: 480, offset: 0, dragging: false }
-    );
+    assert.equal(harness.page.data.todoColumnIndex, 2);
+    assert.equal(harness.page.data.todoBoundaryOffset, 0);
+    assert.equal(harness.page.data.todoBoundaryIsDragging, false);
+    harness.page.clearTodoScrollAnimation();
   } finally {
     harness.restore();
   }
@@ -512,13 +635,11 @@ test('计划页：TODO 连续左划可吸附到最后一列，四条任务可吸
     sevenTaskHarness.page.refresh();
     sevenTaskHarness.page.setData({ todoColumnStep: 240, todoColumnIndex: 0, todoScrollLeft: 0 });
     sevenTaskHarness.page.onTodoTouchStart({ touches: [{ pageX: 100 }] });
-    sevenTaskHarness.page.onTodoTouchEnd({ changedTouches: [{ pageX: 70 }] });
+    sevenTaskHarness.page.onTodoTouchEnd({ changedTouches: [{ pageX: 0 }] });
     sevenTaskHarness.page.onTodoTouchStart({ touches: [{ pageX: 100 }] });
-    sevenTaskHarness.page.onTodoTouchEnd({ changedTouches: [{ pageX: 70 }] });
-    assert.deepEqual(
-      { index: sevenTaskHarness.page.data.todoColumnIndex, left: sevenTaskHarness.page.data.todoScrollLeft },
-      { index: 2, left: 480 }
-    );
+    sevenTaskHarness.page.onTodoTouchEnd({ changedTouches: [{ pageX: 0 }] });
+    assert.equal(sevenTaskHarness.page.data.todoColumnIndex, 2);
+    sevenTaskHarness.page.clearTodoScrollAnimation();
   } finally {
     sevenTaskHarness.restore();
   }
@@ -528,11 +649,9 @@ test('计划页：TODO 连续左划可吸附到最后一列，四条任务可吸
     fourTaskHarness.page.refresh();
     fourTaskHarness.page.setData({ todoColumnStep: 240, todoColumnIndex: 0, todoScrollLeft: 0 });
     fourTaskHarness.page.onTodoTouchStart({ touches: [{ pageX: 100 }] });
-    fourTaskHarness.page.onTodoTouchEnd({ changedTouches: [{ pageX: 70 }] });
-    assert.deepEqual(
-      { index: fourTaskHarness.page.data.todoColumnIndex, left: fourTaskHarness.page.data.todoScrollLeft },
-      { index: 1, left: 240 }
-    );
+    fourTaskHarness.page.onTodoTouchEnd({ changedTouches: [{ pageX: 0 }] });
+    assert.equal(fourTaskHarness.page.data.todoColumnIndex, 1);
+    fourTaskHarness.page.clearTodoScrollAnimation();
   } finally {
     fourTaskHarness.restore();
   }

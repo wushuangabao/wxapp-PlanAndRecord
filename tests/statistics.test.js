@@ -544,7 +544,7 @@ test('项目统计只沿计划块到任务再到项目派生，忽略日志旧�
   assert.equal(statistics.planVariance.nonPlannedMinutes, 30);
 });
 
-test('重复计划实例的项目归属由规则修订任务派生且不计为非计划实际', () => {
+test('重复计划实例的项目归属由规则修订任务派生且不计为计划外', () => {
   const seedStart = localTimestamp(2026, 7, 8, 9);
   const occurrenceStart = seedStart + DAY_MS;
   const database = createInitialDatabase(seedStart - DAY_MS);
