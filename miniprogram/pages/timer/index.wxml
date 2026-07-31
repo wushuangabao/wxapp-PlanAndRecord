@@ -1,5 +1,18 @@
 <view class="page">
   <view class="eyebrow">PLAN & RECORD</view>
+  <view class="section recent-section">
+    <view class="recent-header">
+      <view class="section-title recent-title">最近记录</view>
+      <view class="recent-action" role="button" aria-label="手工补录" bindtap="openManual">手工补录</view>
+    </view>
+    <view class="recent-logs">
+      <view wx:if="{{!recentLogs.length}}" class="empty recent-empty">还没有记录。开始一次计时，或补录过去的时间。</view>
+      <view wx:for="{{recentLogs}}" wx:key="id" class="log-row recent-log-row">
+        <view>{{item.displayTitle}}</view>
+        <view class="muted">{{item.displayTime}} · {{item.status === 'candidate' ? '候选' : '实际'}}</view>
+      </view>
+    </view>
+  </view>
   <view class="timer-card">
     <view class="status">{{statusLabel}}</view>
     <view class="elapsed">{{elapsed}}</view>
@@ -29,18 +42,7 @@
     <button wx:if="{{timer.status !== 'idle'}}" class="link-button" bindtap="onSaveTimerDraft">保存本次字段</button>
   </view>
 
-  <button class="outline-button" bindtap="openManual">手工补录</button>
-
-  <view class="section">
-    <view class="section-title">最近记录</view>
-    <view wx:if="{{!recentLogs.length}}" class="empty">还没有记录。开始一次计时，或补录过去的时间。</view>
-    <view wx:for="{{recentLogs}}" wx:key="id" class="log-row">
-      <view>{{item.displayTitle}}</view>
-      <view class="muted">{{item.displayTime}} · {{item.status === 'candidate' ? '候选' : '实际'}}</view>
-    </view>
-  </view>
-
-  <view wx:if="{{showManual}}" class="modal-mask">
+  <view wx:if="{{showManual}}" class="modal-mask" bindtap="closeManual">
     <view class="modal" catchtap="noop">
       <sheet-header title="{{manualMode === 'recovery' ? '修正恢复草稿' : '手工补录'}}" show-confirm="{{true}}" bind:confirm="onManualSave" bind:cancel="closeManual" />
       <picker mode="date" value="{{manualStartDate}}" data-key="manualStartDate" bindchange="onManualField"><view class="picker-field">开始日期：{{manualStartDate}}</view></picker>
