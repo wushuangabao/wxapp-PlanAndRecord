@@ -2,7 +2,7 @@ const { APP_SCHEMA_VERSION, TIMER_STATUS } = require('../domain/constants');
 const { DomainError, StorageError } = require('../domain/errors');
 const { createInitialDatabase, clone } = require('../domain/entities');
 const { isFiniteTimestamp } = require('../domain/time');
-const { validateJsonSnapshot } = require('./json-snapshot');
+const { normalizeLegacyTimerState, validateJsonSnapshot } = require('./json-snapshot');
 
 const STORAGE_KEY = 'plan-and-record.database';
 const BACKUP_KEY = 'plan-and-record.database.pre-migration';
@@ -115,8 +115,9 @@ class LocalRepository {
       throw new StorageError('DATA_VERSION_UNSUPPORTED', '数据版本较新，当前版本不会覆盖原有数据');
     }
     if (database.schemaVersion === APP_SCHEMA_VERSION) {
-      this.validateStoredSnapshot(database);
-      return database;
+      const compatibleDatabase = normalizeLegacyTimerState(database);
+      this.validateStoredSnapshot(compatibleDatabase);
+      return compatibleDatabase;
     }
     try {
       this.storage.set(BACKUP_KEY, clone(database));
@@ -137,9 +138,15 @@ class LocalRepository {
         snapshotForValidation.timer = this.normalizeRecoverableTimerForValidation(database.timer);
       }
       if (database && database.recoveryDraft && Object.prototype.hasOwnProperty.call(database.recoveryDraft, 'timer')) {
-        snapshotForValidation.recoveryDraft.timer = this.normalizeRecoverableTimerForValidation(
-          database.recoveryDraft.timer
+        const hasCandidatePreview = Object.prototype.hasOwnProperty.call(
+          database.recoveryDraft,
+          'candidatePreview'
         );
+        if (!hasCandidatePreview) {
+          snapshotForValidation.recoveryDraft.timer = this.normalizeRecoverableTimerForValidation(
+            database.recoveryDraft.timer
+          );
+        }
       }
       validateJsonSnapshot(snapshotForValidation);
     } catch (error) {
@@ -153,14 +160,13 @@ class LocalRepository {
   normalizeRecoverableTimerForValidation(timer) {
     const isPlainObject = timer && typeof timer === 'object' && !Array.isArray(timer)
       && [Object.prototype, null].includes(Object.getPrototypeOf(timer));
-    const requiredFields = ['status', 'startedAt', 'endedAt', 'pausedAt', 'pauses', 'draft'];
+    const requiredFields = ['status', 'startedAt', 'pausedAt', 'pauses', 'draft'];
     const hasRequiredFields = isPlainObject
       && requiredFields.every((field) => Object.prototype.hasOwnProperty.call(timer, field));
     const validStatus = hasRequiredFields && Object.values(TIMER_STATUS).includes(timer.status);
     const validNullableTimestamp = (value) => value === null || isFiniteTimestamp(value);
     const validTimestamps = hasRequiredFields
       && validNullableTimestamp(timer.startedAt)
-      && validNullableTimestamp(timer.endedAt)
       && validNullableTimestamp(timer.pausedAt);
     const validPauses = hasRequiredFields && Array.isArray(timer.pauses)
       && timer.pauses.every((pause) => {
@@ -179,7 +185,6 @@ class LocalRepository {
     const normalized = clone(timer);
     normalized.pauses = [];
     normalized.startedAt = timer.status === TIMER_STATUS.IDLE ? null : 1;
-    normalized.endedAt = timer.status === TIMER_STATUS.ENDED ? 2 : null;
     normalized.pausedAt = timer.status === TIMER_STATUS.PAUSED ? 2 : null;
     return normalized;
   }

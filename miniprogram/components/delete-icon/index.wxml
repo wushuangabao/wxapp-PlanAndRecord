@@ -1,0 +1,10 @@
+<view class="delete-icon" aria-hidden="true">
+  <view class="delete-icon-handle"></view>
+  <view class="delete-icon-lid"></view>
+  <view class="delete-icon-body">
+    <view class="delete-icon-lines">
+      <view class="delete-icon-line"></view>
+      <view class="delete-icon-line"></view>
+    </view>
+  </view>
+</view>

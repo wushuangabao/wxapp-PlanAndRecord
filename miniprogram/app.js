@@ -11,7 +11,8 @@ App({
 
   onShow() {
     if (this.globalData.bootstrap) {
-      this.globalData.bootstrap.recovery = this.globalData.bootstrap.applicationService.recoverTimer(Date.now());
+      const recovery = this.globalData.bootstrap.applicationService.recoverTimer(Date.now());
+      this.globalData.bootstrap.recovery = recovery;
     }
   }
 });

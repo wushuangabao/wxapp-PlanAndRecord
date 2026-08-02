@@ -4,6 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const pagesRoot = path.join(__dirname, '../miniprogram/pages');
+const miniprogramRoot = path.join(__dirname, '../miniprogram');
 
 test('四个页面的英文眉题在滚动时固定在顶部', () => {
   for (const page of ['timer', 'plans', 'calendar', 'profile']) {
@@ -25,7 +26,7 @@ test('日历日视图显示单个日期，范围标签始终单行显示', () =>
 });
 
 test('所有自定义底部弹窗复用共享头部组件', () => {
-  const expectedModalCounts = { timer: 1, plans: 6, calendar: 3 };
+  const expectedModalCounts = { timer: 3, plans: 6, calendar: 3 };
 
   for (const [page, expectedModalCount] of Object.entries(expectedModalCounts)) {
     const pageDirectory = path.join(pagesRoot, page);
@@ -39,4 +40,41 @@ test('所有自定义底部弹窗复用共享头部组件', () => {
     assert.equal(sheetHeaderCount, modalCount, page);
     assert.doesNotMatch(wxml, /class="modal-title"/, page);
   }
+});
+
+test('所有页面和共享控件使用莫兰迪绿色主色板', () => {
+  const files = [
+    path.join(miniprogramRoot, 'app.json'),
+    path.join(miniprogramRoot, 'app.wxss'),
+    path.join(miniprogramRoot, 'components/sheet-header/index.wxss')
+  ];
+  for (const page of ['timer', 'plans', 'calendar', 'profile']) {
+    for (const extension of ['js', 'wxml', 'wxss']) {
+      files.push(path.join(pagesRoot, page, `index.${extension}`));
+    }
+  }
+
+  const source = files.map((file) => fs.readFileSync(file, 'utf8')).join('\n').toLowerCase();
+  const legacyColors = [
+    '#22c55e', '#16a34a', '#15803d', '#166534', '#dcfce7', '#f0fdf4',
+    '#86efac', '#bbf7d0', '#4ade80', '#3b82f6', '#2563eb', '#f59e0b',
+    '#dc2626', '#b91c1c'
+  ];
+  for (const color of legacyColors) assert.doesNotMatch(source, new RegExp(color), color);
+
+  assert.match(source, /#78947f/);
+  assert.match(source, /#55725e/);
+  assert.match(source, /#e6ece7/);
+  assert.match(source, /#9a5550/);
+
+  const guide = fs.readFileSync(
+    path.join(__dirname, '../.agents/skills/ui-style/references/style-guide.zh-CN.md'),
+    'utf8'
+  ).toLowerCase();
+  assert.match(guide, /--ui-accent:\s*#78947f/);
+  assert.match(guide, /--ui-on-accent:\s*#faf9f7/);
+  assert.match(guide, /--ui-plan:\s*#7b918b/);
+  assert.match(guide, /--ui-candidate:\s*#a58454/);
+  assert.match(guide, /--ui-actual:\s*#55725e/);
+  assert.match(guide, /--ui-danger-link:\s*#9a5550/);
 });

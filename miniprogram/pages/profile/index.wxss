@@ -2,32 +2,21 @@
   padding: 44rpx 32rpx 72rpx;
 }
 
-.hero {
-  margin-bottom: 28rpx;
-}
-
 .eyebrow {
   position: sticky;
   z-index: 8;
   top: 0;
   padding: 14rpx 0;
-  background: #f8fafc;
-  color: #16a34a;
+  background: #f3f1ed;
+  color: #55725e;
   font-size: 21rpx;
   font-weight: 700;
   letter-spacing: 3rpx;
 }
 
-.title {
-  margin-top: 14rpx;
-  font-size: 56rpx;
-  font-weight: 700;
-}
-
-.subtitle,
 .empty,
 .stat-hint {
-  color: #64748b;
+  color: #626b65;
   font-size: 25rpx;
   line-height: 1.6;
 }
@@ -36,8 +25,8 @@
 .warning {
   padding: 26rpx;
   border-radius: 20rpx;
-  background: #fff7ed;
-  color: #9a3412;
+  background: #f5f0e6;
+  color: #795d32;
   font-size: 26rpx;
   line-height: 1.6;
 }
@@ -46,7 +35,7 @@
   margin-top: 22rpx;
   padding: 30rpx;
   border-radius: 24rpx;
-  background: #ffffff;
+  background: #faf9f7;
 }
 
 .section-title {
@@ -66,13 +55,13 @@
   flex-direction: column;
   padding: 18rpx;
   border-radius: 14rpx;
-  background: #f0fdf4;
-  color: #475569;
+  background: #e6ece7;
+  color: #59635d;
   font-size: 23rpx;
 }
 
 .metric {
-  color: #166534;
+  color: #486455;
   font-size: 42rpx;
   font-weight: 700;
 }
@@ -88,12 +77,12 @@
 
 .stat-row {
   padding: 16rpx 0;
-  border-bottom: 1rpx solid #f1f5f9;
+  border-bottom: 1rpx solid #ece9e4;
   font-size: 26rpx;
 }
 
 .stat-row view:last-child {
-  color: #475569;
+  color: #59635d;
   text-align: right;
 }
 
@@ -115,18 +104,18 @@
 }
 
 .primary {
-  background: #22c55e;
-  color: #052e16;
+  background: #78947f;
+  color: #faf9f7;
   font-weight: 700;
 }
 
 .secondary {
-  background: #dcfce7;
-  color: #166534;
+  background: #d8e1da;
+  color: #486455;
 }
 
 .danger {
-  background: #fee2e2;
-  color: #b91c1c;
+  background: #f2e3e1;
+  color: #8a4945;
   font-weight: 700;
 }

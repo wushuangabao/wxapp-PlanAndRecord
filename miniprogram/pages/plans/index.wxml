@@ -1,6 +1,5 @@
 <view class="page">
   <view class="eyebrow">FOCUS ON WHAT MATTERS</view>
-  <view class="hero"><view class="title">愿望与项目</view><view class="subtitle">先完成今天的 TODO，再用项目和实际投入兑现承诺。</view></view>
 
   <view class="card todo-card">
     <view class="section-header"><view class="section-heading"><view class="section-title">TODO LIST（{{todoListTasks.length}}）</view></view><button class="section-add todo-add" bindtap="openStandaloneTask" aria-label="新建 TODO">+</button></view>
@@ -11,8 +10,10 @@
           <view wx:for="{{column.tasks}}" wx:for-item="task" wx:key="id" class="todo-row {{task.status === 'completed' ? 'is-completed' : ''}}">
             <view class="todo-check" data-id="{{task.id}}" data-status="{{task.status}}" bindtap="toggleTask">{{task.status === 'completed' ? '✓' : ''}}</view>
             <view class="todo-main" data-id="{{task.id}}" bindtap="openTaskEditor"><view class="todo-title" style="font-size: {{task.todoTitleFontSize}}rpx;">{{task.title}}</view><view wx:if="{{task.projectId}}" class="todo-project">{{task.projectNameSnapshot}}</view></view>
-            <button class="todo-icon-button todo-link-button" aria-label="关联项目" data-id="{{task.id}}" bindtap="chooseTaskProject"><view class="todo-link-icon"><view class="todo-folder-stack"></view><view class="todo-link-arrow"></view></view></button>
-            <button class="todo-icon-button todo-delete-button" aria-label="删除" data-id="{{task.id}}" bindtap="confirmDeleteTask"><view class="todo-delete-icon"><view class="todo-delete-lines"></view></view></button>
+            <view class="todo-actions">
+              <view class="todo-icon-button todo-link-button" role="button" aria-label="关联项目" data-id="{{task.id}}" bindtap="chooseTaskProject"><view class="todo-link-icon"><view class="todo-folder-icon"><view class="todo-folder-tab"></view><view class="todo-folder-body"></view></view><view class="todo-link-arrow"></view></view></view>
+              <view class="todo-icon-button todo-delete-button" role="button" aria-label="删除" data-id="{{task.id}}" bindtap="confirmDeleteTask"><delete-icon /></view>
+            </view>
           </view>
         </view>
         <view class="todo-scroll-tail" aria-hidden="true"></view>
@@ -21,8 +22,8 @@
   </view>
 
   <view class="card">
-    <view class="section-header"><view class="section-heading"><view class="section-title">活动项目（{{activeProjects.length}} / 5）</view></view><button wx:if="{{activeProjects.length < 5}}" class="section-add project-add" bindtap="openProjectCreate" aria-label="新建项目">+</button></view>
-    <view wx:if="{{!activeProjects.length}}" class="empty">还没有活动项目。</view>
+    <view class="section-header"><view class="section-heading"><view class="section-title">项目（{{activeProjects.length}} / 5）</view></view><button wx:if="{{activeProjects.length < 5}}" class="section-add project-add" bindtap="openProjectCreate" aria-label="新建项目">+</button></view>
+    <view wx:if="{{!activeProjects.length}}" class="empty">还没有正在进行的项目。</view>
     <view wx:for="{{activeProjects}}" wx:key="id" class="item project-item">
       <view class="project-heading" data-id="{{item.id}}" bindtap="openProjectTasks"><view class="item-title">{{item.title}}</view><view class="project-task-link">子任务</view></view>
       <view class="muted">截止：{{item.deadlineText}} · {{item.objectives.length}} 个目标</view>
@@ -49,7 +50,7 @@
     </view>
   </view>
 
-  <view wx:if="{{isProjectCreateOpen}}" class="modal-mask" bindtap="closeProjectCreate"><view class="modal project-create-modal" catchtap="noop"><sheet-header title="新建项目" show-confirm="{{true}}" bind:confirm="addProject" bind:cancel="closeProjectCreate" /><input class="input" placeholder="项目名称（最多 25 字）" value="{{projectTitle}}" data-key="projectTitle" bindinput="onField" /><view class="field-row"><picker mode="date" value="{{projectDate}}" data-key="projectDate" bindchange="onField"><view>{{projectDate}}</view></picker><picker mode="time" value="{{projectTime}}" data-key="projectTime" bindchange="onField"><view>{{projectTime}}</view></picker></view><input class="input" placeholder="首个目标名称" value="{{projectObjective}}" data-key="projectObjective" bindinput="onField" /><input class="input" placeholder="首个关键结果标题" value="{{projectKeyResult}}" data-key="projectKeyResult" bindinput="onField" /><input class="input" type="number" placeholder="当前值 0–100" value="{{projectCurrent}}" data-key="projectCurrent" bindinput="onField" /></view></view>
+  <view wx:if="{{isProjectCreateOpen}}" class="modal-mask" bindtap="closeProjectCreate"><view class="modal project-create-modal" catchtap="noop"><sheet-header title="新建项目" show-confirm="{{true}}" bind:confirm="addProject" bind:cancel="closeProjectCreate" /><input class="input" placeholder="项目名称（最多 25 字）" value="{{projectTitle}}" data-key="projectTitle" bindinput="onField" /><view class="project-deadline-row"><view class="project-deadline-label">截止时间</view><picker class="project-deadline-date" mode="date" value="{{projectDate}}" data-key="projectDate" bindchange="onField"><view>{{projectDate}}</view></picker><picker class="project-deadline-time" mode="time" value="{{projectTime}}" data-key="projectTime" bindchange="onField"><view>{{projectTime}}</view></picker></view><input class="input" placeholder="首个目标名称（可选）" value="{{projectObjective}}" data-key="projectObjective" bindinput="onField" /><input class="input" placeholder="首个关键结果标题（可选）" value="{{projectKeyResult}}" data-key="projectKeyResult" bindinput="onField" /><input class="input" type="number" placeholder="当前值 0–100（可选，默认 0）" value="{{projectCurrent}}" data-key="projectCurrent" bindinput="onField" /></view></view>
 
   <view wx:if="{{taskProjectPicker}}" class="modal-mask" bindtap="closeTaskProjectPicker"><view class="modal task-project-modal" catchtap="noop"><sheet-header title="{{taskProjectPicker.title}}" bind:cancel="closeTaskProjectPicker" /><scroll-view class="task-project-options" scroll-y="{{true}}" style="height: {{taskProjectPicker.optionsHeight}}rpx;"><button wx:for="{{taskProjectPicker.projects}}" wx:for-item="project" wx:key="id" class="task-project-option" data-id="{{project.id}}" bindtap="selectTaskProject">{{project.title}}</button><button wx:if="{{taskProjectPicker.canUnlink}}" class="task-project-option task-project-unlink" bindtap="unlinkTaskProject">取消关联</button></scroll-view></view></view>
 

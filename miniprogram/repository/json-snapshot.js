@@ -8,10 +8,10 @@ const {
   TASK_STATUS,
   TIMER_STATUS
 } = require('../domain/constants');
-const { clone } = require('../domain/entities');
+const { clone, createIdleTimer } = require('../domain/entities');
 const { DomainError } = require('../domain/errors');
 const { normalizeTags, tagsEqual } = require('../domain/tags');
-const { calculateDurationMinutes, calculateTimerDurationMinutes, isFiniteTimestamp } = require('../domain/time');
+const { calculateLogDurationMinutes, calculateTimerDurationMinutes, isFiniteTimestamp } = require('../domain/time');
 
 const ROOT_COLLECTIONS = [
   'wishes',
@@ -82,8 +82,10 @@ function validPriority(value) {
   return Number.isInteger(value) && value >= 1 && value <= MAX_PLAN_PRIORITY;
 }
 
-function validTimeRange(startedAt, endedAt) {
-  return isFiniteTimestamp(startedAt) && isFiniteTimestamp(endedAt) && endedAt > startedAt;
+function validTimeRange(startedAt, endedAt, { allowSameTime = false } = {}) {
+  return isFiniteTimestamp(startedAt)
+    && isFiniteTimestamp(endedAt)
+    && (allowSameTime ? endedAt >= startedAt : endedAt > startedAt);
 }
 
 function validPauseRange(startedAt, endedAt) {
@@ -204,8 +206,8 @@ function normalizeTimerDraft(draft) {
   return normalized;
 }
 
-function normalizeTimer(timer) {
-  const normalized = pickKnownFields(timer, ['status', 'startedAt', 'endedAt', 'pausedAt', 'pauses', 'draft']);
+function normalizeTimerFields(timer) {
+  const normalized = pickKnownFields(timer, ['status', 'startedAt', 'pausedAt', 'pauses', 'draft']);
   if (isPlainObject(normalized) && hasOwn(normalized, 'pauses')) {
     normalized.pauses = normalizeCollection(normalized.pauses, (pause) => pickKnownFields(pause, ['startedAt', 'endedAt']));
   }
@@ -216,11 +218,128 @@ function normalizeTimer(timer) {
 }
 
 function normalizeRecoveryDraft(recoveryDraft) {
-  const normalized = pickKnownFields(recoveryDraft, ['reason', 'timer', 'createdAt']);
+  const normalized = pickKnownFields(recoveryDraft, ['reason', 'timer', 'candidatePreview', 'createdAt']);
   if (isPlainObject(normalized) && hasOwn(normalized, 'timer')) {
     normalized.timer = normalizeTimer(normalized.timer);
   }
+  if (isPlainObject(normalized) && hasOwn(normalized, 'candidatePreview')) {
+    normalized.candidatePreview = pickKnownFields(normalized.candidatePreview, [
+      'startedAt', 'endedAt', 'durationMinutes', 'source'
+    ]);
+  }
   return normalized;
+}
+
+function legacyEndedCandidatePreview(timer, endedAt) {
+  if (!isPlainObject(timer) || !validTimeRange(timer.startedAt, endedAt) || !Array.isArray(timer.pauses)) {
+    return null;
+  }
+  let precedingEnd = timer.startedAt;
+  for (const pause of timer.pauses) {
+    if (!isPlainObject(pause)
+      || !validPauseRange(pause.startedAt, pause.endedAt)
+      || pause.startedAt < precedingEnd
+      || pause.endedAt > endedAt) {
+      return null;
+    }
+    precedingEnd = pause.endedAt;
+  }
+  const durationMinutes = calculateTimerDurationMinutes(timer.startedAt, endedAt, timer.pauses);
+  return durationMinutes > 0
+    ? {
+      startedAt: timer.startedAt,
+      endedAt,
+      durationMinutes,
+      source: LOG_SOURCE.TIMER
+    }
+    : null;
+}
+
+function normalizeLegacyTimer(timer) {
+  if (!isPlainObject(timer)) {
+    return { timer, changed: false, wasEnded: false, candidatePreview: null };
+  }
+  const hasLegacyEndedAt = hasOwn(timer, 'endedAt');
+  const wasEnded = timer.status === 'ended';
+  if (!hasLegacyEndedAt && !wasEnded) {
+    return { timer, changed: false, wasEnded: false, candidatePreview: null };
+  }
+
+  const normalized = { ...timer };
+  const endedAt = normalized.endedAt;
+  delete normalized.endedAt;
+  if (!wasEnded) {
+    return { timer: normalized, changed: true, wasEnded: false, candidatePreview: null };
+  }
+
+  const candidatePreview = legacyEndedCandidatePreview(timer, endedAt);
+  const pauses = Array.isArray(normalized.pauses)
+    ? normalized.pauses.filter((pause) => isPlainObject(pause) && validPauseRange(pause.startedAt, pause.endedAt))
+    : [];
+  const draft = isPlainObject(normalized.draft) ? { ...normalized.draft } : {};
+  if (!hasOwn(draft, 'tags')) draft.tags = [];
+  return {
+    timer: {
+      ...normalized,
+      status: TIMER_STATUS.IDLE,
+      startedAt: nullableTimestamp(normalized.startedAt) ? normalized.startedAt : null,
+      pausedAt: null,
+      pauses,
+      draft
+    },
+    changed: true,
+    wasEnded: true,
+    candidatePreview
+  };
+}
+
+function createLegacyEndedRecoveryDraft(legacyTimer, createdAt) {
+  const recoveryDraft = {
+    reason: legacyTimer.candidatePreview
+      ? '旧版已结束计时已转为待审核，请核实后确认记录'
+      : '旧版已结束计时无法自动还原，请手工修正并确认记录',
+    timer: legacyTimer.timer,
+    createdAt
+  };
+  if (legacyTimer.candidatePreview) {
+    recoveryDraft.candidatePreview = legacyTimer.candidatePreview;
+  }
+  return recoveryDraft;
+}
+
+function normalizeLegacyRecoveryDraft(recoveryDraft) {
+  if (!isPlainObject(recoveryDraft) || !hasOwn(recoveryDraft, 'timer')) return recoveryDraft;
+  const legacyTimer = normalizeLegacyTimer(recoveryDraft.timer);
+  if (!legacyTimer.changed) return recoveryDraft;
+  const normalized = { ...recoveryDraft, timer: legacyTimer.timer };
+  if (legacyTimer.wasEnded && !hasOwn(normalized, 'candidatePreview') && legacyTimer.candidatePreview) {
+    normalized.candidatePreview = legacyTimer.candidatePreview;
+  }
+  return normalized;
+}
+
+function normalizeLegacyTimerState(database) {
+  if (!isPlainObject(database)) return database;
+  const normalized = clone(database);
+  if (hasOwn(normalized, 'timer')) {
+    const legacyTimer = normalizeLegacyTimer(normalized.timer);
+    if (legacyTimer.wasEnded) {
+      normalized.timer = createIdleTimer();
+      if (!hasOwn(normalized, 'recoveryDraft') || normalized.recoveryDraft === null) {
+        normalized.recoveryDraft = createLegacyEndedRecoveryDraft(legacyTimer, normalized.updatedAt);
+      }
+    } else if (legacyTimer.changed) {
+      normalized.timer = legacyTimer.timer;
+    }
+  }
+  if (hasOwn(normalized, 'recoveryDraft') && normalized.recoveryDraft !== null) {
+    normalized.recoveryDraft = normalizeLegacyRecoveryDraft(normalized.recoveryDraft);
+  }
+  return normalized;
+}
+
+function normalizeTimer(timer) {
+  return normalizeTimerFields(normalizeLegacyTimer(timer).timer);
 }
 
 const COLLECTION_NORMALIZERS = {
@@ -234,7 +353,7 @@ const COLLECTION_NORMALIZERS = {
 };
 
 function normalizeJsonSnapshot(database) {
-  const normalized = pickKnownFields(database, ROOT_FIELDS);
+  const normalized = pickKnownFields(normalizeLegacyTimerState(database), ROOT_FIELDS);
   if (!isPlainObject(normalized)) return normalized;
 
   if (hasOwn(normalized, 'localProfile')) normalized.localProfile = normalizeLocalProfile(normalized.localProfile);
@@ -355,10 +474,11 @@ function validateTimeLog(log, ids) {
   const nullableFields = ['projectId', 'projectNameSnapshot', 'taskId', 'taskNameSnapshot', 'calendarEventId', 'calendarEventSummarySnapshot', 'originRuleId', 'originOccurrenceId', 'originRuleSummarySnapshot'];
   const maximumDurationMinutes = log.source === LOG_SOURCE.TIMER
     ? calculateTimerDurationMinutes(log.startedAt, log.endedAt, [])
-    : calculateDurationMinutes(log.startedAt, log.endedAt, []);
+    : calculateLogDurationMinutes(log.startedAt, log.endedAt, []);
   if (!requireFields(log, ['id', 'schemaVersion', 'startedAt', 'endedAt', 'durationMinutes', ...nullableFields, 'note', 'status', 'source', 'tags', 'createdAt', 'updatedAt'])
-    || !requiredString(log.id) || log.schemaVersion !== APP_SCHEMA_VERSION || !validTimeRange(log.startedAt, log.endedAt)
+    || !requiredString(log.id) || log.schemaVersion !== APP_SCHEMA_VERSION || !validTimeRange(log.startedAt, log.endedAt, { allowSameTime: true })
     || !Number.isInteger(log.durationMinutes) || log.durationMinutes < 0
+    || (log.startedAt === log.endedAt && log.durationMinutes !== 1)
     || log.durationMinutes > maximumDurationMinutes || !nullableFields.every((field) => nullableString(log[field]))
     || typeof log.note !== 'string' || !validEnum(log.status, LOG_STATUS) || !validEnum(log.source, LOG_SOURCE)
     || !validNormalizedTags(log.tags) || !validateTimestamps(log)
@@ -391,9 +511,10 @@ function validateTimerDraft(draft) {
 }
 
 function validateTimerStructure(timer) {
-  if (!requireFields(timer, ['status', 'startedAt', 'endedAt', 'pausedAt', 'pauses', 'draft'])
+  if (hasOwn(timer, 'endedAt')
+    || !requireFields(timer, ['status', 'startedAt', 'pausedAt', 'pauses', 'draft'])
     || !validEnum(timer.status, TIMER_STATUS) || !nullableTimestamp(timer.startedAt)
-    || !nullableTimestamp(timer.endedAt) || !nullableTimestamp(timer.pausedAt) || !Array.isArray(timer.pauses)) invalidSchema();
+    || !nullableTimestamp(timer.pausedAt) || !Array.isArray(timer.pauses)) invalidSchema();
   timer.pauses.forEach((pause) => {
     if (!requireFields(pause, ['startedAt', 'endedAt']) || !validPauseRange(pause.startedAt, pause.endedAt)) invalidSchema();
   });
@@ -405,26 +526,65 @@ function validateTimer(timer) {
   validateTimerStructure(timer);
 
   if (timer.status === TIMER_STATUS.IDLE) {
-    if (timer.startedAt !== null || timer.endedAt !== null || timer.pausedAt !== null || timer.pauses.length) invalidSchema();
+    if (timer.startedAt !== null || timer.pausedAt !== null || timer.pauses.length) invalidSchema();
     return;
   }
 
   if (!isFiniteTimestamp(timer.startedAt)) invalidSchema();
   if (timer.status === TIMER_STATUS.RUNNING
-    && (timer.endedAt !== null || timer.pausedAt !== null)) invalidSchema();
+    && timer.pausedAt !== null) invalidSchema();
   if (timer.status === TIMER_STATUS.PAUSED
-    && (timer.endedAt !== null || !isFiniteTimestamp(timer.pausedAt) || timer.pausedAt < timer.startedAt)) invalidSchema();
-  if (timer.status === TIMER_STATUS.ENDED
-    && (!isFiniteTimestamp(timer.endedAt) || timer.endedAt < timer.startedAt || timer.pausedAt !== null)) invalidSchema();
+    && (!isFiniteTimestamp(timer.pausedAt) || timer.pausedAt < timer.startedAt)) invalidSchema();
 
   let precedingEnd = timer.startedAt;
   timer.pauses.forEach((pause) => {
     if (pause.startedAt < precedingEnd) invalidSchema();
     if (timer.status === TIMER_STATUS.PAUSED && pause.endedAt > timer.pausedAt) invalidSchema();
-    if (timer.status === TIMER_STATUS.ENDED && pause.endedAt > timer.endedAt) invalidSchema();
     precedingEnd = pause.endedAt;
   });
   if (timer.status === TIMER_STATUS.PAUSED && timer.pausedAt < precedingEnd) invalidSchema();
+}
+
+function recoveryCandidateDurationUpperBound(timer, candidatePreview) {
+  if (!isFiniteTimestamp(timer.startedAt)
+    || candidatePreview.startedAt !== timer.startedAt
+    || !Array.isArray(timer.pauses)) {
+    return null;
+  }
+
+  let precedingEnd = timer.startedAt;
+  const pauses = [];
+  for (const pause of timer.pauses) {
+    if (!requireFields(pause, ['startedAt', 'endedAt'])
+      || !validPauseRange(pause.startedAt, pause.endedAt)
+      || pause.startedAt < precedingEnd) {
+      return null;
+    }
+    if (pause.startedAt < candidatePreview.endedAt) {
+      pauses.push({
+        startedAt: pause.startedAt,
+        endedAt: Math.min(pause.endedAt, candidatePreview.endedAt)
+      });
+    }
+    precedingEnd = pause.endedAt;
+  }
+
+  if (timer.status === TIMER_STATUS.RUNNING) {
+    if (timer.pausedAt !== null) return null;
+  } else if (timer.status === TIMER_STATUS.PAUSED) {
+    if (!isFiniteTimestamp(timer.pausedAt) || timer.pausedAt < precedingEnd) return null;
+    if (timer.pausedAt < candidatePreview.endedAt) {
+      pauses.push({ startedAt: timer.pausedAt, endedAt: candidatePreview.endedAt });
+    }
+  } else if (timer.status !== TIMER_STATUS.IDLE || timer.pausedAt !== null) {
+    return null;
+  }
+
+  return calculateTimerDurationMinutes(
+    candidatePreview.startedAt,
+    candidatePreview.endedAt,
+    pauses
+  );
 }
 
 function validateRecoveryDraft(recoveryDraft) {
@@ -432,6 +592,15 @@ function validateRecoveryDraft(recoveryDraft) {
   if (!requireFields(recoveryDraft, ['reason', 'timer', 'createdAt'])
     || typeof recoveryDraft.reason !== 'string' || !isFiniteTimestamp(recoveryDraft.createdAt)) invalidSchema();
   validateTimerStructure(recoveryDraft.timer);
+  if (hasOwn(recoveryDraft, 'candidatePreview')) {
+    const preview = recoveryDraft.candidatePreview;
+    if (!requireFields(preview, ['startedAt', 'endedAt', 'durationMinutes', 'source'])
+      || !validTimeRange(preview.startedAt, preview.endedAt)
+      || !Number.isInteger(preview.durationMinutes) || preview.durationMinutes <= 0
+      || preview.source !== LOG_SOURCE.TIMER) invalidSchema();
+    const durationUpperBound = recoveryCandidateDurationUpperBound(recoveryDraft.timer, preview);
+    if (durationUpperBound === null || preview.durationMinutes > durationUpperBound) invalidSchema();
+  }
 }
 
 function validateJsonSnapshot(database) {
@@ -487,6 +656,7 @@ function persistedValueEquals(first, second) {
 }
 
 module.exports = {
+  normalizeLegacyTimerState,
   normalizeJsonSnapshot,
   parseJsonSnapshot,
   validateJsonSnapshot,

@@ -7,14 +7,13 @@ const {
   createRecoveryTimerOptions
 } = require('../miniprogram/services/bootstrap');
 
-test('开发环境仅用两秒恢复窗口，并确保能生成最小一分钟的候选记录', () => {
+test('开发环境使用恢复窗口，并确保候选预览至少显示一分钟', () => {
   assert.deepEqual(createRecoveryTimerOptions({
     miniProgram: { envVersion: 'develop' }
   }), {
     recoveryTimerSpanMs: DEVELOPMENT_RECOVERY_TIMER_SPAN_MS,
     minimumRecoveryDurationMinutes: 1
   });
-  assert.equal(DEVELOPMENT_RECOVERY_TIMER_SPAN_MS, 2_000);
 });
 
 test('体验版、正式版及未知环境继续使用二十四小时恢复窗口', () => {
@@ -25,7 +24,7 @@ test('体验版、正式版及未知环境继续使用二十四小时恢复窗�
   ]) {
     assert.deepEqual(createRecoveryTimerOptions(accountInfo), {
       recoveryTimerSpanMs: MAX_TIMER_SPAN_MS,
-      minimumRecoveryDurationMinutes: 0
+      minimumRecoveryDurationMinutes: 1
     });
   }
 });

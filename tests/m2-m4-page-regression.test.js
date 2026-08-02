@@ -31,7 +31,7 @@ test('M3：已归档项目可在页面中恢复', () => {
 
 test('M3：计划页以 TODO LIST 和项目上下文入口替代任务收集表单', () => {
   const wxml = fs.readFileSync(plansWxmlPath, 'utf8');
-  assert.ok(wxml.indexOf('TODO LIST') < wxml.indexOf('活动项目'));
+  assert.ok(wxml.indexOf('TODO LIST') < wxml.indexOf('项目（'));
   assert.match(wxml, /openStandaloneTask/);
   assert.match(wxml, /openChildTask/);
   assert.match(wxml, /openProjectTasks/);
@@ -64,12 +64,12 @@ test('M3：TODO 和项目的右上角新建入口为无底色深灰加号，页�
   const wxss = fs.readFileSync(plansWxssPath, 'utf8');
   assert.match(wxml, /class="section-add todo-add" bindtap="openStandaloneTask"/);
   assert.match(wxml, /class="section-add project-add" bindtap="openProjectCreate"/);
-  assert.match(wxml, /section-heading"><view class="section-title">活动项目/);
+  assert.match(wxml, /section-heading"><view class="section-title">项目（/);
   assert.doesNotMatch(wxml, /todo-fab|右下角 \+/);
   assert.doesNotMatch(wxss, /\.todo-fab\s*\{/);
   assert.match(wxss, /\.section-header\s*\{[^}]*box-sizing:\s*border-box;[^}]*width:\s*100%/s);
   assert.match(wxss, /\.section-heading\s*\{[^}]*flex:\s*1;/s);
-  assert.match(wxss, /\.section-add\s*\{[^}]*flex:\s*0 0 54rpx;[^}]*border-radius:\s*0;[^}]*background:\s*transparent;[^}]*color:\s*#475569;/s);
+  assert.match(wxss, /\.section-add\s*\{[^}]*flex:\s*0 0 54rpx;[^}]*border-radius:\s*0;[^}]*background:\s*transparent;[^}]*color:\s*#59635d;/s);
 });
 
 test('M4：日历提供计划块编辑删除入口，重复实例编辑弹层只渲染一次', () => {
@@ -100,7 +100,8 @@ test('日历计划块只选择必选任务，日志编辑只选择标签和计�
   assert.match(script, /calendarEventId: item\.id/);
   const page = loadCalendarPage();
   assert.equal(page.data.maxTagsPerLog, 10);
-  assert.equal(page.data.maxTagLength, 5);
+  assert.match(wxml, /最多添加 \{\{maxTagsPerLog\}\} 个标签；每个最多 5 个汉字或 10 个英文字符（中英文折算）/);
+  assert.match(wxml, /class="tag-chip tag-input" focus maxlength="10"/);
 });
 
 test('日历创建计划只向服务提交任务关联', () => {
@@ -314,6 +315,54 @@ test('日历可从具体或虚拟计划块开始计时，并使用对应联合�
         originOccurrenceId: 'rule_repeat:2:123'
       }
     ]);
+  } finally {
+    global.getApp = originalGetApp;
+    global.wx = originalWx;
+  }
+});
+
+test('日历确认虚拟实例或候选日志后会更新最近记录的 new 标记', () => {
+  const originalGetApp = global.getApp;
+  const originalWx = global.wx;
+  const stored = new Map();
+  const calls = [];
+  const snapshot = { localProfile: { id: 'profile_calendar' } };
+  const service = {
+    confirmVirtualOccurrence(item) {
+      calls.push(['virtual', item]);
+      return { id: 'confirmed_virtual' };
+    },
+    confirmCandidateLog(id) {
+      calls.push(['candidate', id]);
+      return { id: 'confirmed_candidate' };
+    }
+  };
+  global.getApp = () => ({ globalData: { bootstrap: { applicationService: service } } });
+  global.wx = {
+    showToast() {},
+    setStorageSync(key, value) { stored.set(key, value); }
+  };
+  try {
+    const page = loadCalendarPage();
+    page.currentSnapshot = snapshot;
+    page.refresh = () => {};
+
+    page.confirmItem({ currentTarget: { dataset: { item: {
+      virtual: true,
+      ruleId: 'rule_repeat',
+      originOccurrenceId: 'rule_repeat:1:123'
+    } } } });
+    assert.deepEqual(stored.get('plan-and-record.recent-log-highlight'), {
+      profileId: 'profile_calendar',
+      logId: 'confirmed_virtual'
+    });
+
+    page.confirmItem({ currentTarget: { dataset: { item: { id: 'candidate_log', virtual: false } } } });
+    assert.deepEqual(calls.map(([type]) => type), ['virtual', 'candidate']);
+    assert.deepEqual(stored.get('plan-and-record.recent-log-highlight'), {
+      profileId: 'profile_calendar',
+      logId: 'confirmed_candidate'
+    });
   } finally {
     global.getApp = originalGetApp;
     global.wx = originalWx;

@@ -71,21 +71,26 @@ function createHarness(start = 1_700_000_000_000, storage = new TrackingStorage(
   };
 }
 
-test('开发验收可用两秒恢复窗口创建一条候选记录', () => {
+test('开发验收的超时恢复只创建一份待审核候选预览', () => {
   const { service, setNow, now } = createHarness(undefined, undefined, {
     recoveryTimerSpanMs: 2_000,
     minimumRecoveryDurationMinutes: 1
   });
   const startedAt = now();
-  service.startTimer({ note: '开发验收候选记录' });
+  service.startTimer({ note: '开发验收候选预览' });
   setNow(startedAt + 3_000);
 
   const recovered = service.recoverTimer(now());
 
-  assert.equal(recovered.state, 'candidate');
-  assert.equal(recovered.log.status, LOG_STATUS.CANDIDATE);
-  assert.equal(recovered.log.durationMinutes, 1);
+  assert.equal(recovered.state, 'draft');
+  assert.deepEqual(recovered.recoveryDraft.candidatePreview, {
+    startedAt,
+    endedAt: startedAt + 2_000,
+    durationMinutes: 1,
+    source: LOG_SOURCE.TIMER
+  });
   assert.equal(service.snapshot().timer.status, TIMER_STATUS.IDLE);
+  assert.equal(service.snapshot().timeLogs.length, 0);
 });
 
 function requiredObjectives() {
@@ -215,7 +220,7 @@ test('M1：首次资料库生成匿名资料库且不再包含分类实体', () 
   assert.equal(service.archiveCategory, undefined);
 });
 
-test('新建记录和计时草稿统一规范化标签并执行 10/5 上限', () => {
+test('新建记录和计时草稿统一规范化标签并执行 10/5 中英文折算上限', () => {
   const { service, now } = createHarness();
   const manual = service.createManualLog({
     startedAt: now() - 3_600_000,
@@ -223,6 +228,13 @@ test('新建记录和计时草稿统一规范化标签并执行 10/5 上限', ()
     tags: [' ＡＩ ', 'AI', 'ai']
   }).log;
   assert.deepEqual(manual.tags, ['AI', 'ai']);
+
+  const englishTag = service.createManualLog({
+    startedAt: now() - 1_700_000,
+    endedAt: now() - 1_600_000,
+    tags: ['timeboxing']
+  }).log;
+  assert.deepEqual(englishTag.tags, ['timeboxing']);
 
   assert.throws(
     () => service.createManualLog({
@@ -243,20 +255,50 @@ test('新建记录和计时草稿统一规范化标签并执行 10/5 上限', ()
   );
 });
 
-test('导入的超限计时草稿在不改标签时可生成记录或恢复为候选', () => {
+test('时间日志允许开始与结束相同并按短时计时记为一分钟，但不允许结束早于开始', () => {
+  const { service, repository, now } = createHarness();
+  const timestamp = now() - 60_000;
+  const manual = service.createManualLog({ startedAt: timestamp, endedAt: timestamp }).log;
+  assert.equal(manual.durationMinutes, 1);
+
+  const shortManual = service.createManualLog({ startedAt: timestamp, endedAt: timestamp + 20_000 }).log;
+  assert.equal(shortManual.durationMinutes, 0);
+
+  const updated = service.updateLog(manual.id, { startedAt: timestamp, endedAt: timestamp }).log;
+  assert.equal(updated.durationMinutes, 1);
+
+  repository.transaction((database) => {
+    database.recoveryDraft = {
+      reason: '零时长恢复记录',
+      timer: createIdleTimer(),
+      createdAt: now()
+    };
+  });
+  const recovered = service.createRecoveryConfirmedLog({ startedAt: timestamp, endedAt: timestamp });
+  assert.equal(recovered.durationMinutes, 1);
+
+  service.startTimer();
+  assert.equal(service.finishTimer().log.durationMinutes, 1);
+
+  assert.throws(
+    () => service.createManualLog({ startedAt: timestamp, endedAt: timestamp - 1 }),
+    (error) => error.code === 'TIME_RANGE_INVALID' && error.message === '手工补录时间的结束时间不能早于开始时间'
+  );
+});
+
+test('导入的超限计时草稿在不改标签时可生成记录或从恢复草稿确认', () => {
   const { service, repository, now } = createHarness();
   const importedTags = Array.from({ length: 11 }, (_, index) => `标签${index}`);
   repository.transaction((database) => {
     database.timer = {
-      status: TIMER_STATUS.ENDED,
+      status: TIMER_STATUS.RUNNING,
       startedAt: now() - 120_000,
-      endedAt: now() - 60_000,
       pausedAt: null,
       pauses: [],
       draft: { tags: importedTags }
     };
   });
-  assert.deepEqual(service.generateTimerRecord().log.tags, importedTags);
+  assert.deepEqual(service.finishTimer().log.tags, importedTags);
 
   repository.transaction((database) => {
     database.recoveryDraft = {
@@ -293,6 +335,27 @@ test('M1/M3：关键结果只能记录百分比，活动项目不能超过五个
   assert.throws(() => service.createProject({ title: '第六个项目', deadlineAt: now() + 86_400_000, objectives: requiredObjectives() }), (error) => error.code === 'ACTIVE_PROJECT_LIMIT');
 });
 
+test('新建项目允许暂不添加 OKR，已填写的目标和关键结果仍须合法', () => {
+  const { service, now } = createHarness();
+  const projectWithoutOkr = service.createProject({
+    title: '先立项',
+    deadlineAt: now() + 86_400_000
+  });
+  const projectWithObjectiveOnly = service.createProject({
+    title: '先定目标',
+    deadlineAt: now() + 86_400_000,
+    objectives: [{ title: '明确范围', keyResults: [] }]
+  });
+
+  assert.deepEqual(projectWithoutOkr.objectives, []);
+  assert.deepEqual(projectWithObjectiveOnly.objectives[0].keyResults, []);
+  assert.throws(() => service.createProject({
+    title: '错误目标',
+    deadlineAt: now() + 86_400_000,
+    objectives: [{ title: '', keyResults: [] }]
+  }), (error) => error instanceof DomainError && error.code === 'TITLE_REQUIRED');
+});
+
 test('M3：新建任务插入开头，后续修改不重排保存顺序', () => {
   const { service, setNow, now } = createHarness();
   const first = service.createTask({ title: '先创建的任务' });
@@ -307,7 +370,7 @@ test('M3：新建任务插入开头，后续修改不重排保存顺序', () => 
   assert.deepEqual(service.snapshot().tasks.map((task) => task.id), [second.id, first.id]);
 });
 
-test('M2：计时暂停、恢复、结束后只在生成记录时写入 confirmed', () => {
+test('M2：点击结束计时会立即写入 confirmed', () => {
   const { service, setNow, now } = createHarness();
   service.startTimer({ note: '专注' });
   setNow(now() + 30 * 60 * 1000);
@@ -315,11 +378,7 @@ test('M2：计时暂停、恢复、结束后只在生成记录时写入 confirme
   setNow(now() + 10 * 60 * 1000);
   service.resumeTimer();
   setNow(now() + 20 * 60 * 1000);
-  service.finishTimer();
-  assert.equal(service.snapshot().timeLogs.length, 0);
-  assert.equal(service.snapshot().timer.status, TIMER_STATUS.ENDED);
-
-  const { log } = service.generateTimerRecord();
+  const { log } = service.finishTimer();
   assert.equal(log.durationMinutes, 50);
   assert.equal(log.status, LOG_STATUS.CONFIRMED);
   assert.equal(service.snapshot().timer.status, TIMER_STATUS.IDLE);
@@ -329,9 +388,7 @@ test('M2：短时计时生成的已确认记录至少计为一分钟', () => {
   const { service, setNow, now } = createHarness();
   service.startTimer({ note: '快速记录' });
   setNow(now() + 5_000);
-  service.finishTimer();
-
-  const { log } = service.generateTimerRecord();
+  const { log } = service.finishTimer();
   assert.equal(log.durationMinutes, 1);
   assert.equal(log.status, LOG_STATUS.CONFIRMED);
   assert.equal(log.note, '快速记录');
@@ -342,8 +399,7 @@ test('M2：计时记录超过整分钟后向上取整', () => {
     const { service, setNow, now } = createHarness();
     service.startTimer({ note: '向上取整' });
     setNow(now() + elapsedMilliseconds);
-    service.finishTimer();
-    assert.equal(service.generateTimerRecord().log.durationMinutes, expectedMinutes);
+    assert.equal(service.finishTimer().log.durationMinutes, expectedMinutes);
   }
 });
 
@@ -370,6 +426,24 @@ test('M2：恢复草稿经用户修正并保存后创建实际记录、纳入默
   assert.equal(statistics.weeklyReview.logCount, 1);
 });
 
+test('M2：待修正恢复草稿必须先确认或明确放弃，才可开始新的计时', () => {
+  const { service, setNow, now } = createHarness();
+  const startedAt = now();
+  service.startTimer({ note: '需要修正的计时' });
+  setNow(startedAt - 1_000);
+  assert.equal(service.recoverTimer(now()).state, 'draft');
+
+  assert.throws(
+    () => service.startTimer({ note: '不应静默覆盖草稿' }),
+    (error) => error.code === 'RECOVERY_DRAFT_PENDING'
+  );
+  assert.ok(service.snapshot().recoveryDraft);
+
+  assert.deepEqual(service.discardRecoveryDraft(), { discarded: true });
+  assert.equal(service.snapshot().recoveryDraft, null);
+  assert.equal(service.startTimer({ note: '新的计时' }).status, TIMER_STATUS.RUNNING);
+});
+
 test('开发调试可即时构造需要手工修正的恢复草稿', () => {
   const { service, now } = createHarness();
 
@@ -389,7 +463,7 @@ test('开发调试可即时构造需要手工修正的恢复草稿', () => {
   );
 });
 
-test('开发调试不会覆盖进行中或待确认的计时', () => {
+test('开发调试不会覆盖进行中的计时', () => {
   const { service } = createHarness();
   service.startTimer({ note: '正在计时' });
 
@@ -399,7 +473,7 @@ test('开发调试不会覆盖进行中或待确认的计时', () => {
   );
 });
 
-test('M2：超过 24 小时的计时恢复为候选记录', () => {
+test('M2：超过 24 小时的计时恢复为待审核草稿，不写入候选记录', () => {
   const { service, repository, setNow, now } = createHarness();
   service.startTimer({ note: '异常恢复' });
   const importedTags = [
@@ -412,10 +486,16 @@ test('M2：超过 24 小时的计时恢复为候选记录', () => {
   setNow(now() + MAX_TIMER_SPAN_MS + 60_000);
   const recovered = service.recoverTimer(now());
 
-  assert.equal(recovered.state, 'candidate');
-  assert.equal(recovered.log.status, LOG_STATUS.CANDIDATE);
-  assert.deepEqual(recovered.log.tags, importedTags);
+  assert.equal(recovered.state, 'draft');
+  assert.deepEqual(recovered.recoveryDraft.candidatePreview, {
+    startedAt: now() - MAX_TIMER_SPAN_MS - 60_000,
+    endedAt: now() - 60_000,
+    durationMinutes: 24 * 60,
+    source: LOG_SOURCE.TIMER
+  });
+  assert.deepEqual(recovered.recoveryDraft.timer.draft.tags, importedTags);
   assert.equal(service.snapshot().timer.status, TIMER_STATUS.IDLE);
+  assert.equal(service.snapshot().timeLogs.length, 0);
 });
 
 test('M2：暂停状态超时恢复时扣除尚未结束的暂停区间', () => {
@@ -428,12 +508,70 @@ test('M2：暂停状态超时恢复时扣除尚未结束的暂停区间', () => 
 
   const recovered = service.recoverTimer(now());
 
-  assert.equal(recovered.state, 'candidate');
-  assert.equal(recovered.log.startedAt, startedAt);
-  assert.equal(recovered.log.endedAt, startedAt + MAX_TIMER_SPAN_MS);
-  assert.equal(recovered.log.durationMinutes, 60);
+  assert.equal(recovered.state, 'draft');
+  assert.equal(recovered.recoveryDraft.candidatePreview.startedAt, startedAt);
+  assert.equal(recovered.recoveryDraft.candidatePreview.endedAt, startedAt + MAX_TIMER_SPAN_MS);
+  assert.equal(recovered.recoveryDraft.candidatePreview.durationMinutes, 60);
   assert.equal(service.snapshot().timer.status, TIMER_STATUS.IDLE);
+  assert.equal(service.snapshot().timeLogs.length, 0);
+});
+
+test('M2：超时恢复候选沿用计时器向上取整口径', () => {
+  const { service, setNow, now } = createHarness();
+  const startedAt = now();
+  service.startTimer({ note: '短时恢复' });
+  setNow(startedAt + 61_000);
+  service.pauseTimer();
+  setNow(startedAt + MAX_TIMER_SPAN_MS + 1);
+
+  const recovered = service.recoverTimer(now());
+  const preview = recovered.recoveryDraft.candidatePreview;
+  const log = service.createRecoveryConfirmedLog({
+    startedAt: preview.startedAt,
+    endedAt: preview.endedAt
+  });
+
+  assert.equal(preview.durationMinutes, 2);
+  assert.equal(log.durationMinutes, 2);
+});
+
+test('M2：直接核实超时恢复候选时保留已扣除暂停区间的时长', () => {
+  const { service, setNow, now } = createHarness();
+  const startedAt = now();
+  service.startTimer({ note: '运行一小时后长时间暂停' });
+  setNow(startedAt + 60 * 60 * 1_000);
+  service.pauseTimer();
+  setNow(startedAt + MAX_TIMER_SPAN_MS + 60 * 60 * 1_000);
+
+  const recovered = service.recoverTimer(now());
+  const preview = recovered.recoveryDraft.candidatePreview;
+  const log = service.createRecoveryConfirmedLog({
+    startedAt: preview.startedAt,
+    endedAt: preview.endedAt
+  });
+
+  assert.equal(preview.durationMinutes, 60);
+  assert.equal(log.durationMinutes, 60);
+  assert.equal(log.status, LOG_STATUS.CONFIRMED);
   assert.equal(service.snapshot().recoveryDraft, null);
+});
+
+test('M2：全程暂停的超时计时仍生成可审核的一分钟候选预览', () => {
+  const { service, setNow, now } = createHarness();
+  const startedAt = now();
+  service.startTimer({ note: '全程暂停' });
+  service.pauseTimer();
+  setNow(startedAt + MAX_TIMER_SPAN_MS + 1);
+
+  const recovered = service.recoverTimer(now());
+
+  assert.equal(recovered.state, 'draft');
+  assert.deepEqual(recovered.recoveryDraft.candidatePreview, {
+    startedAt,
+    endedAt: startedAt + MAX_TIMER_SPAN_MS,
+    durationMinutes: 1,
+    source: LOG_SOURCE.TIMER
+  });
 });
 
 test('M2：暂停区间不自洽时只保留恢复草稿', () => {
@@ -464,7 +602,7 @@ test('M2：运行态字段矛盾时不得恢复或生成候选', () => {
   const startedAt = now();
   service.startTimer({ note: '运行态字段异常' });
   repository.transaction((database) => {
-    database.timer.endedAt = startedAt + 30 * 60 * 1000;
+    database.timer.pausedAt = startedAt + 30 * 60 * 1000;
   });
   setNow(startedAt + 60 * 60 * 1000);
 
@@ -474,7 +612,7 @@ test('M2：运行态字段矛盾时不得恢复或生成候选', () => {
   assert.equal(recovered.state, 'draft');
   assert.equal(snapshot.timer.status, TIMER_STATUS.IDLE);
   assert.equal(snapshot.timeLogs.length, 0);
-  assert.equal(snapshot.recoveryDraft.timer.endedAt, startedAt + 30 * 60 * 1000);
+  assert.equal(snapshot.recoveryDraft.timer.pausedAt, startedAt + 30 * 60 * 1000);
 });
 
 test('M4：重复实例按需投影，确认后不会再次投影', () => {
@@ -1504,8 +1642,7 @@ test('新关系链：日志和计时只写计划关联，direct task/project 始
     database.timer.draft.projectId = project.id;
   });
   setNow(now() + 60_000);
-  service.finishTimer();
-  const generated = service.generateTimerRecord().log;
+  const generated = service.finishTimer().log;
   assert.deepEqual(
     [generated.calendarEventId, generated.taskId, generated.projectId],
     [event.id, null, null]
@@ -1562,8 +1699,7 @@ test('重复计划实例可作为日志和计时的统一计划关联，并校�
     originOccurrenceId: virtual.originOccurrenceId
   });
   setNow(now() + 60_000);
-  service.finishTimer();
-  const timerLog = service.generateTimerRecord().log;
+  const timerLog = service.finishTimer().log;
   assert.deepEqual(
     [
       timerLog.calendarEventId,

@@ -12,6 +12,16 @@ function normalizeTag(value) {
     .replace(/\s+/g, ' ');
 }
 
+function tagLengthUnits(tag) {
+  return Array.from(tag).reduce(
+    (units, character) => {
+      const codePoint = character.codePointAt(0);
+      return units + (codePoint >= 0x21 && codePoint <= 0x7E ? 1 : 2);
+    },
+    0
+  );
+}
+
 function normalizeTags(tags, options = {}) {
   if (!Array.isArray(tags)) {
     throw new DomainError('TAGS_INVALID', '标签必须是字符串数组');
@@ -26,10 +36,10 @@ function normalizeTags(tags, options = {}) {
     if (!tag || seen.has(tag)) {
       return;
     }
-    if (enforceLimits && Array.from(tag).length > MAX_TAG_LENGTH) {
+    if (enforceLimits && tagLengthUnits(tag) > MAX_TAG_LENGTH * 2) {
       throw new DomainError(
         'TAG_TOO_LONG',
-        `每个标签最多 ${MAX_TAG_LENGTH} 个字符`
+        `单个标签最多 ${MAX_TAG_LENGTH} 个汉字或 ${MAX_TAG_LENGTH * 2} 个英文字符（中英文折算），请缩短后重试`
       );
     }
     seen.add(tag);
@@ -39,7 +49,7 @@ function normalizeTags(tags, options = {}) {
   if (enforceLimits && normalizedTags.length > MAX_TAGS_PER_LOG) {
     throw new DomainError(
       'TAG_COUNT_EXCEEDED',
-      `一条记录最多添加 ${MAX_TAGS_PER_LOG} 个标签`
+      `一条记录最多添加 ${MAX_TAGS_PER_LOG} 个标签，请先移除一个标签后再添加`
     );
   }
 

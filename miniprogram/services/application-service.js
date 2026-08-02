@@ -23,7 +23,7 @@ const {
 } = require('../domain/recurrence');
 const { buildStatistics } = require('../domain/statistics');
 const { normalizeTags, tagsEqual } = require('../domain/tags');
-const { calculateDurationMinutes, calculateTimerDurationMinutes, isFiniteTimestamp } = require('../domain/time');
+const { calculateLogDurationMinutes, calculateTimerDurationMinutes, isFiniteTimestamp } = require('../domain/time');
 const { requiredTitle, validInterval, validPercentage, validPriority, validRepeatFrequency, validTimeRange } = require('../domain/validation');
 const {
   ENTITY_COLLECTIONS,
@@ -44,7 +44,7 @@ class ApplicationService {
       : MAX_TIMER_SPAN_MS;
     this.minimumRecoveryDurationMinutes = Number.isInteger(options.minimumRecoveryDurationMinutes) && options.minimumRecoveryDurationMinutes > 0
       ? options.minimumRecoveryDurationMinutes
-      : 0;
+      : 1;
     this.pendingJsonImport = null;
   }
 
@@ -589,9 +589,6 @@ class ApplicationService {
       throw new DomainError('DEADLINE_INVALID', '请设置有效的项目截止日期');
     }
     const objectives = this.normalizeObjectives(input.objectives || [], now);
-    if (!objectives.length || !objectives.some((objective) => objective.keyResults.length)) {
-      throw new DomainError('OKR_REQUIRED', '新建项目至少需要一个包含关键结果的目标');
-    }
     return this.repository.transaction((database) => {
       if (this.activeProjects(database).length >= MAX_ACTIVE_PROJECTS) {
         throw new DomainError('ACTIVE_PROJECT_LIMIT', `活动项目最多为 ${MAX_ACTIVE_PROJECTS} 个，请先归档或放弃项目`);
@@ -1305,7 +1302,7 @@ class ApplicationService {
         ...association,
         startedAt: occurrence.startedAt,
         endedAt: occurrence.endedAt,
-        durationMinutes: calculateDurationMinutes(occurrence.startedAt, occurrence.endedAt, []),
+        durationMinutes: calculateLogDurationMinutes(occurrence.startedAt, occurrence.endedAt, []),
         note: input.note || occurrence.title,
         status: LOG_STATUS.CONFIRMED,
         source: LOG_SOURCE.RULE,
@@ -1323,14 +1320,14 @@ class ApplicationService {
     const now = this.now();
     const startedAt = Number(input.startedAt);
     const endedAt = Number(input.endedAt);
-    validTimeRange(startedAt, endedAt, '手工补录时间');
+    validTimeRange(startedAt, endedAt, '手工补录时间', { allowSameTime: true });
     return this.repository.transaction((database) => {
       const association = this.resolveNewRecordAssociations(database, input);
       const log = createTimeLog({
         ...association,
         startedAt,
         endedAt,
-        durationMinutes: calculateDurationMinutes(startedAt, endedAt, []),
+        durationMinutes: calculateLogDurationMinutes(startedAt, endedAt, []),
         note: input.note || '',
         tags: input.tags,
         status: LOG_STATUS.CONFIRMED,
@@ -1351,13 +1348,13 @@ class ApplicationService {
       const log = this.requireEntity(database.timeLogs, id, '时间记录');
       const startedAt = input.startedAt === undefined ? log.startedAt : Number(input.startedAt);
       const endedAt = input.endedAt === undefined ? log.endedAt : Number(input.endedAt);
-      validTimeRange(startedAt, endedAt, '记录时间');
+      validTimeRange(startedAt, endedAt, '记录时间', { allowSameTime: true });
       const association = this.resolveRecordUpdateAssociations(database, log, input);
       const tags = this.resolveUpdatedTags(log.tags, input.tags);
       Object.assign(log, association, {
         startedAt,
         endedAt,
-        durationMinutes: calculateDurationMinutes(startedAt, endedAt, []),
+        durationMinutes: calculateLogDurationMinutes(startedAt, endedAt, []),
         note: input.note === undefined ? log.note : input.note,
         tags,
         status: log.status === LOG_STATUS.CANDIDATE ? LOG_STATUS.CONFIRMED : log.status,
@@ -1401,13 +1398,15 @@ class ApplicationService {
     const now = this.now();
     return this.repository.transaction((database) => {
       if (database.timer.status !== TIMER_STATUS.IDLE) {
-        throw new DomainError('TIMER_ALREADY_ACTIVE', '已有进行中的计时，请先结束或生成记录');
+        throw new DomainError('TIMER_ALREADY_ACTIVE', '已有进行中的计时，请先结束当前计时');
+      }
+      if (database.recoveryDraft) {
+        throw new DomainError('RECOVERY_DRAFT_PENDING', '有一条待修正的恢复草稿，请先处理');
       }
       const association = this.resolveNewRecordAssociations(database, input);
       database.timer = {
         status: TIMER_STATUS.RUNNING,
         startedAt: now,
-        endedAt: null,
         pausedAt: null,
         pauses: [],
         draft: {
@@ -1416,7 +1415,6 @@ class ApplicationService {
           tags: normalizeTags(input.tags === undefined ? [] : input.tags)
         }
       };
-      database.recoveryDraft = null;
       return database.timer;
     }).result;
   }
@@ -1463,37 +1461,29 @@ class ApplicationService {
     }).result;
   }
 
-  finishTimer() {
-    const now = this.now();
-    return this.repository.transaction((database) => {
-      if (database.timer.status === TIMER_STATUS.IDLE || database.timer.status === TIMER_STATUS.ENDED) {
-        throw new DomainError('TIMER_NOT_ACTIVE', '没有可结束的计时');
-      }
-      if (database.timer.status === TIMER_STATUS.PAUSED) {
-        database.timer.pauses.push({ startedAt: database.timer.pausedAt, endedAt: now });
-        database.timer.pausedAt = null;
-      }
-      database.timer.status = TIMER_STATUS.ENDED;
-      database.timer.endedAt = now;
-      return database.timer;
-    }).result;
-  }
-
-  generateTimerRecord() {
+  finishTimer(input = {}) {
     const now = this.now();
     return this.repository.transaction((database) => {
       const timer = database.timer;
-      if (timer.status !== TIMER_STATUS.ENDED) {
-        throw new DomainError('TIMER_NOT_ENDED', '请先结束计时，再生成记录');
+      if (timer.status === TIMER_STATUS.IDLE) {
+        throw new DomainError('TIMER_NOT_ACTIVE', '没有可结束的计时');
       }
-      const durationMinutes = calculateTimerDurationMinutes(timer.startedAt, timer.endedAt, timer.pauses);
-      const association = this.resolveRecordUpdateAssociations(database, timer.draft, {});
-      const log = createTimeLog({
+      const association = this.resolveRecordUpdateAssociations(database, timer.draft, input);
+      const tags = this.resolveUpdatedTags(timer.draft.tags, input.tags);
+      const pauses = timer.status === TIMER_STATUS.PAUSED
+        ? timer.pauses.concat({ startedAt: timer.pausedAt, endedAt: now })
+        : timer.pauses;
+      const draft = {
         ...timer.draft,
         ...association,
+        note: input.note === undefined ? timer.draft.note : input.note,
+        tags
+      };
+      const log = createTimeLog({
+        ...draft,
         startedAt: timer.startedAt,
-        endedAt: timer.endedAt,
-        durationMinutes,
+        endedAt: now,
+        durationMinutes: calculateTimerDurationMinutes(timer.startedAt, now, pauses),
         status: LOG_STATUS.CONFIRMED,
         source: LOG_SOURCE.TIMER
       }, now, { enforceTagLimits: false });
@@ -1507,7 +1497,7 @@ class ApplicationService {
     const now = this.now();
     const startedAt = Number(input.startedAt);
     const endedAt = Number(input.endedAt);
-    validTimeRange(startedAt, endedAt, '恢复记录时间');
+    validTimeRange(startedAt, endedAt, '恢复记录时间', { allowSameTime: true });
     return this.repository.transaction((database) => {
       const recoveryDraft = database.recoveryDraft;
       if (!recoveryDraft || !recoveryDraft.timer) {
@@ -1516,11 +1506,20 @@ class ApplicationService {
       const originalDraft = recoveryDraft.timer.draft || {};
       const association = this.resolveRecordUpdateAssociations(database, originalDraft, input);
       const tags = this.resolveUpdatedTags(originalDraft.tags, input.tags);
+      const candidatePreview = recoveryDraft.candidatePreview;
+      const keepsCandidatePreviewDuration = Boolean(candidatePreview
+        && candidatePreview.source === LOG_SOURCE.TIMER
+        && candidatePreview.startedAt === startedAt
+        && candidatePreview.endedAt === endedAt
+        && Number.isInteger(candidatePreview.durationMinutes)
+        && candidatePreview.durationMinutes > 0);
       const log = createTimeLog({
         ...association,
         startedAt,
         endedAt,
-        durationMinutes: calculateDurationMinutes(startedAt, endedAt, []),
+        durationMinutes: keepsCandidatePreviewDuration
+          ? candidatePreview.durationMinutes
+          : calculateLogDurationMinutes(startedAt, endedAt, []),
         note: input.note === undefined ? (originalDraft.note || '') : input.note,
         tags,
         status: LOG_STATUS.CONFIRMED,
@@ -1532,13 +1531,23 @@ class ApplicationService {
     }).result;
   }
 
+  discardRecoveryDraft() {
+    return this.repository.transaction((database) => {
+      if (!database.recoveryDraft) {
+        throw new DomainError('RECOVERY_DRAFT_NOT_FOUND', '没有需要放弃的恢复草稿');
+      }
+      database.recoveryDraft = null;
+      return { discarded: true };
+    }).result;
+  }
+
   simulateTimerRecoveryFailureForDebug() {
     const snapshot = this.snapshot();
     if (snapshot.recoveryDraft) {
       throw new DomainError('DEBUG_RECOVERY_DRAFT_EXISTS', '已有待修正的恢复草稿，请先完成修正后再测试');
     }
     if (!snapshot.timer || snapshot.timer.status !== TIMER_STATUS.IDLE) {
-      throw new DomainError('DEBUG_TIMER_TEST_REQUIRES_IDLE', '请先生成当前计时记录，再测试计时失败');
+      throw new DomainError('DEBUG_TIMER_TEST_REQUIRES_IDLE', '请先结束当前计时，再测试计时失败');
     }
 
     const now = this.now();
@@ -1559,7 +1568,7 @@ class ApplicationService {
 
   recoverTimer(now) {
     const currentTimer = this.snapshot().timer;
-    if (!currentTimer || currentTimer.status === TIMER_STATUS.IDLE || currentTimer.status === TIMER_STATUS.ENDED) {
+    if (!currentTimer || currentTimer.status === TIMER_STATUS.IDLE) {
       return { state: 'unchanged', timer: currentTimer };
     }
     return this.repository.transaction((database) => {
@@ -1577,8 +1586,8 @@ class ApplicationService {
         ? timer.pauses[timer.pauses.length - 1].endedAt
         : timer.startedAt;
       const statusFieldsValid = timer.status === TIMER_STATUS.RUNNING
-        ? timer.endedAt === null && timer.pausedAt === null
-        : timer.status === TIMER_STATUS.PAUSED && timer.endedAt === null;
+        ? timer.pausedAt === null
+        : timer.status === TIMER_STATUS.PAUSED;
       const activePauseValid = timer.status === TIMER_STATUS.RUNNING
         ? timer.pausedAt === null
         : timer.status === TIMER_STATUS.PAUSED
@@ -1602,23 +1611,22 @@ class ApplicationService {
         pauses.push({ startedAt: timer.pausedAt, endedAt });
       }
       const durationMinutes = Math.max(
+        1,
         this.minimumRecoveryDurationMinutes,
-        calculateDurationMinutes(timer.startedAt, endedAt, pauses)
+        calculateTimerDurationMinutes(timer.startedAt, endedAt, pauses)
       );
-      if (durationMinutes <= 0) {
-        database.recoveryDraft = { reason: '可恢复时间无效，请手工修正并确认记录', timer, createdAt: now };
-        return { state: 'draft', recoveryDraft: database.recoveryDraft };
-      }
-      const log = createTimeLog({
-        ...timer.draft,
-        startedAt: timer.startedAt,
-        endedAt,
-        durationMinutes,
-        status: LOG_STATUS.CANDIDATE,
-        source: LOG_SOURCE.TIMER
-      }, now, { enforceTagLimits: false });
-      database.timeLogs.push(log);
-      return { state: 'candidate', log };
+      database.recoveryDraft = {
+        reason: '计时超过恢复时间窗口，系统已生成候选，请核实后确认记录',
+        timer,
+        candidatePreview: {
+          startedAt: timer.startedAt,
+          endedAt,
+          durationMinutes,
+          source: LOG_SOURCE.TIMER
+        },
+        createdAt: now
+      };
+      return { state: 'draft', recoveryDraft: database.recoveryDraft };
     }).result;
   }
 

@@ -350,7 +350,7 @@ function showImportConfirmation(operation, preview) {
       content: importPreviewContent(preview),
       confirmText: isReplacement ? '确认覆盖' : '确认导入',
       cancelText: '取消',
-      confirmColor: isReplacement ? '#b91c1c' : '#16a34a',
+      confirmColor: isReplacement ? '#9a5550' : '#78947f',
       success: (result) => {
         if (!isCurrentOperation(operation, 'confirming-import')) return;
         if (!result.confirm) {
@@ -635,7 +635,7 @@ Page({
         content: '将删除当前设备中的全部用户数据、计时状态、恢复草稿、迁移备份，以及小程序内尚存的导出临时文件，并重建空资料库。已发送或另存的 JSON 不受影响，此操作无法撤销。',
         confirmText: '清空数据',
         cancelText: '取消',
-        confirmColor: '#b91c1c',
+        confirmColor: '#9a5550',
         success: (result) => {
           if (!isCurrentOperation(operation, 'confirming-clear')) return;
           if (!result.confirm) {

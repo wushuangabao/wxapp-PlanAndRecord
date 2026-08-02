@@ -33,7 +33,6 @@ function createIdleTimer() {
   return {
     status: TIMER_STATUS.IDLE,
     startedAt: null,
-    endedAt: null,
     pausedAt: null,
     pauses: [],
     draft: {}

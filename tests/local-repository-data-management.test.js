@@ -9,6 +9,7 @@ const {
   STORAGE_KEY,
   BACKUP_KEY
 } = require('../miniprogram/repository/local-repository');
+const { validateJsonSnapshot } = require('../miniprogram/repository/json-snapshot');
 const {
   MemoryStorageAdapter,
   WxStorageAdapter
@@ -112,13 +113,91 @@ test('initialize 严格校验合法当前版本快照且不重复写入', () => 
   assert.deepEqual(storage.removeCalls, []);
 });
 
+test('initialize 兼容旧 idle 计时器的 endedAt，并只在读取结果中剥离', () => {
+  const storage = new FaultStorage();
+  const stored = createInitialDatabase(1_700_000_000_000);
+  stored.timer.endedAt = null;
+  storage.set(STORAGE_KEY, stored);
+  storage.setCalls.length = 0;
+  const repository = new LocalRepository(storage, { now: () => 1_700_000_000_100 });
+
+  const loaded = repository.initialize();
+
+  assert.deepEqual(loaded.timer, {
+    status: 'idle', startedAt: null, pausedAt: null, pauses: [], draft: {}
+  });
+  assert.equal(Object.prototype.hasOwnProperty.call(loaded.timer, 'endedAt'), false);
+  assert.deepEqual(storage.get(STORAGE_KEY), stored);
+  assert.deepEqual(storage.setCalls, []);
+  assert.doesNotThrow(() => validateJsonSnapshot(loaded));
+});
+
+test('initialize 将旧 ended 计时安全降级为可核实的恢复草稿', () => {
+  const storage = new FaultStorage();
+  const startedAt = 1_700_000_000_000;
+  const endedAt = startedAt + 60_000;
+  const stored = createInitialDatabase(startedAt);
+  stored.timer = {
+    status: 'ended',
+    startedAt,
+    endedAt,
+    pausedAt: null,
+    pauses: [],
+    draft: { note: '旧版已结束计时', tags: ['迁移'] }
+  };
+  storage.set(STORAGE_KEY, stored);
+  storage.setCalls.length = 0;
+  const repository = new LocalRepository(storage, { now: () => endedAt + 1 });
+
+  const loaded = repository.initialize();
+
+  assert.deepEqual(loaded.timer, {
+    status: 'idle', startedAt: null, pausedAt: null, pauses: [], draft: {}
+  });
+  assert.equal(loaded.recoveryDraft.timer.status, 'idle');
+  assert.equal(Object.prototype.hasOwnProperty.call(loaded.recoveryDraft.timer, 'endedAt'), false);
+  assert.deepEqual(loaded.recoveryDraft.candidatePreview, {
+    startedAt,
+    endedAt,
+    durationMinutes: 1,
+    source: 'timer'
+  });
+  assert.deepEqual(storage.setCalls, []);
+  assert.doesNotThrow(() => validateJsonSnapshot(loaded));
+});
+
+test('旧 ended 计时无法形成候选预览时保留待修正草稿', () => {
+  const storage = new FaultStorage();
+  const startedAt = 1_700_000_000_000;
+  const stored = createInitialDatabase(startedAt);
+  stored.timer = {
+    status: 'ended',
+    startedAt,
+    endedAt: startedAt,
+    pausedAt: null,
+    pauses: [],
+    draft: { note: '需要手工修正', tags: [] }
+  };
+  storage.set(STORAGE_KEY, stored);
+  storage.setCalls.length = 0;
+  const repository = new LocalRepository(storage, { now: () => startedAt + 1 });
+
+  const loaded = repository.initialize();
+
+  assert.equal(loaded.timer.status, 'idle');
+  assert.equal(loaded.recoveryDraft.timer.status, 'idle');
+  assert.equal(loaded.recoveryDraft.timer.startedAt, startedAt);
+  assert.equal(Object.prototype.hasOwnProperty.call(loaded.recoveryDraft, 'candidatePreview'), false);
+  assert.deepEqual(storage.setCalls, []);
+  assert.doesNotThrow(() => validateJsonSnapshot(loaded));
+});
+
 test('initialize 将结构完整但暂停语义不一致的活动计时留给恢复流程', () => {
   const storage = new FaultStorage();
   const stored = createInitialDatabase(1_700_000_000_000);
   stored.timer = {
     status: 'paused',
     startedAt: 1_700_000_000_000,
-    endedAt: null,
     pausedAt: 1_700_000_050_000,
     pauses: [
       { startedAt: 1_700_000_030_000, endedAt: 1_700_000_020_000 }
@@ -146,7 +225,6 @@ test('initialize 允许已保存恢复草稿保留反向暂停区间供用户修
     timer: {
       status: 'paused',
       startedAt: 1_700_000_000_000,
-      endedAt: null,
       pausedAt: 1_700_000_050_000,
       pauses: [
         { startedAt: 1_700_000_030_000, endedAt: 1_700_000_020_000 }
@@ -174,7 +252,7 @@ test('initialize 允许已保存恢复草稿保留反向暂停区间供用户修
 
 test('initialize 对可恢复计时仍严格校验必需字段、容器、枚举、时间戳和草稿类型', () => {
   const cases = [
-    ['缺少字段', (timer) => { delete timer.endedAt; }],
+    ['缺少字段', (timer) => { delete timer.pausedAt; }],
     ['暂停容器错误', (timer) => { timer.pauses = {}; }],
     ['暂停字段缺失', (timer) => { timer.pauses = [{ startedAt: 1_700_000_010_000 }]; }],
     ['状态枚举错误', (timer) => { timer.status = 'recovering'; }],
@@ -188,7 +266,6 @@ test('initialize 对可恢复计时仍严格校验必需字段、容器、枚举
     stored.timer = {
       status: 'running',
       startedAt: 1_700_000_000_000,
-      endedAt: null,
       pausedAt: null,
       pauses: [],
       draft: { tags: [] }
@@ -223,7 +300,6 @@ test('initialize 拒绝同版本损坏快照，后续事务仍零写入且缓存
   stored.timer = {
     status: 'running',
     startedAt: stored.createdAt,
-    endedAt: null,
     pausedAt: null,
     pauses: [],
     draft: { tags: [] }
@@ -547,7 +623,7 @@ test('reset 原子建立不含分类聚合的新资料库和空运行态', () =>
   for (const collection of ['wishes', 'projects', 'tasks', 'calendarEvents', 'repeatRules', 'occurrenceExceptions', 'timeLogs']) {
     assert.deepEqual(reset[collection], []);
   }
-  assert.deepEqual(reset.timer, { status: 'idle', startedAt: null, endedAt: null, pausedAt: null, pauses: [], draft: {} });
+  assert.deepEqual(reset.timer, { status: 'idle', startedAt: null, pausedAt: null, pauses: [], draft: {} });
   assert.equal(reset.recoveryDraft, null);
   assert.equal(storage.get(BACKUP_KEY), undefined);
   assert.deepEqual(storage.setCalls, [STORAGE_KEY]);

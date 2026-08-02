@@ -1,0 +1,9 @@
+<view class="edit-icon" aria-hidden="true">
+  <view class="edit-pencil">
+    <view class="edit-pencil-tip"></view>
+    <view class="edit-pencil-nib"></view>
+    <view class="edit-pencil-body"></view>
+    <view class="edit-pencil-cap"></view>
+  </view>
+  <view class="edit-pencil-stroke"></view>
+</view>

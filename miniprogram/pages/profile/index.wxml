@@ -1,13 +1,12 @@
 <view class="page">
   <view class="eyebrow">LOCAL PROFILE</view>
-  <view class="hero"><view class="title">我的</view><view class="subtitle">不登录、不自动上传；数据默认只保存在当前设备。</view></view>
 
   <view class="risk">清理微信缓存、卸载微信或更换设备可能导致本地数据丢失；首版不提供云端自动备份或同步。</view>
 
   <view class="card">
     <view class="section-title">本周复盘</view>
     <view wx:if="{{review}}" class="review-grid"><view><text class="metric">{{review.totalMinutes}}</text><text>投入分钟</text></view><view><text class="metric">{{review.logCount}}</text><text>记录数</text></view><view><text class="metric">{{review.completedTaskCount}}</text><text>完成任务</text></view><view><text class="metric">{{review.nonPlannedMinutes}}</text><text>计划外</text></view></view>
-    <view class="switch-row"><view>包含候选估算</view><switch checked="{{includeCandidates}}" color="#16a34a" bindchange="onCandidatesChange" /></view>
+    <view class="switch-row"><view>包含候选估算</view><switch checked="{{includeCandidates}}" color="#55725e" bindchange="onCandidatesChange" /></view>
   </view>
 
   <view class="card"><view class="section-title">标签投入</view><view class="stat-hint">一条记录有多个标签时，完整耗时会分别计入每个标签。</view><view wx:if="{{!tagStats.length}}" class="empty">本周还没有纳入统计的实际记录。</view><view wx:for="{{tagStats}}" wx:key="id" class="stat-row"><view>{{item.displayName}}</view><view>{{item.durationMinutes}} 分钟</view></view></view>

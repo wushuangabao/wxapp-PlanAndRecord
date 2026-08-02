@@ -40,9 +40,11 @@ function validInterval(value) {
   return interval;
 }
 
-function validTimeRange(startedAt, endedAt, label = '时间区间') {
-  if (!isFiniteTimestamp(startedAt) || !isFiniteTimestamp(endedAt) || endedAt <= startedAt) {
-    throw new DomainError('TIME_RANGE_INVALID', `${label}的结束时间必须晚于开始时间`);
+function validTimeRange(startedAt, endedAt, label = '时间区间', { allowSameTime = false } = {}) {
+  const invalidOrder = allowSameTime ? endedAt < startedAt : endedAt <= startedAt;
+  if (!isFiniteTimestamp(startedAt) || !isFiniteTimestamp(endedAt) || invalidOrder) {
+    const relation = allowSameTime ? '不能早于' : '必须晚于';
+    throw new DomainError('TIME_RANGE_INVALID', `${label}的结束时间${relation}开始时间`);
   }
 }
 

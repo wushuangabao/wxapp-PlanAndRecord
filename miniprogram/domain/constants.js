@@ -22,8 +22,7 @@ const LOG_SOURCE = {
 const TIMER_STATUS = {
   IDLE: 'idle',
   RUNNING: 'running',
-  PAUSED: 'paused',
-  ENDED: 'ended'
+  PAUSED: 'paused'
 };
 
 const TASK_STATUS = {

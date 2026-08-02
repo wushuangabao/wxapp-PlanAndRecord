@@ -304,7 +304,7 @@ test('M5：数据管理区只暴露 JSON 导出、JSON 导入和危险清空按�
   assert.match(wxml, /class="danger"/);
   assert.equal((wxml.match(/disabled="\{\{dataOperationInProgress\}\}"/g) || []).length, 3);
   assert.doesNotMatch(wxml, /CSV|exportCsv|exportInProgress|日志同步/);
-  assert.match(wxss, /\.danger\s*\{[^}]*background:\s*#fee2e2;[^}]*color:\s*#b91c1c;/);
+  assert.match(wxss, /\.danger\s*\{[^}]*background:\s*#f2e3e1;[^}]*color:\s*#8a4945;/);
 });
 
 test('M5：JSON 导出在二次确认的用户点击回调中直接发送并清理临时文件', () => {
@@ -511,7 +511,7 @@ test('M5：覆盖导入映射 replace 并使用红色破坏性确认', () => {
     const finalConfirmation = harness.calls.modals.find((modal) => modal.title === '覆盖本地数据？');
     assert.match(finalConfirmation.content, /覆盖当前设备全部本地数据/);
     assert.match(finalConfirmation.content, /修复了 1 个失效关联/);
-    assert.equal(finalConfirmation.confirmColor, '#b91c1c');
+    assert.equal(finalConfirmation.confirmColor, '#9a5550');
     assert.equal(harness.calls.service.commitJsonImport.length, 0);
 
     confirmation.success({ confirm: false, cancel: true });
@@ -602,7 +602,7 @@ test('M5：清空数据取消不写入，确认后只清空一次并在完成后
   });
   try {
     cancelled.page.clearData();
-    assert.equal(cancelled.calls.modals[0].confirmColor, '#b91c1c');
+    assert.equal(cancelled.calls.modals[0].confirmColor, '#9a5550');
     assert.match(cancelled.calls.modals[0].content, /全部用户数据/);
     assert.match(cancelled.calls.modals[0].content, /导出临时文件/);
     assert.match(cancelled.calls.modals[0].content, /无法撤销/);

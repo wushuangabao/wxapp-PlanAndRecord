@@ -345,16 +345,25 @@ Page({
     try {
       const deadlineAt = parseLocalDateTime(this.data.projectDate, this.data.projectTime);
       const pendingTaskProjectLinkId = this.data.pendingTaskProjectLinkId;
+      const objectiveTitle = this.data.projectObjective.trim();
+      const keyResultTitle = this.data.projectKeyResult.trim();
       if (pendingTaskProjectLinkId && !getService().snapshot().tasks.some((task) => task.id === pendingTaskProjectLinkId)) {
         throw new Error('要关联的 TODO 已不存在，请重新选择');
       }
+      if (keyResultTitle && !objectiveTitle) {
+        throw new Error('填写关键结果前请先填写目标名称');
+      }
+      const objectives = objectiveTitle ? [{
+        title: objectiveTitle,
+        keyResults: keyResultTitle ? [{
+          title: keyResultTitle,
+          currentValue: this.data.projectCurrent === '' ? 0 : Number(this.data.projectCurrent)
+        }] : []
+      }] : [];
       const project = getService().createProject({
         title: this.data.projectTitle,
         deadlineAt,
-        objectives: [{
-          title: this.data.projectObjective,
-          keyResults: [{ title: this.data.projectKeyResult, currentValue: Number(this.data.projectCurrent) }]
-        }]
+        objectives
       });
       if (pendingTaskProjectLinkId) getService().updateTask(pendingTaskProjectLinkId, { projectId: project.id });
       this.setData({
@@ -518,7 +527,7 @@ Page({
     wx.showModal({
       title: '删除任务',
       content: '未结束的关联计划会一并删除；已结束计划和计时记录会保留。',
-      confirmColor: '#dc2626',
+      confirmColor: '#9a5550',
       success: (result) => {
         if (!result.confirm) return;
         try {
@@ -672,7 +681,7 @@ Page({
     wx.showModal({
       title: '放弃项目',
       content: '将删除项目、未完成任务、未来计划、重复规则和候选记录；已完成任务、历史计划和已确认记录会保留。',
-      confirmColor: '#dc2626',
+      confirmColor: '#9a5550',
       success: (result) => {
         if (!result.confirm) return;
         try {

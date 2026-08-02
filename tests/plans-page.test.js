@@ -9,6 +9,9 @@ const plansPagePath = require.resolve('../miniprogram/pages/plans/index.js');
 const plansWxmlPath = path.join(__dirname, '../miniprogram/pages/plans/index.wxml');
 const plansWxssPath = path.join(__dirname, '../miniprogram/pages/plans/index.wxss');
 const plansJsonPath = path.join(__dirname, '../miniprogram/pages/plans/index.json');
+const deleteIconDirectory = path.join(__dirname, '../miniprogram/components/delete-icon');
+const deleteIconWxmlPath = path.join(deleteIconDirectory, 'index.wxml');
+const deleteIconWxssPath = path.join(deleteIconDirectory, 'index.wxss');
 const sheetHeaderDirectory = path.join(__dirname, '../miniprogram/components/sheet-header');
 const sheetHeaderJsPath = path.join(sheetHeaderDirectory, 'index.js');
 const sheetHeaderJsonPath = path.join(sheetHeaderDirectory, 'index.json');
@@ -70,7 +73,7 @@ function createHarness({ tasks: providedTasks, projects: providedProjects } = {}
 
   global.getApp = () => ({ globalData: { bootstrap: { applicationService: service } } });
   global.wx = {
-    showToast() {},
+    showToast(config) { wxState.toast = config; },
     showActionSheet(config) { wxState.actionSheet = config; },
     showModal(config) { wxState.modal = config; }
   };
@@ -134,6 +137,32 @@ test('计划页：任务标题区域可打开编辑表单，表单提供关联�
   assert.match(wxml, /class="todo-main" data-id="{{task.id}}" bindtap="openTaskEditor"/);
   assert.match(wxml, /mode="selector" range="{{taskEditor.projectOptions}}" range-key="title"/);
   assert.match(wxml, /taskEditor.mode === 'edit' \? '编辑 TODO' : '新建 TODO'/);
+});
+
+test('计划页：TODO 图标操作使用固定热区的 view 和统一删除图标', () => {
+  const wxml = fs.readFileSync(plansWxmlPath, 'utf8');
+  const wxss = fs.readFileSync(plansWxssPath, 'utf8');
+  const config = JSON.parse(fs.readFileSync(plansJsonPath, 'utf8'));
+  const deleteIconWxml = fs.readFileSync(deleteIconWxmlPath, 'utf8');
+  const deleteIconWxss = fs.readFileSync(deleteIconWxssPath, 'utf8');
+
+  assert.match(wxml, /<view class="todo-actions">\s*<view class="todo-icon-button todo-link-button" role="button" aria-label="关联项目" data-id="\{\{task\.id\}\}" bindtap="chooseTaskProject">/s);
+  assert.match(wxml, /<view class="todo-icon-button todo-delete-button" role="button" aria-label="删除" data-id="\{\{task\.id\}\}" bindtap="confirmDeleteTask"><delete-icon\s*\/><\/view>/);
+  assert.doesNotMatch(wxml, /<button class="todo-icon-button/);
+  assert.match(wxss, /\.todo-actions\s*\{[^}]*flex:\s*0 0 112rpx;[^}]*width:\s*112rpx;[^}]*min-width:\s*112rpx;/s);
+  assert.match(wxss, /\.todo-icon-button\s*\{[^}]*flex:\s*0 0 56rpx;[^}]*width:\s*56rpx;[^}]*height:\s*56rpx;/s);
+  assert.equal(config.usingComponents['delete-icon'], '/components/delete-icon/index');
+  assert.match(deleteIconWxml, /class="delete-icon-handle"/);
+  assert.match(deleteIconWxml, /class="delete-icon-lid"/);
+  assert.match(deleteIconWxml, /class="delete-icon-body"/);
+  assert.equal((deleteIconWxml.match(/class="delete-icon-line"/g) || []).length, 2);
+  assert.match(deleteIconWxss, /:host\s*\{[^}]*width:\s*22rpx;[^}]*height:\s*25rpx;/s);
+  assert.match(deleteIconWxss, /\.delete-icon\s*\{[^}]*width:\s*22rpx;[^}]*height:\s*25rpx;[^}]*transform:\s*scale\(\.85\)/s);
+  assert.match(deleteIconWxss, /\.delete-icon-body\s*\{[^}]*left:\s*50%;[^}]*border:\s*3rpx solid #9a5550;/s);
+  assert.match(deleteIconWxss, /\.delete-icon-line\s*\{[^}]*width:\s*3rpx;/s);
+  for (const part of ['handle', 'lid', 'body', 'lines']) {
+    assert.match(deleteIconWxss, new RegExp(`\\.delete-icon-${part}\\s*\\{[^}]*left:\\s*50%;`, 's'));
+  }
 });
 
 test('计划页：项目选择弹窗按关联状态显示标题和取消关联项', () => {
@@ -238,6 +267,37 @@ test('计划页：没有活动项目时新建项目并自动关联发起选择�
   }
 });
 
+test('计划页：新建项目允许暂不填写 OKR，但关键结果必须归属目标', () => {
+  const harness = createHarness({ projects: [], tasks: [] });
+  try {
+    harness.page.setData({
+      projectTitle: '新项目',
+      projectDate: '2026-07-31',
+      projectTime: '09:00',
+      projectObjective: '',
+      projectKeyResult: '',
+      projectCurrent: ''
+    });
+    harness.page.addProject();
+    assert.deepEqual(harness.calls.createProject[0].objectives, []);
+
+    harness.page.setData({ projectObjective: '', projectKeyResult: '没有所属目标的关键结果' });
+    harness.page.addProject();
+    assert.equal(harness.calls.createProject.length, 1);
+    assert.equal(harness.wxState.toast.title, '填写关键结果前请先填写目标名称');
+  } finally {
+    harness.restore();
+  }
+});
+
+test('计划页：新建项目表单明确标注 OKR 为可选', () => {
+  const wxml = fs.readFileSync(plansWxmlPath, 'utf8');
+
+  assert.match(wxml, /placeholder="首个目标名称（可选）"/);
+  assert.match(wxml, /placeholder="首个关键结果标题（可选）"/);
+  assert.match(wxml, /placeholder="当前值 0–100（可选，默认 0）"/);
+});
+
 test('计划页：项目选择弹窗使用可滚动的原生动作面板式选项', () => {
   const wxml = fs.readFileSync(plansWxmlPath, 'utf8');
   const wxss = fs.readFileSync(plansWxssPath, 'utf8');
@@ -246,9 +306,9 @@ test('计划页：项目选择弹窗使用可滚动的原生动作面板式选�
   assert.match(wxml, /<scroll-view class="task-project-options" scroll-y="{{true}}" style="height: {{taskProjectPicker.optionsHeight}}rpx;">/);
   assert.match(wxml, /wx:if="{{taskProjectPicker.canUnlink}}"[\s\S]*class="task-project-option task-project-unlink"[\s\S]*取消关联/);
   assert.match(wxss, /\.task-project-options\s*\{[^}]*max-height:\s*56vh/s);
-  assert.match(wxss, /\.task-project-option\s*\{[^}]*background:\s*#ffffff;[^}]*color:\s*#000000;[^}]*text-align:\s*center/s);
-  assert.match(wxss, /\.task-project-option\s*\+\s*\.task-project-option\s*\{[^}]*border-top:\s*1rpx solid #e5e7eb/s);
-  assert.match(wxss, /\.task-project-unlink\s*\{[^}]*color:\s*#c73a38/s);
+  assert.match(wxss, /\.task-project-option\s*\{[^}]*background:\s*#faf9f7;[^}]*color:\s*#343a36;[^}]*text-align:\s*center/s);
+  assert.match(wxss, /\.task-project-option\s*\+\s*\.task-project-option\s*\{[^}]*border-top:\s*1rpx solid #dedad3/s);
+  assert.match(wxss, /\.task-project-unlink\s*\{[^}]*color:\s*#9a5550/s);
 });
 
 test('计划页：删除任务必须确认', () => {
@@ -334,26 +394,6 @@ test('计划页：无关联 TODO 默认 32rpx，关联 TODO 默认 28rpx，溢�
   } finally {
     harness.restore();
   }
-});
-
-test('计划页：关联项目图标由文件夹堆叠和左指箭头表示', () => {
-  const wxml = fs.readFileSync(plansWxmlPath, 'utf8');
-  const wxss = fs.readFileSync(plansWxssPath, 'utf8');
-
-  assert.match(wxml, /class="todo-link-icon"><view class="todo-folder-stack"><\/view><view class="todo-link-arrow"><\/view>/);
-  assert.match(wxss, /\.todo-folder-stack::before\s*\{[^}]*border:[^}]*#15803d[^}]*background:\s*#ffffff/s);
-  assert.match(wxss, /\.todo-link-arrow\s*\{[^}]*right:\s*0;[^}]*background:\s*#15803d/s);
-  assert.match(wxss, /\.todo-link-arrow::before\s*\{[^}]*rotate\(-40deg\)/s);
-  assert.match(wxss, /\.todo-link-arrow::after\s*\{[^}]*rotate\(40deg\)/s);
-  assert.doesNotMatch(wxss, /\.todo-link-icon\s*\{[^}]*rotate\(-45deg\)/s);
-});
-
-test('计划页：删除图标桶身包含两道竖线', () => {
-  const wxml = fs.readFileSync(plansWxmlPath, 'utf8');
-  const wxss = fs.readFileSync(plansWxssPath, 'utf8');
-
-  assert.match(wxml, /class="todo-delete-icon"><view class="todo-delete-lines"><\/view>/);
-  assert.match(wxss, /\.todo-delete-lines\s*\{[^}]*width:\s*2rpx;[^}]*height:\s*12rpx;[^}]*box-shadow:\s*7rpx 0 0 #dc2626/s);
 });
 
 test('计划页：新建 TODO 时回到首列并使用 600ms 动画', () => {

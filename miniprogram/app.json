@@ -7,15 +7,15 @@
   ],
   "window": {
     "navigationBarTitleText": "Plan & Record",
-    "navigationBarBackgroundColor": "#f8fafc",
+    "navigationBarBackgroundColor": "#f3f1ed",
     "navigationBarTextStyle": "black",
-    "backgroundColor": "#f8fafc",
+    "backgroundColor": "#f3f1ed",
     "backgroundTextStyle": "light"
   },
   "tabBar": {
-    "color": "#64748b",
-    "selectedColor": "#2563eb",
-    "backgroundColor": "#ffffff",
+    "color": "#626b65",
+    "selectedColor": "#55725e",
+    "backgroundColor": "#faf9f7",
     "borderStyle": "white",
     "list": [
       {
@@ -37,5 +37,6 @@
     ]
   },
   "style": "v2",
-  "sitemapLocation": "sitemap.json"
+  "sitemapLocation": "sitemap.json",
+  "lazyCodeLoading": "requiredComponents"
 }

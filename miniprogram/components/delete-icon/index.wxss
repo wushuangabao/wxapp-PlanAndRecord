@@ -1,0 +1,7 @@
+:host { display: block; width: 22rpx; height: 25rpx; }
+.delete-icon { position: relative; box-sizing: border-box; width: 22rpx; height: 25rpx; transform: scale(.85); transform-origin: center; }
+.delete-icon-handle { position: absolute; top: 0; left: 50%; width: 6rpx; height: 3rpx; border-radius: 2rpx 2rpx 0 0; background: #9a5550; transform: translateX(-50%); }
+.delete-icon-lid { position: absolute; top: 4rpx; left: 50%; width: 22rpx; height: 3rpx; border-radius: 2rpx; background: #9a5550; transform: translateX(-50%); }
+.delete-icon-body { position: absolute; top: 7rpx; left: 50%; box-sizing: border-box; width: 18rpx; height: 18rpx; border: 3rpx solid #9a5550; border-top: 0; border-radius: 0 0 3rpx 3rpx; transform: translateX(-50%); }
+.delete-icon-lines { position: absolute; top: 4rpx; left: 50%; display: flex; justify-content: space-between; width: 7rpx; height: 9rpx; transform: translateX(-50%); }
+.delete-icon-line { width: 3rpx; height: 9rpx; border-radius: 2rpx; background: #9a5550; }

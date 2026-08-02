@@ -1,11 +1,18 @@
 const {
   MAX_TAGS_PER_LOG,
-  MAX_TAG_LENGTH,
   TIMER_STATUS
 } = require('../../domain/constants');
 const { normalizeTags } = require('../../domain/tags');
 const { calculateTimerDurationMinutes, parseLocalDateTime, sumPausedMilliseconds } = require('../../domain/time');
-const { defaultDateTime, formatDateTime, getService, showError, showSaved } = require('../../utils/page');
+const {
+  defaultDateTime,
+  formatDateTime,
+  getService,
+  readRecentLogHighlight,
+  showError,
+  showSaved,
+  writeRecentLogHighlight
+} = require('../../utils/page');
 
 const DAY_MS = 24 * 60 * 60 * 1_000;
 const PLAN_WINDOW_PADDING_MS = DAY_MS;
@@ -79,6 +86,35 @@ function displayRecoveryDraftReason(reason) {
     '可恢复时间无效，请手工修正后再创建候选记录': '可恢复时间无效，请手工修正并确认记录'
   };
   return legacyReasons[reason] || reason;
+}
+
+function isCandidatePreview(candidatePreview) {
+  return Boolean(candidatePreview
+    && Number.isFinite(candidatePreview.startedAt)
+    && Number.isFinite(candidatePreview.endedAt)
+    && candidatePreview.endedAt > candidatePreview.startedAt
+    && Number.isInteger(candidatePreview.durationMinutes)
+    && candidatePreview.durationMinutes > 0);
+}
+
+function recoveryDraftPresentation(recoveryDraft) {
+  const candidatePreview = recoveryDraft && recoveryDraft.candidatePreview;
+  if (isCandidatePreview(candidatePreview)) {
+    return {
+      displayTitle: '有一条待审核的自动恢复记录',
+      displayReason: `系统候选：${formatDateTime(candidatePreview.startedAt)} 至 ${formatDateTime(candidatePreview.endedAt)}，共 ${candidatePreview.durationMinutes} 分钟。请核实后确认记录。`,
+      confirmLabel: '核实并确认记录',
+      discardTitle: '放弃自动恢复记录？',
+      discardCopy: '将永久删除这条未审核的自动恢复记录，不会生成时间记录。'
+    };
+  }
+  return {
+    displayTitle: '有一条待修正的恢复草稿',
+    displayReason: displayRecoveryDraftReason(recoveryDraft && recoveryDraft.reason),
+    confirmLabel: '修正并确认记录',
+    discardTitle: '放弃恢复草稿？',
+    discardCopy: '将永久删除这条无法还原的计时草稿，不会生成时间记录。'
+  };
 }
 
 function touchPageX(event, field) {
@@ -202,6 +238,63 @@ function associationInput(options, index) {
   };
 }
 
+function buildTagCandidateQueue(timeLogs, excludedLogId = null) {
+  const logs = Array.isArray(timeLogs) ? timeLogs : [];
+  const orderedLogs = logs
+    .map((log, index) => ({ log, index }))
+    .filter(({ log }) => log && log.id !== excludedLogId)
+    .sort((left, right) => {
+      const leftStartedAt = Number.isFinite(left.log.startedAt) ? left.log.startedAt : 0;
+      const rightStartedAt = Number.isFinite(right.log.startedAt) ? right.log.startedAt : 0;
+      return rightStartedAt - leftStartedAt || right.index - left.index;
+    });
+  const seen = new Set();
+  const candidates = [];
+  orderedLogs.forEach(({ log }) => {
+    (Array.isArray(log.tags) ? log.tags : []).forEach((value) => {
+      try {
+        const tag = normalizeTags([value])[0];
+        if (!tag || seen.has(tag)) return;
+        seen.add(tag);
+        candidates.push(tag);
+      } catch (error) {
+        // 导入数据可能保留超出用户输入上限的标签；候选区只展示当前可直接添加的标签。
+      }
+    });
+  });
+  return candidates;
+}
+
+function availableTagCandidates(candidateQueue, selectedTags) {
+  const selected = Array.isArray(selectedTags) ? selectedTags : [];
+  if (selected.length >= MAX_TAGS_PER_LOG) return [];
+  const selectedSet = new Set(selected);
+  return (Array.isArray(candidateQueue) ? candidateQueue : []).filter((tag) => !selectedSet.has(tag));
+}
+
+function candidateDataKey(tagsKey) {
+  return tagsKey === 'manualTags' ? 'manualTagCandidates' : 'tagCandidates';
+}
+
+function tagInputFocusDataKey(inputVisibleKey) {
+  return inputVisibleKey === 'manualTagInputVisible'
+    ? 'manualTagInputAutoFocus'
+    : 'tagInputAutoFocus';
+}
+
+const TAG_CANDIDATE_TAP_SLOP = 8;
+const TAG_CANDIDATE_BLUR_GUARD_MS = 200;
+
+function touchPoint(event, key) {
+  const touches = event && Array.isArray(event[key]) ? event[key] : [];
+  const point = touches[0];
+  if (!point) return null;
+  return {
+    x: Number(point.clientX),
+    y: Number(point.clientY)
+  };
+}
+
 Page({
   data: {
     timer: { status: TIMER_STATUS.IDLE },
@@ -210,12 +303,13 @@ Page({
     statusLabel: '准备开始',
     primaryLabel: '开始记录',
     maxTagsPerLog: MAX_TAGS_PER_LOG,
-    maxTagLength: MAX_TAG_LENGTH,
     events: [],
     eventIndex: 0,
     note: '',
     tags: [],
+    tagCandidates: [],
     tagInputVisible: false,
+    tagInputAutoFocus: false,
     showManual: false,
     manualStartDate: '',
     manualStartTime: '',
@@ -223,11 +317,16 @@ Page({
     manualEndTime: '',
     manualNote: '',
     manualTags: [],
+    manualTagCandidates: [],
     manualTagInputVisible: false,
+    manualTagInputAutoFocus: false,
     manualEvents: [],
     manualEventIndex: 0,
     manualMode: 'manual',
+    manualLogId: null,
     recoveryDraft: null,
+    showDiscardRecoveryConfirm: false,
+    pendingDeleteLog: null,
     recentLogs: [],
     recentColumnIndex: 0,
     recentColumnStep: 0,
@@ -242,6 +341,8 @@ Page({
   },
 
   onLoad() {
+    this.recentNewLogId = null;
+    this.focusedRecentLogId = null;
     const end = defaultDateTime();
     const start = defaultDateTime(Date.now() - 60 * 60 * 1000);
     this.setData({
@@ -322,20 +423,32 @@ Page({
     }
   },
 
-  refresh() {
+  refresh({ newLogId = null } = {}) {
     try {
       const service = getService();
       const snapshot = service.snapshot();
+      if (newLogId) {
+        this.recentNewLogId = newLogId;
+        writeRecentLogHighlight(snapshot, newLogId);
+      } else {
+        const persistedHighlightId = readRecentLogHighlight(snapshot);
+        if (persistedHighlightId) this.recentNewLogId = persistedHighlightId;
+      }
+      const highlightedRecentLogId = this.recentNewLogId;
       const draft = snapshot.timer.draft || {};
       const draftTags = Array.isArray(draft.tags) ? draft.tags.slice() : [];
       const hasActiveDraft = snapshot.timer.status !== TIMER_STATUS.IDLE;
+      const shouldClearTimerForm = Boolean(snapshot.recoveryDraft && !hasActiveDraft);
+      if (shouldClearTimerForm) this.hasUncommittedTimerForm = false;
       const now = Date.now();
       const planSelection = planOptionsForRange(service, snapshot, now, now);
       const selectableEvents = planSelection.options;
       const eventById = new Map(snapshot.calendarEvents.map((item) => [item.id, item]));
-      const currentEvent = this.data.events[this.data.eventIndex];
+      const currentEvent = shouldClearTimerForm ? null : this.data.events[this.data.eventIndex];
       let currentPlan;
-      if (snapshot.timer.status === TIMER_STATUS.IDLE) {
+      if (shouldClearTimerForm) {
+        currentPlan = { options: selectableEvents, index: 0 };
+      } else if (snapshot.timer.status === TIMER_STATUS.IDLE || this.hasUncommittedTimerForm) {
         const matchedIndex = findPlanAssociationIndex(selectableEvents, currentEvent);
         currentPlan = matchedIndex > 0
           ? { options: selectableEvents, index: matchedIndex }
@@ -353,17 +466,31 @@ Page({
       const recentLogs = snapshot.timeLogs.slice(-5).reverse().map((log) => ({
         ...log,
         displayTime: `${formatDateTime(log.startedAt)} · ${log.durationMinutes} 分钟`,
-        displayNote: log.note || '未命名记录',
+        displayNote: String(log.note || '')
+          .replace(/[\s\u200B-\u200D\uFEFF]+/g, ' ')
+          .trim() || '未命名记录',
         isCandidate: log.status === 'candidate',
+        isNew: log.id === highlightedRecentLogId,
         tags: Array.isArray(log.tags) ? log.tags : [],
         tagScrollLeft: 0,
         tagMaxScrollLeft: 0
       }));
       const recoveryDraft = snapshot.recoveryDraft && {
         ...snapshot.recoveryDraft,
-        displayReason: displayRecoveryDraftReason(snapshot.recoveryDraft.reason)
+        ...recoveryDraftPresentation(snapshot.recoveryDraft)
       };
-      const recentColumnIndex = clampRecentColumnIndex(this.data.recentColumnIndex, recentLogs.length);
+      const focusNewLog = Boolean(highlightedRecentLogId
+        && this.focusedRecentLogId !== highlightedRecentLogId
+        && recentLogs.some((log) => log.id === highlightedRecentLogId));
+      if (focusNewLog) this.clearRecentScrollAnimation();
+      if (focusNewLog) this.focusedRecentLogId = highlightedRecentLogId;
+      const recentColumnIndex = focusNewLog
+        ? 0
+        : clampRecentColumnIndex(this.data.recentColumnIndex, recentLogs.length);
+      const displayedTags = shouldClearTimerForm
+        ? []
+        : hasActiveDraft && !this.hasUncommittedTimerForm ? draftTags : this.data.tags;
+      this.tagCandidateQueue = buildTagCandidateQueue(snapshot.timeLogs);
       this.setData({
         timer: snapshot.timer,
         recoveryDraft,
@@ -371,11 +498,22 @@ Page({
         eventIndex: currentPlan.index,
         recentLogs,
         recentColumnIndex,
-        recentScrollLeft: this.recentScrollAnimationId !== null && this.recentScrollAnimationId !== undefined
+        recentScrollLeft: focusNewLog
+          ? 0
+          : this.recentScrollAnimationId !== null && this.recentScrollAnimationId !== undefined
           ? this.data.recentScrollLeft
           : (this.data.recentColumnStep ? recentColumnIndex * this.data.recentColumnStep : 0),
-        note: snapshot.timer.status === TIMER_STATUS.IDLE ? this.data.note : (draft.note || ''),
-        tags: hasActiveDraft ? draftTags : this.data.tags
+        recentBoundaryOffset: focusNewLog ? 0 : this.data.recentBoundaryOffset,
+        recentBoundaryIsDragging: focusNewLog ? false : this.data.recentBoundaryIsDragging,
+        note: shouldClearTimerForm
+          ? ''
+          : snapshot.timer.status === TIMER_STATUS.IDLE || this.hasUncommittedTimerForm
+          ? this.data.note
+          : (draft.note || ''),
+        tags: displayedTags,
+        tagCandidates: availableTagCandidates(this.tagCandidateQueue, displayedTags),
+        tagInputVisible: shouldClearTimerForm ? false : this.data.tagInputVisible,
+        tagInputAutoFocus: shouldClearTimerForm ? false : this.data.tagInputAutoFocus
       }, () => {
         this.measureRecentColumn();
         this.measureRecentTagTracks();
@@ -393,14 +531,16 @@ Page({
       this.setData({ elapsed: '00:00:00', elapsedMinutes: 0, statusLabel: '准备开始', primaryLabel: '开始记录' });
       return;
     }
-    const endedAt = timer.status === TIMER_STATUS.ENDED ? timer.endedAt : Date.now();
+    const now = Date.now();
     const pauses = timer.status === TIMER_STATUS.PAUSED && timer.pausedAt
-      ? (timer.pauses || []).concat({ startedAt: timer.pausedAt, endedAt })
+      ? (timer.pauses || []).concat({ startedAt: timer.pausedAt, endedAt: now })
       : timer.pauses;
-    const seconds = elapsedSeconds(timer, endedAt);
-    const duration = calculateTimerDurationMinutes(timer.startedAt, endedAt, pauses);
-    const primaryLabel = timer.status === TIMER_STATUS.RUNNING ? '暂停' : timer.status === TIMER_STATUS.PAUSED ? '继续' : '生成记录';
-    const statusLabel = timer.status === TIMER_STATUS.RUNNING ? '计时中' : timer.status === TIMER_STATUS.PAUSED ? '已暂停' : '已结束，等待确认';
+    const seconds = elapsedSeconds(timer, now);
+    const duration = calculateTimerDurationMinutes(timer.startedAt, now, pauses);
+    const primaryLabel = timer.status === TIMER_STATUS.RUNNING ? '暂停' : '继续';
+    const statusLabel = timer.status === TIMER_STATUS.RUNNING
+      ? `计时中（${duration}分钟）`
+      : '已暂停';
     this.setData({ elapsed: formatDuration(seconds), elapsedMinutes: duration, statusLabel, primaryLabel });
   },
 
@@ -589,53 +729,191 @@ Page({
   },
 
   onNoteInput(event) {
-    this.setData({ note: event.detail.value });
+    this.markTimerFormChanged();
+    this.setData({ note: event.detail.value }, () => this.syncTimerDraft());
+  },
+
+  markTimerFormChanged() {
+    if (this.data.timer.status !== TIMER_STATUS.IDLE) {
+      this.hasUncommittedTimerForm = true;
+    }
+  },
+
+  syncTimerDraft() {
+    if (this.data.timer.status === TIMER_STATUS.IDLE) return;
+    try {
+      getService().updateTimerDraft(this.selectedInput());
+      this.hasUncommittedTimerForm = false;
+    } catch (error) {
+      this.hasUncommittedTimerForm = true;
+      showError(error);
+    }
   },
 
   openTagInput(event) {
     const inputVisibleKey = event.currentTarget.dataset.inputVisibleKey;
-    this.setData({ [inputVisibleKey]: true });
+    const candidateKey = inputVisibleKey === 'manualTagInputVisible'
+      ? 'manualTagCandidates'
+      : 'tagCandidates';
+    this.setData({
+      [inputVisibleKey]: true,
+      [tagInputFocusDataKey(inputVisibleKey)]: !(this.data[candidateKey] || []).length
+    });
+  },
+
+  candidateData(tagsKey, tags) {
+    const candidateQueue = tagsKey === 'manualTags'
+      ? this.manualTagCandidateQueue
+      : this.tagCandidateQueue;
+    return {
+      [candidateDataKey(tagsKey)]: availableTagCandidates(candidateQueue, tags)
+    };
+  },
+
+  commitTag(tagsKey, inputVisibleKey, value) {
+    const inputFocusKey = tagInputFocusDataKey(inputVisibleKey);
+    const tag = normalizeTags([value])[0];
+    if (!tag) {
+      this.setData({ [inputVisibleKey]: false, [inputFocusKey]: false });
+      return;
+    }
+    const currentTags = this.data[tagsKey] || [];
+    if (currentTags.includes(tag)) {
+      wx.showToast({ title: '标签已存在', icon: 'none' });
+      return;
+    }
+    const nextTags = normalizeTags(currentTags.concat(tag));
+    if (tagsKey === 'tags') this.markTimerFormChanged();
+    this.setData({
+      [tagsKey]: nextTags,
+      [inputVisibleKey]: false,
+      [inputFocusKey]: false,
+      ...this.candidateData(tagsKey, nextTags)
+    }, () => {
+      if (tagsKey === 'tags') this.syncTimerDraft();
+    });
   },
 
   addTag(event) {
     const { tagsKey, inputVisibleKey } = event.currentTarget.dataset;
     if (!this.data[inputVisibleKey]) return;
     try {
-      const [tag] = normalizeTags([event.detail.value]);
-      if (!tag) {
-        this.setData({ [inputVisibleKey]: false });
-        return;
-      }
-      const currentTags = this.data[tagsKey] || [];
-      if (currentTags.includes(tag)) {
-        wx.showToast({ title: '标签已存在', icon: 'none' });
-        return;
-      }
-      this.setData({
-        [tagsKey]: normalizeTags(currentTags.concat(tag)),
-        [inputVisibleKey]: false
-      });
+      this.commitTag(tagsKey, inputVisibleKey, event.detail.value);
     } catch (error) {
       showError(error);
     }
   },
 
+  selectTagCandidate(event) {
+    const { tagsKey, inputVisibleKey, tag } = event.currentTarget.dataset;
+    try {
+      this.commitTag(tagsKey, inputVisibleKey, tag);
+    } catch (error) {
+      showError(error);
+    }
+  },
+
+  onTagCandidateTouchStart(event) {
+    const point = touchPoint(event, 'touches');
+    if (!point) return;
+    const { tagsKey, inputVisibleKey } = event.currentTarget.dataset;
+    this.tagCandidateTouch = {
+      ...point,
+      moved: false,
+      dataset: {
+        tagsKey,
+        inputVisibleKey,
+        tag: event.target && event.target.dataset ? event.target.dataset.tag : ''
+      }
+    };
+    this.tagCandidateBlurGuard = {
+      inputVisibleKey,
+      expiresAt: Date.now() + TAG_CANDIDATE_BLUR_GUARD_MS
+    };
+  },
+
+  onTagCandidateTouchMove(event) {
+    const gesture = this.tagCandidateTouch;
+    const point = touchPoint(event, 'touches');
+    if (!gesture || !point) return;
+    if (
+      Math.abs(point.x - gesture.x) > TAG_CANDIDATE_TAP_SLOP ||
+      Math.abs(point.y - gesture.y) > TAG_CANDIDATE_TAP_SLOP
+    ) {
+      gesture.moved = true;
+    }
+  },
+
+  onTagCandidateTouchEnd(event) {
+    const gesture = this.tagCandidateTouch;
+    this.tagCandidateTouch = null;
+    const point = touchPoint(event, 'changedTouches');
+    if (!gesture || !point) return;
+    this.tagCandidateBlurGuard = {
+      inputVisibleKey: gesture.dataset.inputVisibleKey,
+      expiresAt: Date.now() + TAG_CANDIDATE_BLUR_GUARD_MS
+    };
+    if (
+      gesture.moved ||
+      Math.abs(point.x - gesture.x) > TAG_CANDIDATE_TAP_SLOP ||
+      Math.abs(point.y - gesture.y) > TAG_CANDIDATE_TAP_SLOP
+    ) {
+      return;
+    }
+    if (!gesture.dataset.tag) return;
+    this.selectTagCandidate({ currentTarget: { dataset: gesture.dataset } });
+  },
+
+  onTagCandidateTouchCancel() {
+    const gesture = this.tagCandidateTouch;
+    this.tagCandidateTouch = null;
+    if (gesture) {
+      this.tagCandidateBlurGuard = {
+        inputVisibleKey: gesture.dataset.inputVisibleKey,
+        expiresAt: Date.now() + TAG_CANDIDATE_BLUR_GUARD_MS
+      };
+    }
+  },
+
   onTagInputBlur(event) {
+    const inputVisibleKey = event.currentTarget.dataset.inputVisibleKey;
+    const activeGesture = this.tagCandidateTouch;
+    const blurGuard = this.tagCandidateBlurGuard;
+    if (
+      (activeGesture && activeGesture.dataset.inputVisibleKey === inputVisibleKey) ||
+      (blurGuard && blurGuard.inputVisibleKey === inputVisibleKey && Date.now() <= blurGuard.expiresAt)
+    ) {
+      return;
+    }
     if (String(event.detail.value || '').trim()) {
       this.addTag(event);
       return;
     }
-    this.setData({ [event.currentTarget.dataset.inputVisibleKey]: false });
+    this.setData({
+      [inputVisibleKey]: false,
+      [tagInputFocusDataKey(inputVisibleKey)]: false
+    });
   },
 
   removeTag(event) {
     const { tagsKey } = event.currentTarget.dataset;
     const index = Number(event.currentTarget.dataset.index);
-    this.setData({ [tagsKey]: (this.data[tagsKey] || []).filter((_, itemIndex) => itemIndex !== index) });
+    if (tagsKey === 'tags') this.markTimerFormChanged();
+    const nextTags = (this.data[tagsKey] || []).filter((_, itemIndex) => itemIndex !== index);
+    this.setData({
+      [tagsKey]: nextTags,
+      ...this.candidateData(tagsKey, nextTags)
+    }, () => {
+      if (tagsKey === 'tags') this.syncTimerDraft();
+    });
   },
 
   onPickerChange(event) {
-    this.setData({ [event.currentTarget.dataset.key]: Number(event.detail.value) });
+    const key = event.currentTarget.dataset.key;
+    if (key === 'eventIndex') this.markTimerFormChanged();
+    this.setData({ [key]: Number(event.detail.value) }, () => {
+      if (key === 'eventIndex') this.syncTimerDraft();
+    });
   },
 
   selectedInput() {
@@ -657,24 +935,13 @@ Page({
     const service = getService();
     try {
       const status = this.data.timer.status;
-      if (status === TIMER_STATUS.IDLE) service.startTimer(this.selectedInput());
+      if (status === TIMER_STATUS.IDLE && this.data.recoveryDraft) return;
+      if (status === TIMER_STATUS.IDLE) {
+        service.startTimer(this.selectedInput());
+        this.hasUncommittedTimerForm = false;
+      }
       if (status === TIMER_STATUS.RUNNING) service.pauseTimer();
       if (status === TIMER_STATUS.PAUSED) service.resumeTimer();
-      if (status === TIMER_STATUS.ENDED) {
-        const result = service.generateTimerRecord();
-        this.setData({ eventIndex: 0, note: '', tags: [], tagInputVisible: false });
-        showSaved(result.hasOverlap ? '已保存：存在重叠时间' : '记录已生成');
-      }
-      this.refresh();
-    } catch (error) {
-      showError(error);
-    }
-  },
-
-  onSaveTimerDraft() {
-    try {
-      getService().updateTimerDraft(this.selectedInput());
-      showSaved();
       this.refresh();
     } catch (error) {
       showError(error);
@@ -684,9 +951,11 @@ Page({
   onFinishTimer() {
     try {
       const service = getService();
-      service.updateTimerDraft(this.selectedInput());
-      service.finishTimer();
-      this.refresh();
+      const result = service.finishTimer(this.selectedInput());
+      this.hasUncommittedTimerForm = false;
+      this.setData({ eventIndex: 0, note: '', tags: [], tagInputVisible: false });
+      showSaved(result.hasOverlap ? '已保存：存在重叠时间' : '记录已生成');
+      this.refresh({ newLogId: result.log.id });
     } catch (error) {
       showError(error);
     }
@@ -717,6 +986,8 @@ Page({
   },
 
   openManual() {
+    this.recoveryCandidatePreview = null;
+    this.manualEditingCandidate = false;
     const currentEvent = this.data.events[this.data.eventIndex];
     const planSelection = this.planOptionsForManualFields();
     const matchedIndex = findPlanAssociationIndex(planSelection.options, currentEvent);
@@ -725,12 +996,16 @@ Page({
       : currentEvent && ['event', 'origin'].includes(currentEvent.associationType)
         ? optionsWithSelected(planSelection.options, currentEvent)
         : { options: planSelection.options, index: 0 };
+    const snapshot = this.currentSnapshot || (this.currentService || getService()).snapshot();
+    this.manualTagCandidateQueue = buildTagCandidateQueue(snapshot.timeLogs);
     this.manualPlanSelectionRange = planSelection.range;
     this.setData({
       showManual: true,
       manualMode: 'manual',
+      manualLogId: null,
       manualNote: '',
       manualTags: [],
+      manualTagCandidates: availableTagCandidates(this.manualTagCandidateQueue, []),
       manualTagInputVisible: false,
       manualEvents: currentPlan.options,
       manualEventIndex: currentPlan.index
@@ -738,9 +1013,17 @@ Page({
   },
 
   openRecoveryManual() {
-    const timer = this.data.recoveryDraft && this.data.recoveryDraft.timer ? this.data.recoveryDraft.timer : {};
-    const startedAt = Number.isFinite(timer.startedAt) && timer.startedAt > 0 ? timer.startedAt : Date.now() - 60 * 60 * 1_000;
-    const endedAt = Number.isFinite(timer.endedAt) && timer.endedAt > startedAt ? timer.endedAt : startedAt + 60 * 60 * 1_000;
+    const recoveryDraft = this.data.recoveryDraft || {};
+    const timer = recoveryDraft.timer || {};
+    const candidatePreview = isCandidatePreview(recoveryDraft.candidatePreview)
+      ? recoveryDraft.candidatePreview
+      : null;
+    const startedAt = candidatePreview
+      ? candidatePreview.startedAt
+      : Number.isFinite(timer.startedAt) && timer.startedAt > 0
+        ? timer.startedAt
+        : Date.now() - 60 * 60 * 1_000;
+    const endedAt = candidatePreview ? candidatePreview.endedAt : startedAt + 60 * 60 * 1_000;
     const start = defaultDateTime(startedAt);
     const end = defaultDateTime(endedAt);
     const draft = timer.draft || {};
@@ -749,24 +1032,122 @@ Page({
     const snapshot = this.currentSnapshot || service.snapshot();
     const planSelection = planOptionsForRange(service, snapshot, startedAt, endedAt);
     const currentPlan = optionsForCurrentDraft(planSelection.options, draft, this.eventById);
+    this.manualTagCandidateQueue = buildTagCandidateQueue(snapshot.timeLogs);
     this.manualPlanSelectionRange = planSelection.range;
+    this.recoveryCandidatePreview = candidatePreview;
+    this.manualEditingCandidate = false;
     this.setData({
       showManual: true,
       manualMode: 'recovery',
+      manualLogId: null,
       manualStartDate: start.date,
       manualStartTime: start.time,
       manualEndDate: end.date,
       manualEndTime: end.time,
       manualNote: draft.note || '',
       manualTags: originalTags,
+      manualTagCandidates: availableTagCandidates(this.manualTagCandidateQueue, originalTags),
       manualTagInputVisible: false,
       manualEvents: currentPlan.options,
       manualEventIndex: currentPlan.index
     });
   },
 
+  onDiscardRecoveryDraft() {
+    if (!this.data.recoveryDraft) return;
+    this.setData({ showDiscardRecoveryConfirm: true });
+  },
+
+  confirmDiscardRecoveryDraft() {
+    try {
+      getService().discardRecoveryDraft();
+      this.setData({ showDiscardRecoveryConfirm: false });
+      this.refresh();
+      showSaved('已放弃并删除恢复草稿');
+    } catch (error) {
+      showError(error);
+    }
+  },
+
+  cancelDiscardRecoveryDraft() {
+    this.setData({ showDiscardRecoveryConfirm: false });
+  },
+
+  openRecentLogEditor(event) {
+    const id = event.currentTarget.dataset.id;
+    const item = this.data.recentLogs.find((log) => log.id === id);
+    if (!item) return;
+    const start = defaultDateTime(item.startedAt);
+    const end = defaultDateTime(item.endedAt);
+    const service = this.currentService || getService();
+    const snapshot = this.currentSnapshot || service.snapshot();
+    const planSelection = planOptionsForRange(service, snapshot, item.startedAt, item.endedAt);
+    const currentPlan = optionsForCurrentDraft(planSelection.options, item, this.eventById);
+    const originalTags = Array.isArray(item.tags) ? item.tags.slice() : [];
+    this.manualTagCandidateQueue = buildTagCandidateQueue(snapshot.timeLogs, item.id);
+    this.manualPlanSelectionRange = planSelection.range;
+    this.recoveryCandidatePreview = null;
+    this.manualEditingCandidate = item.status === 'candidate';
+    this.setData({
+      showManual: true,
+      manualMode: 'edit',
+      manualLogId: item.id,
+      manualStartDate: start.date,
+      manualStartTime: start.time,
+      manualEndDate: end.date,
+      manualEndTime: end.time,
+      manualNote: item.note || '',
+      manualTags: originalTags,
+      manualTagCandidates: availableTagCandidates(this.manualTagCandidateQueue, originalTags),
+      manualTagInputVisible: false,
+      manualEvents: currentPlan.options,
+      manualEventIndex: currentPlan.index
+    });
+  },
+
+  confirmDeleteRecentLog(event) {
+    const id = event.currentTarget.dataset.id;
+    const item = this.data.recentLogs.find((log) => log.id === id);
+    if (!item) return;
+    this.setData({
+      pendingDeleteLog: {
+        id,
+        title: item.isCandidate ? '删除候选记录？' : '删除时间记录？',
+        copy: item.isCandidate
+          ? '删除后不会生成实际投入，且无法恢复。'
+          : '删除后这条已确认的历史记录将无法恢复。'
+      }
+    });
+  },
+
+  deleteRecentLog() {
+    const pendingDeleteLog = this.data.pendingDeleteLog;
+    if (!pendingDeleteLog) return;
+    try {
+      getService().deleteLog(pendingDeleteLog.id, true);
+      this.setData({ pendingDeleteLog: null });
+      showSaved('记录已删除');
+      this.refresh();
+    } catch (error) {
+      showError(error);
+    }
+  },
+
+  cancelDeleteRecentLog() {
+    this.setData({ pendingDeleteLog: null });
+  },
+
   closeManual() {
-    this.setData({ showManual: false });
+    this.recoveryCandidatePreview = null;
+    this.manualEditingCandidate = false;
+    this.manualTagCandidateQueue = [];
+    this.setData({
+      showManual: false,
+      manualMode: 'manual',
+      manualLogId: null,
+      manualTagCandidates: [],
+      manualTagInputVisible: false
+    });
   },
 
   onManualField(event) {
@@ -780,22 +1161,47 @@ Page({
 
   onManualSave() {
     try {
-      const startedAt = parseLocalDateTime(this.data.manualStartDate, this.data.manualStartTime);
-      const endedAt = parseLocalDateTime(this.data.manualEndDate, this.data.manualEndTime);
+      let startedAt = parseLocalDateTime(this.data.manualStartDate, this.data.manualStartTime);
+      let endedAt = parseLocalDateTime(this.data.manualEndDate, this.data.manualEndTime);
+      const candidatePreview = this.data.manualMode === 'recovery' && this.recoveryCandidatePreview;
+      if (isCandidatePreview(candidatePreview)) {
+        const candidateStart = defaultDateTime(candidatePreview.startedAt);
+        const candidateEnd = defaultDateTime(candidatePreview.endedAt);
+        const unchangedCandidateTime = this.data.manualStartDate === candidateStart.date
+          && this.data.manualStartTime === candidateStart.time
+          && this.data.manualEndDate === candidateEnd.date
+          && this.data.manualEndTime === candidateEnd.time;
+        if (unchangedCandidateTime) {
+          startedAt = candidatePreview.startedAt;
+          endedAt = candidatePreview.endedAt;
+        }
+      }
       const input = { ...this.selectedManualInput(), startedAt, endedAt, note: this.data.manualNote };
+      const isEdit = this.data.manualMode === 'edit';
       const result = this.data.manualMode === 'recovery'
         ? { log: getService().createRecoveryConfirmedLog(input), hasOverlap: false }
-        : getService().createManualLog(input);
+        : isEdit
+          ? getService().updateLog(this.data.manualLogId, input)
+          : getService().createManualLog(input);
       const wasRecovery = this.data.manualMode === 'recovery';
+      const wasCandidateEdit = isEdit && this.manualEditingCandidate;
+      this.recoveryCandidatePreview = null;
+      this.manualEditingCandidate = false;
       this.setData({
         showManual: false,
         manualMode: 'manual',
+        manualLogId: null,
         manualNote: '',
         manualTags: [],
+        manualTagCandidates: [],
         manualTagInputVisible: false
       });
-      showSaved(wasRecovery ? '恢复记录已确认' : (result.hasOverlap ? '已保存：存在重叠时间' : '补录已保存'));
-      this.refresh();
+      showSaved(wasRecovery
+        ? '恢复记录已确认'
+        : isEdit
+          ? (wasCandidateEdit ? '候选已编辑并确认' : '记录已更新')
+          : (result.hasOverlap ? '已保存：存在重叠时间' : '补录已保存'));
+      this.refresh(isEdit && !wasCandidateEdit ? undefined : { newLogId: result.log.id });
     } catch (error) {
       showError(error);
     }

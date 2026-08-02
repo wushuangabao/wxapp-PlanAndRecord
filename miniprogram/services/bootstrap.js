@@ -5,7 +5,7 @@ const { WxExportTempFileStore } = require('./export-temp-file-store');
 const { createDisabledPorts } = require('./ports');
 const { MAX_TIMER_SPAN_MS } = require('../domain/constants');
 
-const DEVELOPMENT_RECOVERY_TIMER_SPAN_MS = 2 * 1000;
+const DEVELOPMENT_RECOVERY_TIMER_SPAN_MS = 8 * 1000;
 
 function createRecoveryTimerOptions(accountInfo) {
   const envVersion = accountInfo && accountInfo.miniProgram && accountInfo.miniProgram.envVersion;
@@ -17,7 +17,7 @@ function createRecoveryTimerOptions(accountInfo) {
   }
   return {
     recoveryTimerSpanMs: MAX_TIMER_SPAN_MS,
-    minimumRecoveryDurationMinutes: 0
+    minimumRecoveryDurationMinutes: 1
   };
 }
 

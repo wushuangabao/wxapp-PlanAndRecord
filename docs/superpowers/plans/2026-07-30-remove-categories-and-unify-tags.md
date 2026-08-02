@@ -12,7 +12,7 @@
 
 - `APP_SCHEMA_VERSION` 保持 `1`；当前项目尚未发布，不实现旧分类协议的迁移或兼容层。
 - `TimeLog.tags` 是字符串数组，允许为空，不新增独立 `Tag` 实体。
-- `MAX_TAGS_PER_LOG = 10`，`MAX_TAG_LENGTH = 5`，都在领域常量中维护。
+- `MAX_TAGS_PER_LOG = 10`，`MAX_TAG_LENGTH = 5`，都在领域常量中维护；每个标签最多 5 个汉字单位或 10 个英文字母，混合时每 2 个字母折算 1 个汉字单位。
 - 标签规范化使用 Unicode NFKC、去除首尾空白、把连续空白折叠为一个半角空格；大小写不等价。
 - 用户新建或修改标签时，规范化、去空、按规范化结果精确去重，再校验数量和长度。
 - JSON 导入规范化、去空、去重，但允许超过用户写入的数量和长度上限。
@@ -80,7 +80,7 @@ test('标签按 NFKC 和空白规则规范化且大小写不合并', () => {
 - [ ] **Step 2: 写用户限制失败测试**
 
 ```js
-test('用户标签最多十个且每个最多五个 Unicode 字符', () => {
+test('用户标签最多十个且每个最多五个汉字单位或十个英文字母', () => {
   assert.throws(() => normalizeTags(['一二三四五六']), error => error.code === 'TAG_TOO_LONG');
   assert.throws(
     () => normalizeTags(Array.from({ length: 11 }, (_, index) => String(index))),
@@ -108,7 +108,7 @@ function normalizeTags(tags, { enforceLimits = true } = {}) {
 }
 ```
 
-长度使用 `Array.from(tag).length` 计算 Unicode 码点数，大小写原样保留。
+长度使用 `Array.from(tag)` 计算 Unicode 码点；半角英文字母每个占半个汉字单位，其他码点每个占一个汉字单位，大小写原样保留。
 
 - [ ] **Step 5: 运行并确认 GREEN**
 
@@ -292,7 +292,7 @@ Expected: FAIL，原因是页面仍渲染并提交分类。
 
 - [ ] **Step 3: 重构计时页**
 
-删除分类 data、快照筛选、picker、索引和恢复逻辑；所有标签文本经领域 `parseTagsText` 处理。标签提示明确“逗号分隔，最多 10 个，每个 5 字”。
+删除分类 data、快照筛选、picker、索引和恢复逻辑；所有标签文本经领域 `parseTagsText` 处理。标签提示明确“最多 10 个；每个最多 5 个汉字或 10 个字母（2 个字母算 1 个汉字）”。
 
 - [ ] **Step 4: 重构日历日志编辑**
 

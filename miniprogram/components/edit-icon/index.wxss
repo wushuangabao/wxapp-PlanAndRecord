@@ -1,0 +1,87 @@
+:host {
+  display: block;
+  width: 30rpx;
+  height: 30rpx;
+}
+
+.edit-icon {
+  position: relative;
+  width: 30rpx;
+  height: 30rpx;
+}
+
+.edit-pencil {
+  position: absolute;
+  top: 10rpx;
+  left: 1rpx;
+  width: 28rpx;
+  height: 10rpx;
+  transform: rotate(-45deg);
+  transform-origin: center;
+}
+
+.edit-pencil-tip {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 0;
+  height: 0;
+  border-top: 5rpx solid transparent;
+  border-right: 7rpx solid #4d695b;
+  border-bottom: 5rpx solid transparent;
+}
+
+.edit-pencil-nib {
+  position: absolute;
+  z-index: 1;
+  top: 4rpx;
+  left: 0;
+  width: 3rpx;
+  height: 2rpx;
+  border-radius: 1rpx;
+  background: #385846;
+}
+
+.edit-pencil-body {
+  position: absolute;
+  top: 0;
+  left: 7rpx;
+  box-sizing: border-box;
+  width: 17rpx;
+  height: 10rpx;
+  border-radius: 1rpx;
+  background: #4d695b;
+}
+
+.edit-pencil-body::after {
+  position: absolute;
+  top: 2rpx;
+  left: 2rpx;
+  width: 13rpx;
+  height: 2rpx;
+  border-radius: 1rpx;
+  background: rgba(250, 249, 247, 0.72);
+  content: '';
+}
+
+.edit-pencil-cap {
+  position: absolute;
+  top: 0;
+  right: 0;
+  box-sizing: border-box;
+  width: 4rpx;
+  height: 10rpx;
+  border-left: 1rpx solid #faf9f7;
+  border-radius: 0 2rpx 2rpx 0;
+  background: #78947f;
+}
+
+.edit-pencil-stroke {
+  position: absolute;
+  bottom: 2rpx;
+  left: 2rpx;
+  right: 2rpx;
+  height: 2rpx;
+  border-radius: 1rpx;
+  background: #4d695b;
+}

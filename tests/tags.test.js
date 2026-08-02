@@ -41,16 +41,39 @@ test('标签文本用 CSV 风格引号可逆表示标签内部的逗号和双引
   );
 });
 
-test('用户标签最多十个且每个规范化后最多五个 Unicode 码点', () => {
+test('用户标签最多十个且每个规范化后最多五个汉字单位或十个英文字符', () => {
   assert.deepEqual(normalizeTags(['一二三四五']), ['一二三四五']);
+  assert.deepEqual(normalizeTags(['abcdefghij']), ['abcdefghij']);
+  assert.deepEqual(normalizeTags(['1234567890']), ['1234567890']);
+  assert.deepEqual(normalizeTags(['Ａ１b２C３d４E５']), ['A1b2C3d4E5']);
+  assert.deepEqual(normalizeTags(['-_.!@#$%^&']), ['-_.!@#$%^&']);
+  assert.deepEqual(normalizeTags(['学习abcdef']), ['学习abcdef']);
   assert.deepEqual(normalizeTags(['😀😀😀😀😀']), ['😀😀😀😀😀']);
   assert.throws(
     () => normalizeTags(['一二三四五六']),
     (error) => error.code === 'TAG_TOO_LONG'
   );
   assert.throws(
+    () => normalizeTags(['一二abcdefg']),
+    (error) => error.code === 'TAG_TOO_LONG'
+  );
+  assert.throws(
+    () => normalizeTags(['abcdefghijk']),
+    (error) => error.code === 'TAG_TOO_LONG'
+  );
+  assert.throws(
+    () => normalizeTags(['12345678901']),
+    (error) => error.code === 'TAG_TOO_LONG'
+  );
+  assert.throws(
+    () => normalizeTags(['-_.!@#$%^&*']),
+    (error) => error.code === 'TAG_TOO_LONG'
+      && error.message === '单个标签最多 5 个汉字或 10 个英文字符（中英文折算），请缩短后重试'
+  );
+  assert.throws(
     () => normalizeTags(Array.from({ length: 11 }, (_, index) => String(index))),
     (error) => error.code === 'TAG_COUNT_EXCEEDED'
+      && error.message === '一条记录最多添加 10 个标签，请先移除一个标签后再添加'
   );
 });
 

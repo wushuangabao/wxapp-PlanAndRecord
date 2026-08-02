@@ -109,8 +109,9 @@ function createService(now = NOW) {
     set(key, value) { this[key] = value; }
   }
   const storage = new MemoryStorage();
-  const repository = new LocalRepository(storage, { now: () => now });
-  const service = new ApplicationService(repository, { now: () => now });
+  const clock = typeof now === 'function' ? now : () => now;
+  const repository = new LocalRepository(storage, { now: clock });
+  const service = new ApplicationService(repository, { now: clock });
   service.initialize();
   return service;
 }
@@ -224,7 +225,7 @@ test('导出会移除各层遗留字段，且输出仍可被当前解析器读�
   database.timeLogs.push(validLog());
   database.recoveryDraft = {
     reason: '等待用户修复',
-    timer: { status: 'running', startedAt: null, endedAt: NOW, pausedAt: NOW, pauses: [], draft: { tags: [] } },
+    timer: { status: 'running', startedAt: null, pausedAt: NOW, pauses: [], draft: { tags: [] } },
     createdAt: NOW
   };
   database.projects[0].legacyProjectField = true;
@@ -259,7 +260,6 @@ test('重复计划实例关联在计时器、恢复草稿和 JSON 往返中保�
     timer: {
       status: 'running',
       startedAt: NOW,
-      endedAt: null,
       pausedAt: null,
       pauses: [],
       draft: { ...originDraft }
@@ -492,10 +492,13 @@ test('真实服务同毫秒暂停恢复产生的零时长 pause 是合法快照'
   assert.doesNotThrow(() => validateJsonSnapshot(snapshot));
 });
 
-test('真实服务 finishTimer 后的 ended 快照通过校验', () => {
-  const service = createService();
+test('真实服务 finishTimer 后清空运行态，快照通过校验', () => {
+  let now = NOW;
+  const service = createService(() => now);
   service.startTimer({ note: '结束' });
+  now += 1_000;
   service.finishTimer();
+  assert.equal(service.snapshot().timer.status, 'idle');
   assert.doesNotThrow(() => validateJsonSnapshot(service.snapshot()));
 });
 
@@ -503,22 +506,119 @@ test('日志时长不得超过墙钟分钟上限', () => {
   expectSchemaInvalid((database) => { database.timeLogs.push({ ...validLog(), durationMinutes: 61 }); });
 });
 
-test('日志允许零时长和扣除暂停后小于墙钟上限的时长', () => {
+test('日志允许零时长和扣除暂停后小于墙钟上限的时长，即时记录固定为 1 分钟', () => {
   const database = copySnapshot();
+  database.timeLogs.push({ ...validLog(), id: 'log_instant', endedAt: NOW, durationMinutes: 1 });
   database.timeLogs.push({ ...validLog(), id: 'log_zero', durationMinutes: 0 });
   database.timeLogs.push({ ...validLog(), id: 'log_paused', durationMinutes: 45, source: 'timer' });
   assert.doesNotThrow(() => validateJsonSnapshot(database));
+
+  for (const durationMinutes of [0, 2]) {
+    const invalidDatabase = copySnapshot();
+    invalidDatabase.timeLogs.push({
+      ...validLog(),
+      id: `log_instant_${durationMinutes}`,
+      endedAt: NOW,
+      durationMinutes
+    });
+    assert.throws(
+      () => parseJsonSnapshot(JSON.stringify(invalidDatabase)),
+      (error) => error.code === 'IMPORT_SCHEMA_INVALID'
+    );
+  }
 });
 
 test('根 timer 拒绝与状态机矛盾的时间戳组合', () => {
   expectSchemaInvalid((database) => { database.timer = { ...createIdleTimer(), startedAt: NOW }; });
+  expectSchemaInvalid((database) => { database.timer = { ...createIdleTimer(), endedAt: NOW }; });
   expectSchemaInvalid((database) => { database.timer = { ...createIdleTimer(), status: 'running' }; });
   expectSchemaInvalid((database) => {
     database.timer = { ...createIdleTimer(), status: 'paused', startedAt: NOW, pausedAt: null };
   });
   expectSchemaInvalid((database) => {
-    database.timer = { ...createIdleTimer(), status: 'ended', startedAt: NOW, endedAt: null };
+    database.timer = { ...createIdleTimer(), status: 'unknown', startedAt: NOW };
   });
+});
+
+test('JSON 导入兼容旧 idle 计时器的完成时间字段', () => {
+  const database = copySnapshot();
+  database.timer.endedAt = null;
+  const parsed = parseJsonSnapshot(JSON.stringify(database));
+  assert.equal(Object.prototype.hasOwnProperty.call(parsed.timer, 'endedAt'), false);
+  assert.deepEqual(parsed.timer, createIdleTimer());
+});
+
+test('JSON 导入将旧 ended 计时转为可确认的恢复草稿，而不恢复运行态', () => {
+  const database = copySnapshot();
+  database.timer = {
+    status: 'ended',
+    startedAt: NOW,
+    endedAt: NOW + 60_000,
+    pausedAt: null,
+    pauses: [],
+    draft: { note: '旧版已结束', tags: ['旧版'] }
+  };
+
+  const parsed = parseJsonSnapshot(JSON.stringify(database));
+
+  assert.deepEqual(parsed.timer, createIdleTimer());
+  assert.equal(parsed.recoveryDraft.timer.status, 'idle');
+  assert.equal(Object.prototype.hasOwnProperty.call(parsed.recoveryDraft.timer, 'endedAt'), false);
+  assert.deepEqual(parsed.recoveryDraft.candidatePreview, {
+    startedAt: NOW,
+    endedAt: NOW + 60_000,
+    durationMinutes: 1,
+    source: 'timer'
+  });
+  assert.doesNotThrow(() => validateJsonSnapshot(parsed));
+});
+
+test('旧 ended 计时不能形成候选预览时仍保留待修正恢复草稿', () => {
+  const database = copySnapshot();
+  database.timer = {
+    status: 'ended',
+    startedAt: NOW,
+    endedAt: NOW,
+    pausedAt: null,
+    pauses: [],
+    draft: { note: '需手工修正', tags: [] }
+  };
+
+  const parsed = parseJsonSnapshot(JSON.stringify(database));
+
+  assert.equal(parsed.timer.status, 'idle');
+  assert.equal(parsed.recoveryDraft.timer.status, 'idle');
+  assert.equal(parsed.recoveryDraft.timer.startedAt, NOW);
+  assert.equal(Object.prototype.hasOwnProperty.call(parsed.recoveryDraft, 'candidatePreview'), false);
+  assert.doesNotThrow(() => validateJsonSnapshot(parsed));
+});
+
+test('JSON 导入会兼容恢复草稿中旧 ended 计时器的完成时间字段', () => {
+  const database = copySnapshot();
+  database.recoveryDraft = {
+    reason: '旧版恢复草稿',
+    timer: {
+      status: 'ended',
+      startedAt: NOW,
+      endedAt: NOW + 60_000,
+      pausedAt: null,
+      pauses: [],
+      draft: { note: '旧版草稿', tags: [] }
+    },
+    createdAt: NOW
+  };
+
+  const parsed = parseJsonSnapshot(JSON.stringify(database));
+
+  assert.equal(parsed.recoveryDraft.timer.status, 'idle');
+  assert.equal(Object.prototype.hasOwnProperty.call(parsed.recoveryDraft.timer, 'endedAt'), false);
+  assert.deepEqual(parsed.recoveryDraft.candidatePreview, {
+    startedAt: NOW,
+    endedAt: NOW + 60_000,
+    durationMinutes: 1,
+    source: 'timer'
+  });
+  assert.doesNotThrow(() => validateJsonSnapshot(parsed));
 });
 
 test('根 timer 非 idle 状态必须持久化可为空的规范化标签数组', () => {
@@ -531,11 +631,6 @@ test('根 timer 非 idle 状态必须持久化可为空的规范化标签数组'
     status: 'paused',
     startedAt: NOW,
     pausedAt: NOW + 1_000
-  }, {
-    ...createIdleTimer(),
-    status: 'ended',
-    startedAt: NOW,
-    endedAt: NOW + 1_000
   }];
 
   activeTimers.forEach((timer) => {
@@ -553,7 +648,6 @@ test('根 timer 非 idle 状态必须持久化可为空的规范化标签数组'
       timer: {
         status: 'running',
         startedAt: null,
-        endedAt: NOW,
         pausedAt: NOW,
         pauses: [],
         draft: {}
@@ -566,13 +660,13 @@ test('根 timer 非 idle 状态必须持久化可为空的规范化标签数组'
 test('根 timer 的 pause 必须有序、不重叠并处于主计时边界内', () => {
   expectSchemaInvalid((database) => {
     database.timer = {
-      ...createIdleTimer(), status: 'ended', startedAt: NOW, endedAt: NOW + 4_000,
+      ...createIdleTimer(), status: 'paused', startedAt: NOW, pausedAt: NOW + 4_000,
       pauses: [{ startedAt: NOW + 1_000, endedAt: NOW + 3_000 }, { startedAt: NOW + 2_000, endedAt: NOW + 4_000 }]
     };
   });
   expectSchemaInvalid((database) => {
     database.timer = {
-      ...createIdleTimer(), status: 'ended', startedAt: NOW, endedAt: NOW + 4_000,
+      ...createIdleTimer(), status: 'paused', startedAt: NOW, pausedAt: NOW + 4_000,
       pauses: [{ startedAt: NOW + 1_000, endedAt: NOW + 5_000 }]
     };
   });
@@ -589,12 +683,59 @@ test('recoveryDraft 保留结构有效但状态异常的原始 timer', () => {
   database.recoveryDraft = {
     reason: '等待用户修复',
     timer: {
-      status: 'running', startedAt: null, endedAt: NOW, pausedAt: NOW,
+      status: 'running', startedAt: null, pausedAt: NOW,
       pauses: [{ startedAt: NOW, endedAt: NOW }], draft: { tags: [] }
     },
     createdAt: NOW
   };
   assert.doesNotThrow(() => validateJsonSnapshot(database));
+});
+
+test('recoveryDraft 的候选预览必须是完整且有效的计时器建议', () => {
+  const database = copySnapshot();
+  database.recoveryDraft = {
+    reason: '计时超过恢复时间窗口，系统已生成候选，请核实后确认记录',
+    timer: { ...createIdleTimer(), startedAt: NOW },
+    candidatePreview: {
+      startedAt: NOW,
+      endedAt: NOW + 8_000,
+      durationMinutes: 1,
+      source: 'timer'
+    },
+    createdAt: NOW
+  };
+  const parsed = parseJsonSnapshot(JSON.stringify(database));
+  assert.deepEqual(parsed.recoveryDraft.candidatePreview, database.recoveryDraft.candidatePreview);
+
+  for (const candidatePreview of [
+    { startedAt: NOW, endedAt: NOW, durationMinutes: 1, source: 'timer' },
+    { startedAt: NOW, endedAt: NOW + 8_000, durationMinutes: 0, source: 'timer' },
+    { startedAt: NOW, endedAt: NOW + 8_000, durationMinutes: 1, source: 'manual' },
+    { startedAt: NOW, endedAt: NOW + 8_000, durationMinutes: 1 }
+  ]) {
+    expectSchemaInvalid((invalidDatabase) => {
+      invalidDatabase.recoveryDraft = {
+        reason: '等待审核',
+        timer: { ...createIdleTimer(), startedAt: NOW },
+        candidatePreview,
+        createdAt: NOW
+      };
+    });
+  }
+
+  expectSchemaInvalid((invalidDatabase) => {
+    invalidDatabase.recoveryDraft = {
+      reason: '伪造超长预览',
+      timer: { ...createIdleTimer(), startedAt: NOW },
+      candidatePreview: {
+        startedAt: NOW,
+        endedAt: NOW + 60_000,
+        durationMinutes: 2,
+        source: 'timer'
+      },
+      createdAt: NOW
+    };
+  });
 });
 
 test('重复 ID 包括顶层实体、嵌套目标、关键结果和修订均被拒绝', () => {

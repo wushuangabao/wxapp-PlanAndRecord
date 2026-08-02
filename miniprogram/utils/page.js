@@ -1,5 +1,7 @@
 const { formatDateTime, toDateInput, toTimeInput } = require('../domain/time');
 
+const RECENT_LOG_HIGHLIGHT_STORAGE_KEY = 'plan-and-record.recent-log-highlight';
+
 function getService() {
   const bootstrap = getApp().globalData.bootstrap;
   if (!bootstrap || !bootstrap.applicationService) {
@@ -31,11 +33,45 @@ function defaultDateTime(timestamp = Date.now()) {
   };
 }
 
+function profileIdForSnapshot(snapshot) {
+  const profileId = snapshot && snapshot.localProfile && snapshot.localProfile.id;
+  return typeof profileId === 'string' && profileId ? profileId : null;
+}
+
+function readRecentLogHighlight(snapshot) {
+  if (typeof wx === 'undefined' || typeof wx.getStorageSync !== 'function') return null;
+  try {
+    const stored = wx.getStorageSync(RECENT_LOG_HIGHLIGHT_STORAGE_KEY);
+    if (typeof stored === 'string' && stored) return stored;
+    if (!stored || typeof stored !== 'object' || typeof stored.logId !== 'string' || !stored.logId) return null;
+    const profileId = profileIdForSnapshot(snapshot);
+    if (profileId && stored.profileId && stored.profileId !== profileId) return null;
+    return stored.logId;
+  } catch (error) {
+    return null;
+  }
+}
+
+function writeRecentLogHighlight(snapshot, logId) {
+  if (typeof wx === 'undefined' || typeof wx.setStorageSync !== 'function') return false;
+  if (typeof logId !== 'string' || !logId) return false;
+  const profileId = profileIdForSnapshot(snapshot);
+  try {
+    wx.setStorageSync(RECENT_LOG_HIGHLIGHT_STORAGE_KEY, profileId ? { profileId, logId } : { logId });
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
 module.exports = {
+  RECENT_LOG_HIGHLIGHT_STORAGE_KEY,
   getService,
   showError,
   showSaved,
   selectorData,
   defaultDateTime,
-  formatDateTime
+  formatDateTime,
+  readRecentLogHighlight,
+  writeRecentLogHighlight
 };

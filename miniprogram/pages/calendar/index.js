@@ -1,8 +1,15 @@
-const { MAX_TAGS_PER_LOG, MAX_TAG_LENGTH } = require('../../domain/constants');
+const { MAX_TAGS_PER_LOG } = require('../../domain/constants');
 const { parseLocalDateTime } = require('../../domain/time');
 const { normalizeTags } = require('../../domain/tags');
 const { rangeForView, shiftAnchor } = require('../../utils/date-range');
-const { defaultDateTime, formatDateTime, getService, showError, showSaved } = require('../../utils/page');
+const {
+  defaultDateTime,
+  formatDateTime,
+  getService,
+  showError,
+  showSaved,
+  writeRecentLogHighlight
+} = require('../../utils/page');
 
 const VIEW_LABELS = { day: '日', week: '周', month: '月', year: '年' };
 const FREQUENCY_VALUES = ['daily', 'weekly', 'monthly'];
@@ -131,7 +138,6 @@ Page({
     anchor: Date.now(),
     rangeLabel: '',
     maxTagsPerLog: MAX_TAGS_PER_LOG,
-    maxTagLength: MAX_TAG_LENGTH,
     timeline: [],
     title: '',
     startDate: '',
@@ -304,8 +310,11 @@ Page({
   confirmItem(event) {
     try {
       const item = event.currentTarget.dataset.item;
-      if (item.virtual) getService().confirmVirtualOccurrence(item);
-      else getService().confirmCandidateLog(item.id);
+      const service = getService();
+      const log = item.virtual
+        ? service.confirmVirtualOccurrence(item)
+        : service.confirmCandidateLog(item.id);
+      writeRecentLogHighlight(this.currentSnapshot, log && log.id);
       showSaved('候选已确认');
       this.refresh();
     } catch (error) {
@@ -381,7 +390,7 @@ Page({
       title: '删除计划块',
       content: '会解除现有时间记录与该计划的关联，但会保留计划标题摘要用于复盘。',
       confirmText: '删除计划',
-      confirmColor: '#dc2626',
+      confirmColor: '#9a5550',
       success: (result) => {
         if (!result.confirm) return;
         try {
@@ -461,7 +470,7 @@ Page({
 
   deleteConfirmed(event) {
     const item = event.currentTarget.dataset.item;
-    wx.showModal({ title: '删除实际记录', content: '删除后这条已确认的历史记录将无法恢复。', confirmColor: '#dc2626', success: (result) => {
+    wx.showModal({ title: '删除实际记录', content: '删除后这条已确认的历史记录将无法恢复。', confirmColor: '#9a5550', success: (result) => {
       if (!result.confirm) return;
       try {
         getService().deleteLog(item.id, true);
@@ -554,7 +563,7 @@ Page({
     const { tagsKey, inputVisibleKey } = event.currentTarget.dataset;
     if (!this.data[inputVisibleKey]) return;
     try {
-      const [tag] = normalizeTags([event.detail.value]);
+      const tag = normalizeTags([event.detail.value])[0];
       if (!tag) {
         this.setData({ [inputVisibleKey]: false });
         return;
@@ -598,7 +607,10 @@ Page({
         tags: this.data.logTags.slice()
       };
       Object.assign(input, associationInput(calendarEvent));
-      getService().updateLog(item.id, input);
+      const result = getService().updateLog(item.id, input);
+      if (item.type === 'candidate') {
+        writeRecentLogHighlight(this.currentSnapshot, (result && result.log && result.log.id) || item.id);
+      }
       this.closeLogEditor();
       showSaved(item.type === 'candidate' ? '候选已编辑并确认' : '记录已更新');
       this.refresh();

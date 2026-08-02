@@ -95,7 +95,7 @@ function addedCounts(overrides = {}) {
 test('增量导入添加新实体并保留本机运行态', () => {
   const local = database(1000);
   local.timer = {
-    status: 'running', startedAt: 900, endedAt: null, pausedAt: null, pauses: [],
+    status: 'running', startedAt: 900, pausedAt: null, pauses: [],
     draft: { note: '本机计时', tags: [] }
   };
   local.recoveryDraft = { reason: '本机恢复草稿', timer: createIdleTimer(), createdAt: 1000 };
@@ -268,7 +268,7 @@ test('覆盖导入以空聚合开始，重置运行态且不从来源导入资�
   const local = database(1000);
   local.wishes.push(wish('wish_local', '本地愿望', 1000));
   const imported = database(2000);
-  imported.timer = { status: 'running', startedAt: 1900, endedAt: null, pausedAt: null, pauses: [], draft: { note: '来源计时', tags: [] } };
+  imported.timer = { status: 'running', startedAt: 1900, pausedAt: null, pauses: [], draft: { note: '来源计时', tags: [] } };
   imported.recoveryDraft = { reason: '来源草稿', timer: createIdleTimer(), createdAt: 2000 };
   imported.wishes.push(wish('wish_imported', '导入愿望', 2000));
   imported.createdAt = 2000;
@@ -387,7 +387,6 @@ test('USE_IMPORTED 替换为 taskless 计划后修复本机 timer 关联且不�
   local.timer = {
     status: 'running',
     startedAt: NOW - 60_000,
-    endedAt: null,
     pausedAt: null,
     pauses: [],
     draft: {
@@ -467,7 +466,6 @@ test('规则冲突使本机 origin 草稿命中 taskless 实例时清除完整 p
   local.timer = {
     status: 'running',
     startedAt: NOW - 60_000,
-    endedAt: null,
     pausedAt: null,
     pauses: [],
     draft: {

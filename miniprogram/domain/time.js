@@ -32,8 +32,18 @@ function calculateDurationMinutes(startedAt, endedAt, pauses) {
   return toMinutes(Math.max(0, endedAt - startedAt - sumPausedMilliseconds(pauses, endedAt)));
 }
 
+function calculateLogDurationMinutes(startedAt, endedAt, pauses) {
+  if (!isFiniteTimestamp(startedAt) || !isFiniteTimestamp(endedAt) || endedAt < startedAt) {
+    return 0;
+  }
+  if (endedAt === startedAt) {
+    return 1;
+  }
+  return calculateDurationMinutes(startedAt, endedAt, pauses);
+}
+
 function calculateTimerDurationMinutes(startedAt, endedAt, pauses) {
-  if (!isFiniteTimestamp(startedAt) || !isFiniteTimestamp(endedAt) || endedAt <= startedAt) {
+  if (!isFiniteTimestamp(startedAt) || !isFiniteTimestamp(endedAt) || endedAt < startedAt) {
     return 0;
   }
   return toTimerMinutes(Math.max(0, endedAt - startedAt - sumPausedMilliseconds(pauses, endedAt)));
@@ -100,6 +110,7 @@ module.exports = {
   toTimerMinutes,
   sumPausedMilliseconds,
   calculateDurationMinutes,
+  calculateLogDurationMinutes,
   calculateTimerDurationMinutes,
   localDateKey,
   formatDateTime,
