@@ -55,7 +55,7 @@
     "ignoreDevUnusedFiles": false
   },
   "compileType": "miniprogram",
-  "libVersion": "2.19.4",
+  "libVersion": "2.25.4",
   "miniprogramRoot": "miniprogram/",
   "appid": "wxc70057280c56f254",
   "projectname": "wxapp-PlanAndRecord",

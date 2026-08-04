@@ -25,7 +25,6 @@ function defaultStatistics() {
     tags: [],
     projects: [],
     planVariance: { events: [] },
-    overlaps: [],
     weeklyReview: null
   };
 }
@@ -287,6 +286,21 @@ test('用户页用标签投入替代分类管理，并区分派生无标签桶�
     assert.match(wxml, /\{\{item\.displayName\}\}/);
     assert.doesNotMatch(wxml, /分类投入|分类管理|新增分类|归档分类/);
     assert.doesNotMatch(wxss, /\.category-row/);
+  } finally {
+    harness.restore();
+  }
+});
+
+test('用户页不再读取或渲染统计重叠 warning', () => {
+  const harness = createHarness({ keepPageRefresh: true });
+  try {
+    harness.page.refresh();
+
+    assert.equal(Object.hasOwn(harness.page.data, 'overlaps'), false);
+    const wxml = fs.readFileSync(profileWxmlPath, 'utf8');
+    const wxss = fs.readFileSync(profileWxssPath, 'utf8');
+    assert.doesNotMatch(wxml, /overlaps|发现重叠时间|warning-detail/);
+    assert.doesNotMatch(wxss, /\.warning(?:\s|,|\{|\-)/);
   } finally {
     harness.restore();
   }

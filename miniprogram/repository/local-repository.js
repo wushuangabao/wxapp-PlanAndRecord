@@ -2,7 +2,7 @@ const { APP_SCHEMA_VERSION, TIMER_STATUS } = require('../domain/constants');
 const { DomainError, StorageError } = require('../domain/errors');
 const { createInitialDatabase, clone } = require('../domain/entities');
 const { isFiniteTimestamp } = require('../domain/time');
-const { normalizeLegacyTimerState, validateJsonSnapshot } = require('./json-snapshot');
+const { normalizeJsonSnapshot, validateJsonSnapshot } = require('./json-snapshot');
 
 const STORAGE_KEY = 'plan-and-record.database';
 const BACKUP_KEY = 'plan-and-record.database.pre-migration';
@@ -18,8 +18,20 @@ class LocalRepository {
     if (this.cache) {
       return clone(this.cache);
     }
-    const stored = this.storage.get(STORAGE_KEY);
-    if (!stored) {
+    let stored;
+    let hasStoredDatabase;
+    try {
+      if (typeof this.storage.has === 'function') {
+        hasStoredDatabase = this.storage.has(STORAGE_KEY);
+        if (hasStoredDatabase) stored = this.storage.get(STORAGE_KEY);
+      } else {
+        stored = this.storage.get(STORAGE_KEY);
+        hasStoredDatabase = stored !== undefined;
+      }
+    } catch (error) {
+      throw new StorageError('DATA_CORRUPTED', '无法读取本地资料库，已停止写入以保护原始数据');
+    }
+    if (!hasStoredDatabase) {
       const initial = createInitialDatabase(this.now());
       this.write(initial);
       return clone(this.cache);
@@ -33,11 +45,12 @@ class LocalRepository {
     return clone(this.initialize());
   }
 
-  transaction(mutator) {
+  transaction(mutator, options = {}) {
     const next = this.read();
     const result = mutator(next);
-    next.updatedAt = this.now();
-    this.write(next);
+    next.updatedAt = options.updatedAt === undefined ? this.now() : options.updatedAt;
+    validateJsonSnapshot(next);
+    this.writeTransaction(next);
     return {
       result,
       database: clone(this.cache)
@@ -115,19 +128,11 @@ class LocalRepository {
       throw new StorageError('DATA_VERSION_UNSUPPORTED', '数据版本较新，当前版本不会覆盖原有数据');
     }
     if (database.schemaVersion === APP_SCHEMA_VERSION) {
-      const compatibleDatabase = normalizeLegacyTimerState(database);
+      const compatibleDatabase = normalizeJsonSnapshot(database);
       this.validateStoredSnapshot(compatibleDatabase);
       return compatibleDatabase;
     }
-    try {
-      this.storage.set(BACKUP_KEY, clone(database));
-      throw new StorageError('DATA_VERSION_UNSUPPORTED', '当前版本不支持该历史数据迁移，原始数据已保留');
-    } catch (error) {
-      if (error instanceof StorageError) {
-        throw error;
-      }
-      throw new StorageError('MIGRATION_BACKUP_FAILED', '无法创建迁移前快照，已停止写入');
-    }
+    throw new StorageError('DATA_VERSION_UNSUPPORTED', '当前版本不支持该历史数据，原始数据已保留且不会被覆盖');
   }
 
   validateStoredSnapshot(database) {
@@ -195,6 +200,31 @@ class LocalRepository {
       this.cache = clone(next);
     } catch (error) {
       throw new StorageError('WRITE_FAILED', '本地保存失败，已保留当前表单内容，请重试或导出已有数据');
+    }
+  }
+
+  writeTransaction(next) {
+    const oldCache = this.cache === null ? null : clone(this.cache);
+    let oldMain;
+    try {
+      oldMain = this.storage.get(STORAGE_KEY);
+    } catch (error) {
+      throw new StorageError('WRITE_FAILED', '无法读取本地保存状态，未执行事务写入，请重新进入后重试');
+    }
+
+    let mainWriteAttempted = false;
+    try {
+      mainWriteAttempted = true;
+      this.storage.set(STORAGE_KEY, clone(next));
+      this.cache = clone(next);
+    } catch (error) {
+      const restorationComplete = !mainWriteAttempted
+        || this.restoreStoredValue(STORAGE_KEY, oldMain);
+      this.cache = oldCache;
+      const message = restorationComplete
+        ? '本地保存失败，已保留当前数据，请重试或导出已有数据'
+        : '本地保存失败，无法确认原数据是否完整保留，请重新进入核对并尽快导出';
+      throw new StorageError('WRITE_FAILED', message);
     }
   }
 

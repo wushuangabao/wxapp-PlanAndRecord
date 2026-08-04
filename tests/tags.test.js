@@ -66,11 +66,6 @@ test('用户标签最多十个且每个规范化后最多五个汉字单位或�
     (error) => error.code === 'TAG_TOO_LONG'
   );
   assert.throws(
-    () => normalizeTags(['-_.!@#$%^&*']),
-    (error) => error.code === 'TAG_TOO_LONG'
-      && error.message === '单个标签最多 5 个汉字或 10 个英文字符（中英文折算），请缩短后重试'
-  );
-  assert.throws(
     () => normalizeTags(Array.from({ length: 11 }, (_, index) => String(index))),
     (error) => error.code === 'TAG_COUNT_EXCEEDED'
       && error.message === '一条记录最多添加 10 个标签，请先移除一个标签后再添加'

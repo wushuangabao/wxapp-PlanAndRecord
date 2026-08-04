@@ -83,7 +83,7 @@
       <input wx:if="{{tagInputVisible}}" class="tag-input" focus="{{tagInputAutoFocus}}" maxlength="10" placeholder="输入新标签" placeholder-style="color: #737b75;" data-tags-key="tags" data-input-visible-key="tagInputVisible" bindconfirm="addTag" bindblur="onTagInputBlur" />
       <view wx:else class="tag-chip tag-add" role="button" data-tags-key="tags" data-input-visible-key="tagInputVisible" bindtap="openTagInput" aria-label="添加标签">+</view>
     </view>
-    <view class="tag-hint">最多添加 {{maxTagsPerLog}} 个标签；每个最多 5 个汉字或 10 个英文字符（中英文折算）</view>
+    <view class="tag-hint">最多添加 {{maxTagsPerLog}} 个标签</view>
   </view>
 
   <view wx:if="{{showManual}}" class="modal-mask" bindtap="closeManual">
@@ -92,12 +92,16 @@
       <view class="manual-time-row">
         <view class="manual-field-label">开始时间</view>
         <picker class="manual-date-picker" mode="date" value="{{manualStartDate}}" data-key="manualStartDate" bindchange="onManualField"><view class="picker-field">{{manualStartDate}}</view></picker>
-        <picker class="manual-time-picker" mode="time" value="{{manualStartTime}}" data-key="manualStartTime" bindchange="onManualField"><view class="picker-field">{{manualStartTime}}</view></picker>
+        <second-time-picker class="manual-time-picker" value="{{manualStartTime}}" data-key="manualStartTime" data-edited-key="manualStartTimeEdited" bind:change="onManualTimeChange" />
       </view>
       <view class="manual-time-row">
         <view class="manual-field-label">结束时间</view>
         <picker class="manual-date-picker" mode="date" value="{{manualEndDate}}" data-key="manualEndDate" bindchange="onManualField"><view class="picker-field">{{manualEndDate}}</view></picker>
-        <picker class="manual-time-picker" mode="time" value="{{manualEndTime}}" data-key="manualEndTime" bindchange="onManualField"><view class="picker-field">{{manualEndTime}}</view></picker>
+        <second-time-picker class="manual-time-picker" value="{{manualEndTime}}" data-key="manualEndTime" data-edited-key="manualEndTimeEdited" bind:change="onManualTimeChange" />
+      </view>
+      <view class="manual-picker-row">
+        <view class="manual-field-label">暂停时长</view>
+        <pause-duration-input class="manual-picker-control" value="{{manualPausedDurationSeconds}}" bind:change="onManualPausedDurationChange" />
       </view>
       <view class="manual-picker-row">
         <view class="manual-field-label">计划块</view>
@@ -115,7 +119,7 @@
         <input wx:if="{{manualTagInputVisible}}" class="tag-input" focus="{{manualTagInputAutoFocus}}" maxlength="10" placeholder="输入新标签" placeholder-style="color: #737b75;" data-tags-key="manualTags" data-input-visible-key="manualTagInputVisible" bindconfirm="addTag" bindblur="onTagInputBlur" />
         <view wx:else class="tag-chip tag-add" role="button" data-tags-key="manualTags" data-input-visible-key="manualTagInputVisible" bindtap="openTagInput" aria-label="添加标签">+</view>
       </view>
-      <view class="tag-hint">最多添加 {{maxTagsPerLog}} 个标签；每个最多 5 个汉字或 10 个英文字符（中英文折算）</view>
+      <view class="tag-hint">最多添加 {{maxTagsPerLog}} 个标签</view>
     </view>
   </view>
   <view wx:if="{{pendingDeleteLog}}" class="modal-mask" bindtap="cancelDeleteRecentLog">

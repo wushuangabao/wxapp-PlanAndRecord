@@ -21,8 +21,7 @@
   line-height: 1.6;
 }
 
-.risk,
-.warning {
+.risk {
   padding: 26rpx;
   border-radius: 20rpx;
   background: #f5f0e6;
@@ -84,15 +83,6 @@
 .stat-row view:last-child {
   color: #59635d;
   text-align: right;
-}
-
-.warning {
-  margin-top: 22rpx;
-}
-
-.warning-detail {
-  margin-top: 10rpx;
-  font-size: 24rpx;
 }
 
 .primary,

@@ -10,6 +10,10 @@ class MemoryStorageAdapter {
     return this.values.get(key);
   }
 
+  has(key) {
+    return this.values.has(key);
+  }
+
   set(key, value) {
     this.values.set(key, value);
   }
@@ -20,6 +24,10 @@ class MemoryStorageAdapter {
 }
 
 class WxStorageAdapter {
+  has(key) {
+    return wx.getStorageInfoSync().keys.includes(key);
+  }
+
   get(key) {
     return wx.getStorageSync(key);
   }

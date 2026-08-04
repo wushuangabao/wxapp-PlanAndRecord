@@ -1,6 +1,7 @@
 {
   "pages": [
     "pages/timer/index",
+    "pages/data-recovery/index",
     "pages/plans/index",
     "pages/calendar/index",
     "pages/profile/index"

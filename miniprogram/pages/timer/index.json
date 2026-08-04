@@ -3,6 +3,8 @@
   "usingComponents": {
     "delete-icon": "/components/delete-icon/index",
     "edit-icon": "/components/edit-icon/index",
-    "sheet-header": "/components/sheet-header/index"
+    "sheet-header": "/components/sheet-header/index",
+    "second-time-picker": "/components/second-time-picker/index",
+    "pause-duration-input": "/components/pause-duration-input/index"
   }
 }

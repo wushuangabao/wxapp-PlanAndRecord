@@ -7,7 +7,7 @@ const {
   occurrenceKey,
   projectRuleIntersectingRange
 } = require('./recurrence');
-const { calculateDurationMinutes, overlapMinutes } = require('./time');
+const { calculateDurationMinutes } = require('./time');
 
 function hasOwn(object, key) {
   return Object.prototype.hasOwnProperty.call(object, key);
@@ -196,29 +196,6 @@ function calculatePlanVariance(database, logs, rangeStart, rangeEnd) {
   return { events: concreteEvents.concat(recurringEvents), nonPlannedMinutes };
 }
 
-function findOverlaps(logs) {
-  const overlaps = [];
-  const sorted = logs.slice().sort((first, second) => first.startedAt - second.startedAt);
-  for (let firstIndex = 0; firstIndex < sorted.length; firstIndex += 1) {
-    for (let secondIndex = firstIndex + 1; secondIndex < sorted.length; secondIndex += 1) {
-      if (sorted[secondIndex].startedAt >= sorted[firstIndex].endedAt) {
-        break;
-      }
-      const minutes = overlapMinutes(sorted[firstIndex], sorted[secondIndex]);
-      if (minutes > 0) {
-        overlaps.push({
-          firstLogId: sorted[firstIndex].id,
-          secondLogId: sorted[secondIndex].id,
-          firstTitle: sorted[firstIndex].taskNameSnapshot || sorted[firstIndex].note || '未命名记录',
-          secondTitle: sorted[secondIndex].taskNameSnapshot || sorted[secondIndex].note || '未命名记录',
-          minutes
-        });
-      }
-    }
-  }
-  return overlaps;
-}
-
 function buildStatistics(database, options) {
   const { rangeStart, rangeEnd, includeCandidates = false } = options;
   const logs = deriveLogAssociations(
@@ -232,7 +209,6 @@ function buildStatistics(database, options) {
     tags: accumulateTags(logs),
     projects: accumulate(logs, 'projectId', 'projectNameSnapshot', '未归属项目'),
     planVariance: calculatePlanVariance(database, logs, rangeStart, rangeEnd),
-    overlaps: findOverlaps(logs),
     weeklyReview: {
       totalMinutes,
       logCount: logs.length,
@@ -244,6 +220,5 @@ function buildStatistics(database, options) {
 
 module.exports = {
   includedLogs,
-  buildStatistics,
-  findOverlaps
+  buildStatistics
 };

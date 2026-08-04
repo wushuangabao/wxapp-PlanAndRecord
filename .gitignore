@@ -6,3 +6,7 @@
 
 # 本地配置
 .local/
+/project.private.config.json
+
+# 本地隔离工作树
+.worktrees/

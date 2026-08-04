@@ -22,9 +22,24 @@ const {
   projectRuleIntersectingRange
 } = require('../domain/recurrence');
 const { buildStatistics } = require('../domain/statistics');
+const { buildTimeLogOverlapMetadata } = require('../domain/time-log-overlaps');
 const { normalizeTags, tagsEqual } = require('../domain/tags');
-const { calculateLogDurationMinutes, calculateTimerDurationMinutes, isFiniteTimestamp } = require('../domain/time');
-const { requiredTitle, validInterval, validPercentage, validPriority, validRepeatFrequency, validTimeRange } = require('../domain/validation');
+const {
+  calculateLogDurationMinutes,
+  calculateLogTiming,
+  calculatePausedDurationSeconds,
+  inspectTimerAt,
+  moveTimerToRecoveryDraft,
+  isFiniteTimestamp
+} = require('../domain/time');
+const {
+  canonicalizeRepeatPattern,
+  requiredTitle,
+  validLogTiming,
+  validPercentage,
+  validPriority,
+  validTimeRange
+} = require('../domain/validation');
 const {
   ENTITY_COLLECTIONS,
   IMPORT_MODE,
@@ -42,15 +57,12 @@ class ApplicationService {
     this.recoveryTimerSpanMs = Number.isFinite(options.recoveryTimerSpanMs) && options.recoveryTimerSpanMs > 0
       ? options.recoveryTimerSpanMs
       : MAX_TIMER_SPAN_MS;
-    this.minimumRecoveryDurationMinutes = Number.isInteger(options.minimumRecoveryDurationMinutes) && options.minimumRecoveryDurationMinutes > 0
-      ? options.minimumRecoveryDurationMinutes
-      : 1;
     this.pendingJsonImport = null;
   }
 
   initialize() {
     this.repository.initialize();
-    return this.recoverTimer(this.now());
+    return this.recoverTimer();
   }
 
   snapshot() {
@@ -850,13 +862,12 @@ class ApplicationService {
   createTask(input) {
     const now = this.now();
     const title = requiredTitle(input.title, '任务标题');
-    const status = input.status === undefined ? TASK_STATUS.TODO : this.requireTaskStatus(input.status);
     return this.repository.transaction((database) => {
       const association = input.projectId ? this.resolveAssociations(database, input) : {};
       const task = {
         id: createId('task', now),
         title,
-        status,
+        status: TASK_STATUS.TODO,
         projectId: association.projectId || null,
         projectNameSnapshot: association.projectNameSnapshot || null,
         completedAt: null,
@@ -869,6 +880,11 @@ class ApplicationService {
   }
 
   updateTask(id, input) {
+    const inputFields = Object.keys(input);
+    if (inputFields.length === 1 && input.status === TASK_STATUS.COMPLETED) {
+      const task = this.requireEntity(this.snapshot().tasks, id, '任务');
+      if (task.status === TASK_STATUS.COMPLETED) return task;
+    }
     const now = this.now();
     return this.repository.transaction((database) => {
       const task = this.requireEntity(database.tasks, id, '任务');
@@ -881,8 +897,13 @@ class ApplicationService {
         task.projectNameSnapshot = association.projectNameSnapshot;
       }
       if (input.status !== undefined) {
-        task.status = this.requireTaskStatus(input.status);
-        task.completedAt = task.status === TASK_STATUS.COMPLETED ? now : null;
+        const nextStatus = this.requireTaskStatus(input.status);
+        if (nextStatus === TASK_STATUS.COMPLETED && task.status !== TASK_STATUS.COMPLETED) {
+          task.completedAt = now;
+        } else if (nextStatus === TASK_STATUS.TODO) {
+          task.completedAt = null;
+        }
+        task.status = nextStatus;
       }
       task.updatedAt = now;
       return task;
@@ -1049,8 +1070,7 @@ class ApplicationService {
     const startedAt = Number(input.startedAt);
     const endedAt = Number(input.endedAt);
     validTimeRange(startedAt, endedAt, '固定日程时间');
-    const frequency = validRepeatFrequency(input.frequency);
-    const interval = validInterval(input.interval);
+    const pattern = canonicalizeRepeatPattern(input);
     return this.repository.transaction((database) => {
       const association = this.resolvePlanTaskAssociation(database, input.taskId);
       const rule = createRepeatRule({
@@ -1060,10 +1080,7 @@ class ApplicationService {
         startedAt,
         endedAt,
         priority: validPriority(input.priority),
-        frequency,
-        interval,
-        weekdays: (input.weekdays || []).map(Number),
-        monthDay: input.monthDay ? Number(input.monthDay) : null
+        ...pattern
       }, now);
       const event = createCalendarEvent({
         ...association,
@@ -1097,6 +1114,12 @@ class ApplicationService {
       validTimeRange(startedAt, endedAt, '重复规则时间');
       const replaceActiveRevision = occurrenceStart === activeRevision.effectiveFrom;
       const nextRevision = Math.max(...rule.revisions.map((item) => item.revision)) + 1;
+      const pattern = canonicalizeRepeatPattern({
+        frequency: input.frequency === undefined ? activeRevision.frequency : input.frequency,
+        interval: input.interval === undefined ? activeRevision.interval : input.interval,
+        weekdays: input.weekdays === undefined ? activeRevision.weekdays : input.weekdays,
+        monthDay: input.monthDay === undefined ? activeRevision.monthDay : input.monthDay
+      });
       if (replaceActiveRevision) {
         rule.revisions = rule.revisions.filter((item) => item.id !== activeRevision.id);
       } else {
@@ -1112,10 +1135,7 @@ class ApplicationService {
         revision: nextRevision,
         effectiveFrom: occurrenceStart,
         effectiveUntil: null,
-        frequency: input.frequency === undefined ? activeRevision.frequency : validRepeatFrequency(input.frequency),
-        interval: input.interval === undefined ? activeRevision.interval : validInterval(input.interval),
-        weekdays: input.weekdays === undefined ? activeRevision.weekdays : input.weekdays.map(Number),
-        monthDay: input.monthDay === undefined ? activeRevision.monthDay : Number(input.monthDay),
+        ...pattern,
         startedAt,
         endedAt,
         priority: input.priority === undefined ? activeRevision.priority : validPriority(input.priority)
@@ -1171,6 +1191,16 @@ class ApplicationService {
       if (!occurrence) {
         throw new DomainError('OCCURRENCE_NOT_FOUND', '找不到需要修改的重复实例');
       }
+      const occurrenceLogicalKey = occurrenceKey(rule.id, occurrence.occurrenceStart);
+      if (database.timeLogs.some((log) => (
+        log.originRuleId === rule.id
+        && (
+          log.originOccurrenceId === occurrence.originOccurrenceId
+          || logicalOccurrenceKey(log.originRuleId, log.originOccurrenceId) === occurrenceLogicalKey
+        )
+      ))) {
+        throw new DomainError('OCCURRENCE_ALREADY_CONFIRMED', '该重复实例已确认，不能重复生成记录');
+      }
       const taskAssociation = this.resolvePlanTaskAssociation(
         database,
         input.taskId === undefined ? occurrence.taskId : input.taskId
@@ -1186,7 +1216,33 @@ class ApplicationService {
         ...taskAssociation
       }, now);
       database.occurrenceExceptions.push(exception);
-      return exception;
+      const overriddenOccurrence = projectRule(
+        rule,
+        occurrenceStart,
+        occurrenceStart,
+        database.occurrenceExceptions
+      ).find((item) => item.occurrenceStart === occurrenceStart);
+      if (!overriddenOccurrence) {
+        throw new DomainError('OCCURRENCE_NOT_FOUND', '单次修改后无法重新定位重复实例');
+      }
+      const association = this.resolveNewRecordAssociations(database, {
+        originRuleId: rule.id,
+        originOccurrenceId: overriddenOccurrence.originOccurrenceId
+      });
+      const log = createTimeLog({
+        ...association,
+        startedAt: overriddenOccurrence.startedAt,
+        endedAt: overriddenOccurrence.endedAt,
+        note: overriddenOccurrence.title,
+        status: LOG_STATUS.CONFIRMED,
+        source: LOG_SOURCE.RULE,
+        originRuleId: rule.id,
+        originOccurrenceId: overriddenOccurrence.originOccurrenceId,
+        originRuleSummarySnapshot: rule.title,
+        tags: []
+      }, now);
+      database.timeLogs.push(log);
+      return { exception, log };
     }).result;
   }
 
@@ -1246,9 +1302,19 @@ class ApplicationService {
     const eventEntries = database.calendarEvents
       .filter((event) => intervalIntersectsRange(event, rangeStart, rangeEnd))
       .map((event) => ({ ...event, type: 'plan', virtual: false }));
-    const logEntries = database.timeLogs
-      .filter((log) => intervalIntersectsRange(log, rangeStart, rangeEnd))
-      .map((log) => ({ ...log, type: log.status, title: log.taskNameSnapshot || log.note || '时间记录', virtual: false }));
+    const rangedLogs = database.timeLogs
+      .filter((log) => intervalIntersectsRange(log, rangeStart, rangeEnd));
+    const overlapMetadata = buildTimeLogOverlapMetadata(rangedLogs);
+    const logEntries = rangedLogs.map((log) => {
+      const overlapMeta = overlapMetadata.get(log.id);
+      return {
+        ...log,
+        type: log.status,
+        title: log.taskNameSnapshot || log.note || '时间记录',
+        virtual: false,
+        ...(overlapMeta ? { overlapMeta } : {})
+      };
+    });
     const virtualEntries = database.repeatRules
       .flatMap((rule) => projectRuleIntersectingRange(
         rule,
@@ -1327,19 +1393,17 @@ class ApplicationService {
         ...association,
         startedAt,
         endedAt,
-        durationMinutes: calculateLogDurationMinutes(startedAt, endedAt, []),
+        pausedDurationSeconds: input.pausedDurationSeconds === undefined
+          ? 0
+          : input.pausedDurationSeconds,
         note: input.note || '',
         tags: input.tags,
         status: LOG_STATUS.CONFIRMED,
         source: LOG_SOURCE.MANUAL
       }, now);
       database.timeLogs.push(log);
-      return { log, hasOverlap: this.hasOverlap(database.timeLogs, log) };
+      return { log };
     }).result;
-  }
-
-  hasOverlap(logs, target) {
-    return logs.some((item) => item.id !== target.id && item.startedAt < target.endedAt && target.startedAt < item.endedAt);
   }
 
   updateLog(id, input) {
@@ -1349,18 +1413,23 @@ class ApplicationService {
       const startedAt = input.startedAt === undefined ? log.startedAt : Number(input.startedAt);
       const endedAt = input.endedAt === undefined ? log.endedAt : Number(input.endedAt);
       validTimeRange(startedAt, endedAt, '记录时间', { allowSameTime: true });
+      const pausedDurationSeconds = input.pausedDurationSeconds === undefined
+        ? log.pausedDurationSeconds
+        : input.pausedDurationSeconds;
+      const timing = validLogTiming(startedAt, endedAt, pausedDurationSeconds);
       const association = this.resolveRecordUpdateAssociations(database, log, input);
       const tags = this.resolveUpdatedTags(log.tags, input.tags);
       Object.assign(log, association, {
         startedAt,
         endedAt,
-        durationMinutes: calculateLogDurationMinutes(startedAt, endedAt, []),
+        pausedDurationSeconds,
+        durationMinutes: timing.durationMinutes,
         note: input.note === undefined ? log.note : input.note,
         tags,
         status: log.status === LOG_STATUS.CANDIDATE ? LOG_STATUS.CONFIRMED : log.status,
         updatedAt: now
       });
-      return { log, hasOverlap: this.hasOverlap(database.timeLogs, log) };
+      return { log };
     }).result;
   }
 
@@ -1397,11 +1466,11 @@ class ApplicationService {
   startTimer(input = {}) {
     const now = this.now();
     return this.repository.transaction((database) => {
-      if (database.timer.status !== TIMER_STATUS.IDLE) {
-        throw new DomainError('TIMER_ALREADY_ACTIVE', '已有进行中的计时，请先结束当前计时');
-      }
       if (database.recoveryDraft) {
         throw new DomainError('RECOVERY_DRAFT_PENDING', '有一条待修正的恢复草稿，请先处理');
+      }
+      if (database.timer.status !== TIMER_STATUS.IDLE) {
+        throw new DomainError('TIMER_ALREADY_ACTIVE', '已有进行中的计时，请先结束当前计时');
       }
       const association = this.resolveNewRecordAssociations(database, input);
       database.timer = {
@@ -1437,42 +1506,64 @@ class ApplicationService {
   }
 
   pauseTimer() {
-    const now = this.now();
+    const capturedNow = this.now();
     return this.repository.transaction((database) => {
       if (database.timer.status !== TIMER_STATUS.RUNNING) {
         throw new DomainError('TIMER_NOT_RUNNING', '只有运行中的计时可以暂停');
       }
+      const inspection = inspectTimerAt(database.timer, capturedNow);
+      if (!inspection.valid) {
+        return moveTimerToRecoveryDraft(database, database.timer, capturedNow, inspection.reason);
+      }
       database.timer.status = TIMER_STATUS.PAUSED;
-      database.timer.pausedAt = now;
+      database.timer.pausedAt = capturedNow;
       return database.timer;
-    }).result;
+    }, { updatedAt: capturedNow }).result;
   }
 
   resumeTimer() {
-    const now = this.now();
+    const capturedNow = this.now();
     return this.repository.transaction((database) => {
-      if (database.timer.status !== TIMER_STATUS.PAUSED || !isFiniteTimestamp(database.timer.pausedAt)) {
+      if (database.timer.status !== TIMER_STATUS.PAUSED) {
         throw new DomainError('TIMER_NOT_PAUSED', '没有可恢复的暂停计时');
       }
-      database.timer.pauses.push({ startedAt: database.timer.pausedAt, endedAt: now });
+      const inspection = inspectTimerAt(database.timer, capturedNow);
+      if (!inspection.valid) {
+        return moveTimerToRecoveryDraft(database, database.timer, capturedNow, inspection.reason);
+      }
+      database.timer.pauses.push({ startedAt: database.timer.pausedAt, endedAt: capturedNow });
       database.timer.status = TIMER_STATUS.RUNNING;
       database.timer.pausedAt = null;
       return database.timer;
-    }).result;
+    }, { updatedAt: capturedNow }).result;
   }
 
   finishTimer(input = {}) {
-    const now = this.now();
+    const capturedNow = this.now();
     return this.repository.transaction((database) => {
       const timer = database.timer;
       if (timer.status === TIMER_STATUS.IDLE) {
         throw new DomainError('TIMER_NOT_ACTIVE', '没有可结束的计时');
       }
+      const inspection = inspectTimerAt(timer, capturedNow);
+      if (!inspection.valid) {
+        return moveTimerToRecoveryDraft(database, timer, capturedNow, inspection.reason);
+      }
+      const pauses = timer.status === TIMER_STATUS.PAUSED
+        ? timer.pauses.concat({ startedAt: timer.pausedAt, endedAt: capturedNow })
+        : timer.pauses;
+      const pausedDurationSeconds = calculatePausedDurationSeconds(pauses);
+      const timing = calculateLogTiming(timer.startedAt, capturedNow, pausedDurationSeconds);
+      if (timing.intervalTotalSeconds <= pausedDurationSeconds) {
+        return moveTimerToRecoveryDraft(
+          database,
+          timer,
+          capturedNow,
+          '暂停时长不小于计时区间，请手工修正并确认记录'
+        );
+      }
       const association = this.resolveRecordUpdateAssociations(database, timer.draft, input);
       const tags = this.resolveUpdatedTags(timer.draft.tags, input.tags);
-      const pauses = timer.status === TIMER_STATUS.PAUSED
-        ? timer.pauses.concat({ startedAt: timer.pausedAt, endedAt: now })
-        : timer.pauses;
       const draft = {
         ...timer.draft,
         ...association,
@@ -1482,15 +1573,15 @@ class ApplicationService {
       const log = createTimeLog({
         ...draft,
         startedAt: timer.startedAt,
-        endedAt: now,
-        durationMinutes: calculateTimerDurationMinutes(timer.startedAt, now, pauses),
+        endedAt: capturedNow,
+        pausedDurationSeconds,
         status: LOG_STATUS.CONFIRMED,
         source: LOG_SOURCE.TIMER
-      }, now, { enforceTagLimits: false });
+      }, capturedNow, { enforceTagLimits: false });
       database.timeLogs.push(log);
       database.timer = createIdleTimer();
-      return { log, hasOverlap: this.hasOverlap(database.timeLogs, log) };
-    }).result;
+      return { log };
+    }, { updatedAt: capturedNow }).result;
   }
 
   createRecoveryConfirmedLog(input) {
@@ -1507,19 +1598,18 @@ class ApplicationService {
       const association = this.resolveRecordUpdateAssociations(database, originalDraft, input);
       const tags = this.resolveUpdatedTags(originalDraft.tags, input.tags);
       const candidatePreview = recoveryDraft.candidatePreview;
-      const keepsCandidatePreviewDuration = Boolean(candidatePreview
+      const keepsCandidatePreviewTiming = Boolean(candidatePreview
         && candidatePreview.source === LOG_SOURCE.TIMER
         && candidatePreview.startedAt === startedAt
-        && candidatePreview.endedAt === endedAt
-        && Number.isInteger(candidatePreview.durationMinutes)
-        && candidatePreview.durationMinutes > 0);
+        && candidatePreview.endedAt === endedAt);
+      const pausedDurationSeconds = input.pausedDurationSeconds === undefined
+        ? (keepsCandidatePreviewTiming ? (candidatePreview.pausedDurationSeconds || 0) : 0)
+        : input.pausedDurationSeconds;
       const log = createTimeLog({
         ...association,
         startedAt,
         endedAt,
-        durationMinutes: keepsCandidatePreviewDuration
-          ? candidatePreview.durationMinutes
-          : calculateLogDurationMinutes(startedAt, endedAt, []),
+        pausedDurationSeconds,
         note: input.note === undefined ? (originalDraft.note || '') : input.note,
         tags,
         status: LOG_STATUS.CONFIRMED,
@@ -1551,8 +1641,8 @@ class ApplicationService {
     }
 
     const now = this.now();
-    this.repository.transaction((database) => {
-      database.timer = {
+    return this.repository.transaction((database) => {
+      const timer = {
         ...createIdleTimer(),
         status: TIMER_STATUS.RUNNING,
         startedAt: now - 10 * 60 * 1_000,
@@ -1562,47 +1652,36 @@ class ApplicationService {
           tags: []
         }
       };
-    });
-    return this.recoverTimer(now);
+      database.timer = createIdleTimer();
+      database.recoveryDraft = {
+        reason: '时间戳无法还原，请手工修正并确认记录',
+        timer,
+        createdAt: now
+      };
+      return { state: 'draft', recoveryDraft: database.recoveryDraft };
+    }).result;
   }
 
-  recoverTimer(now) {
+  recoverTimer() {
+    const capturedNow = this.now();
     const currentTimer = this.snapshot().timer;
     if (!currentTimer || currentTimer.status === TIMER_STATUS.IDLE) {
       return { state: 'unchanged', timer: currentTimer };
     }
     return this.repository.transaction((database) => {
       const timer = database.timer;
-      timer.draft = {
-        ...timer.draft,
-        ...this.resolveRecordUpdateAssociations(database, timer.draft, {})
-      };
-      const pausesAreValid = Array.isArray(timer.pauses) && timer.pauses.every((pause, index, pauses) => {
-        const precedingEnd = index === 0 ? timer.startedAt : pauses[index - 1].endedAt;
-        return isFiniteTimestamp(pause.startedAt) && isFiniteTimestamp(pause.endedAt) && pause.endedAt >= pause.startedAt && pause.startedAt >= precedingEnd && pause.endedAt <= now;
-      });
-      const basicValid = isFiniteTimestamp(timer.startedAt) && now >= timer.startedAt;
-      const precedingPauseEnd = pausesAreValid && timer.pauses.length
-        ? timer.pauses[timer.pauses.length - 1].endedAt
-        : timer.startedAt;
-      const statusFieldsValid = timer.status === TIMER_STATUS.RUNNING
-        ? timer.pausedAt === null
-        : timer.status === TIMER_STATUS.PAUSED;
-      const activePauseValid = timer.status === TIMER_STATUS.RUNNING
-        ? timer.pausedAt === null
-        : timer.status === TIMER_STATUS.PAUSED
-          && isFiniteTimestamp(timer.pausedAt)
-          && timer.pausedAt >= precedingPauseEnd
-          && timer.pausedAt <= now;
-      if (basicValid && pausesAreValid && statusFieldsValid && activePauseValid && now - timer.startedAt <= this.recoveryTimerSpanMs) {
+      const inspection = inspectTimerAt(timer, capturedNow);
+      if (!inspection.valid) {
+        return moveTimerToRecoveryDraft(database, timer, capturedNow, inspection.reason);
+      }
+      if (capturedNow - timer.startedAt <= this.recoveryTimerSpanMs) {
+        timer.draft = {
+          ...timer.draft,
+          ...this.resolveRecordUpdateAssociations(database, timer.draft, {})
+        };
         return { state: 'resumed', timer };
       }
-      database.timer = createIdleTimer();
-      if (!basicValid || !pausesAreValid || !statusFieldsValid || !activePauseValid) {
-        database.recoveryDraft = { reason: '时间戳无法还原，请手工修正并确认记录', timer, createdAt: now };
-        return { state: 'draft', recoveryDraft: database.recoveryDraft };
-      }
-      const endedAt = Math.min(now, timer.startedAt + this.recoveryTimerSpanMs);
+      const endedAt = timer.startedAt + this.recoveryTimerSpanMs;
       const pauses = timer.pauses.filter((pause) => pause.startedAt < endedAt).map((pause) => ({
         startedAt: pause.startedAt,
         endedAt: Math.min(pause.endedAt, endedAt)
@@ -1610,24 +1689,31 @@ class ApplicationService {
       if (timer.status === TIMER_STATUS.PAUSED && timer.pausedAt < endedAt) {
         pauses.push({ startedAt: timer.pausedAt, endedAt });
       }
-      const durationMinutes = Math.max(
-        1,
-        this.minimumRecoveryDurationMinutes,
-        calculateTimerDurationMinutes(timer.startedAt, endedAt, pauses)
-      );
-      database.recoveryDraft = {
-        reason: '计时超过恢复时间窗口，系统已生成候选，请核实后确认记录',
+      const pausedDurationSeconds = calculatePausedDurationSeconds(pauses);
+      const timing = calculateLogTiming(timer.startedAt, endedAt, pausedDurationSeconds);
+      if (timing.intervalTotalSeconds <= pausedDurationSeconds) {
+        return moveTimerToRecoveryDraft(
+          database,
+          timer,
+          capturedNow,
+          '暂停时长不小于计时区间，请手工修正并确认记录'
+        );
+      }
+      const result = moveTimerToRecoveryDraft(
+        database,
         timer,
-        candidatePreview: {
-          startedAt: timer.startedAt,
-          endedAt,
-          durationMinutes,
-          source: LOG_SOURCE.TIMER
-        },
-        createdAt: now
+        capturedNow,
+        '计时超过恢复时间窗口，系统已生成候选，请核实后确认记录'
+      );
+      result.recoveryDraft.candidatePreview = {
+        startedAt: timer.startedAt,
+        endedAt,
+        pausedDurationSeconds,
+        durationMinutes: timing.durationMinutes,
+        source: LOG_SOURCE.TIMER
       };
-      return { state: 'draft', recoveryDraft: database.recoveryDraft };
-    }).result;
+      return result;
+    }, { updatedAt: capturedNow }).result;
   }
 
   statistics(options) {

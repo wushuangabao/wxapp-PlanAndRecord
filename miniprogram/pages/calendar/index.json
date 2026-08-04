@@ -1,6 +1,8 @@
 {
   "navigationBarTitleText": "日历",
   "usingComponents": {
-    "sheet-header": "/components/sheet-header/index"
+    "sheet-header": "/components/sheet-header/index",
+    "second-time-picker": "/components/second-time-picker/index",
+    "pause-duration-input": "/components/pause-duration-input/index"
   }
 }

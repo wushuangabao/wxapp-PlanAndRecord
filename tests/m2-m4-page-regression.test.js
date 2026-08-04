@@ -4,7 +4,9 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const calendarWxmlPath = path.join(__dirname, '../miniprogram/pages/calendar/index.wxml');
+const calendarWxssPath = path.join(__dirname, '../miniprogram/pages/calendar/index.wxss');
 const calendarScriptPath = path.join(__dirname, '../miniprogram/pages/calendar/index.js');
+const calendarJsonPath = path.join(__dirname, '../miniprogram/pages/calendar/index.json');
 const calendarPagePath = require.resolve('../miniprogram/pages/calendar/index.js');
 const plansWxmlPath = path.join(__dirname, '../miniprogram/pages/plans/index.wxml');
 const plansWxssPath = path.join(__dirname, '../miniprogram/pages/plans/index.wxss');
@@ -74,10 +76,22 @@ test('M3：TODO 和项目的右上角新建入口为无底色深灰加号，页�
 
 test('M4：日历提供计划块编辑删除入口，重复实例编辑弹层只渲染一次', () => {
   const wxml = fs.readFileSync(calendarWxmlPath, 'utf8');
+  const script = fs.readFileSync(calendarScriptPath, 'utf8');
+  const wxss = fs.readFileSync(calendarWxssPath, 'utf8');
   assert.match(wxml, /openPlanEditor/);
-  assert.match(wxml, /item\.type === 'plan' && item\.canEditPlan/);
-  assert.match(wxml, /\(item\.type === 'plan' \|\| item\.virtual\) && item\.canAssociate/);
-  assert.match(wxml, /deletePlan/);
+  assert.match(wxml, /item\.type === 'plan' && !item\.virtual && item\.canEditPlan/);
+  assert.match(wxml, /item\.type === 'plan' && item\.canAssociate/);
+  assert.match(wxml, /item\.type === 'plan' && !item\.virtual[^>]*bindtap="deletePlan"/);
+  assert.match(wxml, /item\.virtual[^>]*bindtap="confirmItem"/);
+  assert.match(wxml, /item\.virtual[^>]*bindtap="openOccurrenceEditor"/);
+  assert.match(wxml, /item\.virtual[^>]*bindtap="skipVirtualOccurrence"/);
+  assert.match(wxml, /item\.type === 'candidate' && !item\.virtual[^>]*bindtap="confirmItem"/);
+  assert.match(wxml, /item\.type === 'candidate' && !item\.virtual[^>]*bindtap="openLogEditor"/);
+  assert.match(wxml, /item\.type === 'candidate' && !item\.virtual[^>]*bindtap="discardCandidate"/);
+  assert.match(script, /item\.virtual\s*\?\s*'重复计划·待确认'/);
+  assert.match(script, /item\.type === 'candidate'\s*\?\s*'候选记录'/);
+  assert.doesNotMatch(script, /virtual[^\n]*candidate|candidate[^\n]*virtual/);
+  assert.match(wxss, /\.timeline-item\.plan\s*\{[^}]*#7b918b/s);
   assert.match(wxml, /savePlanEditor/);
   assert.equal((wxml.match(/修改重复实例/g) || []).length, 1);
 });
@@ -100,8 +114,81 @@ test('日历计划块只选择必选任务，日志编辑只选择标签和计�
   assert.match(script, /calendarEventId: item\.id/);
   const page = loadCalendarPage();
   assert.equal(page.data.maxTagsPerLog, 10);
-  assert.match(wxml, /最多添加 \{\{maxTagsPerLog\}\} 个标签；每个最多 5 个汉字或 10 个英文字符（中英文折算）/);
   assert.match(wxml, /class="tag-chip tag-input" focus maxlength="10"/);
+});
+
+test('日历日志编辑器分别提供开始结束日期、秒级时间和暂停时长', () => {
+  const wxml = fs.readFileSync(calendarWxmlPath, 'utf8');
+  const config = JSON.parse(fs.readFileSync(calendarJsonPath, 'utf8'));
+  const logMarkup = wxml.slice(wxml.indexOf('wx:if="{{logEditor}}"'));
+
+  assert.equal((logMarkup.match(/mode="date"/g) || []).length, 2);
+  assert.equal((logMarkup.match(/<second-time-picker\b/g) || []).length, 2);
+  assert.equal((logMarkup.match(/<pause-duration-input\b/g) || []).length, 1);
+  assert.doesNotMatch(logMarkup, /mode="time"/);
+  assert.equal(config.usingComponents['second-time-picker'], '/components/second-time-picker/index');
+  assert.equal(config.usingComponents['pause-duration-input'], '/components/pause-duration-input/index');
+});
+
+test('日历日志只改备注时保留跨日首尾毫秒与暂停秒', () => {
+  const originalGetApp = global.getApp;
+  const originalWx = global.wx;
+  let received;
+  const startedAt = new Date(2026, 7, 4, 23, 59, 58, 987).getTime();
+  const endedAt = new Date(2026, 7, 5, 0, 0, 2, 654).getTime();
+  const snapshot = { projects: [], tasks: [], calendarEvents: [] };
+  const service = {
+    snapshot() { return snapshot; },
+    planAssociationCandidates() { return []; },
+    updateLog(id, input) {
+      received = { id, input };
+      return { log: { id } };
+    }
+  };
+  global.getApp = () => ({ globalData: { bootstrap: { applicationService: service } } });
+  global.wx = { showToast() {} };
+  try {
+    const page = loadCalendarPage();
+    page.currentSnapshot = snapshot;
+    page.currentService = service;
+    page.refresh = () => {};
+    page.openLogEditor({ currentTarget: { dataset: { item: {
+      id: 'log_cross_day',
+      type: 'confirmed',
+      startedAt,
+      endedAt,
+      pausedDurationSeconds: 1,
+      calendarEventId: null,
+      note: '旧备注',
+      tags: []
+    } } } });
+    assert.equal(page.data.logStartDate, '2026-08-04');
+    assert.equal(page.data.logEndDate, '2026-08-05');
+    assert.equal(page.data.logStartTimeValue, '23:59:58');
+    assert.equal(page.data.logEndTimeValue, '00:00:02');
+    page.data.logNote = '只改备注';
+
+    page.saveLogEditor();
+
+    assert.equal(received.input.startedAt, startedAt);
+    assert.equal(received.input.endedAt, endedAt);
+    assert.equal(received.input.pausedDurationSeconds, 1);
+  } finally {
+    global.getApp = originalGetApp;
+    global.wx = originalWx;
+  }
+});
+
+test('日历页：持久化标题输入以 25 个 Unicode 码点截断', () => {
+  const page = loadCalendarPage();
+  const emoji = '🙂';
+  page.onTitleField({ currentTarget: { dataset: { key: 'title' } }, detail: { value: emoji.repeat(26) } });
+  assert.equal(page.data.title, emoji.repeat(25));
+
+  const wxml = fs.readFileSync(calendarWxmlPath, 'utf8');
+  for (const key of ['title', 'editorTitle', 'planTitle']) {
+    assert.match(wxml, new RegExp(`maxlength="-1"[^>]*data-key="${key}"[^>]*bindinput="onTitleField"`));
+  }
 });
 
 test('日历创建计划只向服务提交任务关联', () => {
@@ -172,6 +259,70 @@ test('日历按任务当前 projectId 派生只读项目标题', () => {
   }
 });
 
+test('日历只在重叠日志卡片显示低干扰的实际与候选计数', () => {
+  const originalGetApp = global.getApp;
+  const snapshot = { projects: [], tasks: [], calendarEvents: [] };
+  const timeline = [{
+    id: 'confirmed_overlap',
+    type: 'confirmed',
+    title: '实际记录',
+    startedAt: 1_700_000_000_000,
+    endedAt: 1_700_000_060_000,
+    overlapMeta: { totalCount: 3, confirmedCount: 2, candidateCount: 1 }
+  }, {
+    id: 'candidate_overlap',
+    type: 'candidate',
+    title: '候选记录',
+    startedAt: 1_700_000_010_000,
+    endedAt: 1_700_000_050_000,
+    overlapMeta: { totalCount: 1, confirmedCount: 1, candidateCount: 0 }
+  }, {
+    id: 'plain_log',
+    type: 'confirmed',
+    title: '普通记录',
+    startedAt: 1_700_000_100_000,
+    endedAt: 1_700_000_160_000
+  }, {
+    id: 'virtual_plan',
+    type: 'plan',
+    virtual: true,
+    title: '重复计划',
+    startedAt: 1_700_000_100_000,
+    endedAt: 1_700_000_160_000
+  }];
+  global.getApp = () => ({
+    globalData: { bootstrap: { applicationService: {
+      snapshot() { return snapshot; },
+      timeline() { return timeline; }
+    } } }
+  });
+  try {
+    const page = loadCalendarPage();
+    page.refresh();
+    const itemById = new Map(page.data.timeline.map((item) => [item.id, item]));
+
+    assert.equal(
+      itemById.get('confirmed_overlap').displayOverlap,
+      '与其他记录重叠：实际 2 条、候选 1 条'
+    );
+    assert.equal(
+      itemById.get('candidate_overlap').displayOverlap,
+      '与其他记录重叠：实际 1 条'
+    );
+    assert.equal(itemById.get('plain_log').displayOverlap, '');
+    assert.equal(itemById.get('virtual_plan').displayOverlap, '');
+
+    const wxml = fs.readFileSync(calendarWxmlPath, 'utf8');
+    const wxss = fs.readFileSync(calendarWxssPath, 'utf8');
+    assert.match(wxml, /item\.overlapMeta[^}]*is-overlapping/);
+    assert.match(wxml, /wx:if="\{\{item\.displayOverlap\}\}"[^>]*overlap-note/);
+    assert.match(wxss, /\.timeline-item\.is-overlapping\s*\{[^}]*background:\s*#f8f5ee;[^}]*box-shadow:/s);
+    assert.doesNotMatch(wxss, /\.timeline-item\.is-overlapping\s*\{[^}]*border-left:/s);
+  } finally {
+    global.getApp = originalGetApp;
+  }
+});
+
 test('尚未结束的失效任务计划可补绑任务，历史失效计划保持只读', () => {
   const originalGetApp = global.getApp;
   const originalWx = global.wx;
@@ -209,7 +360,7 @@ test('尚未结束的失效任务计划可补绑任务，历史失效计划保�
     endedAt: now - 60 * 60 * 1_000
   }, {
     id: 'rule_taskless:1:123',
-    type: 'candidate',
+    type: 'plan',
     virtual: true,
     taskId: null,
     title: '失效虚拟计划',

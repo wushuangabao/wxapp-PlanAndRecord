@@ -6,6 +6,7 @@ const path = require('node:path');
 const { LOG_SOURCE, LOG_STATUS } = require('../miniprogram/domain/constants');
 const {
   createCalendarEvent,
+  createIdleTimer,
   createInitialDatabase,
   createRepeatRule,
   createTimeLog
@@ -120,6 +121,18 @@ function recurringDatabase(now = 1_700_000_000_000) {
 
 test('未物化的重复规则实例只作为计划，不计入候选实际', () => {
   const { database, startedAt } = recurringDatabase();
+  database.recoveryDraft = {
+    reason: '待审核恢复预览',
+    timer: createIdleTimer(),
+    candidatePreview: {
+      startedAt,
+      endedAt: startedAt + HOUR_MS,
+      pausedDurationSeconds: 0,
+      durationMinutes: 60,
+      source: LOG_SOURCE.TIMER
+    },
+    createdAt: startedAt
+  };
   const options = {
     rangeStart: startedAt,
     rangeEnd: startedAt + 2 * DAY_MS
@@ -130,7 +143,14 @@ test('未物化的重复规则实例只作为计划，不计入候选实际', ()
     ...options,
     includeCandidates: true
   });
+  const virtualPlans = projectRule(
+    database.repeatRules[0],
+    startedAt,
+    startedAt + 2 * DAY_MS,
+    database.occurrenceExceptions
+  );
 
+  assert.equal(virtualPlans.every((item) => item.type === 'plan' && item.virtual), true);
   assert.equal(confirmedOnly.totalMinutes, 0);
   assert.equal(withCandidates.totalMinutes, 0);
   assert.equal(withCandidates.weeklyReview.logCount, 0);
@@ -188,6 +208,41 @@ test('标签投入按日志标签分别累计，同一日志同一标签只计�
       { tag: '无标签', name: '无标签', isUntagged: false, durationMinutes: 10, count: 1 }
     ]
   );
+});
+
+test('重叠日志仍逐条累加全部统计值，但统计结果不再暴露 overlaps', () => {
+  const startedAt = localTimestamp(2026, 7, 8, 9);
+  const database = createInitialDatabase(startedAt - DAY_MS);
+  database.timeLogs.push(
+    createTimeLog({
+      startedAt,
+      endedAt: startedAt + 40 * MINUTE_MS,
+      durationMinutes: 40,
+      status: LOG_STATUS.CONFIRMED,
+      source: LOG_SOURCE.MANUAL,
+      tags: ['工作']
+    }, startedAt),
+    createTimeLog({
+      startedAt: startedAt + 20 * MINUTE_MS,
+      endedAt: startedAt + 50 * MINUTE_MS,
+      durationMinutes: 30,
+      status: LOG_STATUS.CONFIRMED,
+      source: LOG_SOURCE.MANUAL,
+      tags: ['工作']
+    }, startedAt + MINUTE_MS)
+  );
+
+  const statistics = buildStatistics(database, {
+    rangeStart: startedAt - 1,
+    rangeEnd: startedAt + HOUR_MS
+  });
+
+  assert.equal(statistics.totalMinutes, 70);
+  assert.equal(statistics.tags[0].durationMinutes, 70);
+  assert.equal(statistics.weeklyReview.totalMinutes, 70);
+  assert.equal(statistics.weeklyReview.logCount, 2);
+  assert.equal(statistics.weeklyReview.nonPlannedMinutes, 70);
+  assert.equal(Object.hasOwn(statistics, 'overlaps'), false);
 });
 
 test('已物化日志只计一次，其他重复计划不会虚增实际投入', () => {
@@ -355,7 +410,7 @@ test('统计按单次改期后的最终区间纳入或排除重复计划，但�
   );
 });
 
-test('已物化计划块按原始发生时间抑制单次改期后的虚拟候选', () => {
+test('已物化计划块按原始发生时间抑制单次改期后的虚拟计划', () => {
   const { database, rule, startedAt } = recurringDatabase();
   database.occurrenceExceptions.push(createOccurrenceException(
     rule.id,
@@ -596,7 +651,7 @@ test('重复计划实例的项目归属由规则修订任务派生且不计为�
   assert.equal(statistics.planVariance.events[0].actualMinutes, 60);
 });
 
-test('没有有效任务的旧重复规则不再投影新的候选计划实例', () => {
+test('没有有效任务的旧重复规则不再投影新的虚拟计划实例', () => {
   const startedAt = localTimestamp(2026, 7, 8, 9);
   const database = createInitialDatabase(startedAt - DAY_MS);
   database.repeatRules.push(createBoundaryRule({
@@ -664,7 +719,7 @@ test('区间交集排除恰好结束于起点的候选，并纳入恰好开始�
   );
 });
 
-test('持久化日志与虚拟候选使用同一非零区间交集边界', () => {
+test('持久化日志与虚拟计划使用同一非零区间交集边界', () => {
   const rangeStart = localTimestamp(2026, 7, 8);
   const rangeEnd = rangeStart + HOUR_MS;
   const database = createInitialDatabase(rangeStart - DAY_MS);

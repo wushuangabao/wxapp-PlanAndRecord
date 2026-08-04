@@ -4,10 +4,21 @@ const RECENT_LOG_HIGHLIGHT_STORAGE_KEY = 'plan-and-record.recent-log-highlight';
 
 function getService() {
   const bootstrap = getApp().globalData.bootstrap;
+  if (bootstrap && bootstrap.mode === 'data-recovery') {
+    throw new Error('本地资料库正等待恢复，应用服务不可用');
+  }
   if (!bootstrap || !bootstrap.applicationService) {
     throw new Error('应用服务尚未初始化');
   }
   return bootstrap.applicationService;
+}
+
+function getRecoveryService() {
+  const bootstrap = getApp().globalData.bootstrap;
+  if (!bootstrap || bootstrap.mode !== 'data-recovery' || !bootstrap.recoveryService) {
+    throw new Error('当前不处于数据恢复模式');
+  }
+  return bootstrap.recoveryService;
 }
 
 function showError(error) {
@@ -67,6 +78,7 @@ function writeRecentLogHighlight(snapshot, logId) {
 module.exports = {
   RECENT_LOG_HIGHLIGHT_STORAGE_KEY,
   getService,
+  getRecoveryService,
   showError,
   showSaved,
   selectorData,

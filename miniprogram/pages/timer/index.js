@@ -3,7 +3,8 @@ const {
   TIMER_STATUS
 } = require('../../domain/constants');
 const { normalizeTags } = require('../../domain/tags');
-const { calculateTimerDurationMinutes, parseLocalDateTime, sumPausedMilliseconds } = require('../../domain/time');
+const { calculateTimerDurationMinutes, sumPausedMilliseconds } = require('../../domain/time');
+const { resolveEditedTimestamp, timePickerState } = require('../../utils/log-time-editor');
 const {
   defaultDateTime,
   formatDateTime,
@@ -41,6 +42,36 @@ function elapsedSeconds(timer, now) {
     pauses.push({ startedAt: timer.pausedAt, endedAt: now });
   }
   return Math.max(0, Math.floor((now - timer.startedAt - sumPausedMilliseconds(pauses, now)) / 1_000));
+}
+
+function secondTimeValue(value) {
+  return /^\d{2}:\d{2}$/.test(value || '') ? `${value}:00` : value;
+}
+
+function editableTimeFields(timestamp) {
+  return {
+    date: defaultDateTime(timestamp).date,
+    time: timePickerState(timestamp).value
+  };
+}
+
+function resolvePageTimestamp(originalTimestamp, edited, date, time) {
+  return resolveEditedTimestamp({
+    originalTimestamp,
+    edited,
+    date,
+    time: secondTimeValue(time)
+  });
+}
+
+function originalTimestampForFields(originalTimestamp, date, time) {
+  if (Number.isFinite(originalTimestamp) && originalTimestamp > 0) {
+    const original = editableTimeFields(originalTimestamp);
+    if (original.date === date && original.time === secondTimeValue(time)) {
+      return originalTimestamp;
+    }
+  }
+  return resolvePageTimestamp(null, true, date, time);
 }
 
 function boundedPlanRange(startedAt, endedAt, fallbackNow = Date.now()) {
@@ -313,8 +344,11 @@ Page({
     showManual: false,
     manualStartDate: '',
     manualStartTime: '',
+    manualStartTimeEdited: false,
     manualEndDate: '',
     manualEndTime: '',
+    manualEndTimeEdited: false,
+    manualPausedDurationSeconds: 0,
     manualNote: '',
     manualTags: [],
     manualTagCandidates: [],
@@ -343,13 +377,20 @@ Page({
   onLoad() {
     this.recentNewLogId = null;
     this.focusedRecentLogId = null;
-    const end = defaultDateTime();
-    const start = defaultDateTime(Date.now() - 60 * 60 * 1000);
+    const endedAt = Date.now();
+    const startedAt = endedAt - 60 * 60 * 1000;
+    const end = editableTimeFields(endedAt);
+    const start = editableTimeFields(startedAt);
+    this.manualOriginalStartedAt = startedAt;
+    this.manualOriginalEndedAt = endedAt;
     this.setData({
       manualStartDate: start.date,
       manualStartTime: start.time,
+      manualStartTimeEdited: false,
       manualEndDate: end.date,
       manualEndTime: end.time,
+      manualEndTimeEdited: false,
+      manualPausedDurationSeconds: 0,
       showDebugTools: isDevelopmentRuntime()
     });
   },
@@ -953,8 +994,12 @@ Page({
       const service = getService();
       const result = service.finishTimer(this.selectedInput());
       this.hasUncommittedTimerForm = false;
+      if (result && result.state === 'draft') {
+        this.refresh();
+        return;
+      }
       this.setData({ eventIndex: 0, note: '', tags: [], tagInputVisible: false });
-      showSaved(result.hasOverlap ? '已保存：存在重叠时间' : '记录已生成');
+      showSaved('记录已生成');
       this.refresh({ newLogId: result.log.id });
     } catch (error) {
       showError(error);
@@ -962,8 +1007,18 @@ Page({
   },
 
   planOptionsForManualFields() {
-    const startedAt = parseLocalDateTime(this.data.manualStartDate, this.data.manualStartTime);
-    const endedAt = parseLocalDateTime(this.data.manualEndDate, this.data.manualEndTime);
+    const startedAt = resolvePageTimestamp(
+      this.manualOriginalStartedAt,
+      this.data.manualStartTimeEdited,
+      this.data.manualStartDate,
+      this.data.manualStartTime
+    );
+    const endedAt = resolvePageTimestamp(
+      this.manualOriginalEndedAt,
+      this.data.manualEndTimeEdited,
+      this.data.manualEndDate,
+      this.data.manualEndTime
+    );
     const service = this.currentService || getService();
     const snapshot = this.currentSnapshot || service.snapshot();
     return planOptionsForRange(service, snapshot, startedAt, endedAt);
@@ -988,6 +1043,16 @@ Page({
   openManual() {
     this.recoveryCandidatePreview = null;
     this.manualEditingCandidate = false;
+    this.manualOriginalStartedAt = originalTimestampForFields(
+      this.manualOriginalStartedAt,
+      this.data.manualStartDate,
+      this.data.manualStartTime
+    );
+    this.manualOriginalEndedAt = originalTimestampForFields(
+      this.manualOriginalEndedAt,
+      this.data.manualEndDate,
+      this.data.manualEndTime
+    );
     const currentEvent = this.data.events[this.data.eventIndex];
     const planSelection = this.planOptionsForManualFields();
     const matchedIndex = findPlanAssociationIndex(planSelection.options, currentEvent);
@@ -1003,6 +1068,9 @@ Page({
       showManual: true,
       manualMode: 'manual',
       manualLogId: null,
+      manualStartTimeEdited: false,
+      manualEndTimeEdited: false,
+      manualPausedDurationSeconds: 0,
       manualNote: '',
       manualTags: [],
       manualTagCandidates: availableTagCandidates(this.manualTagCandidateQueue, []),
@@ -1024,8 +1092,8 @@ Page({
         ? timer.startedAt
         : Date.now() - 60 * 60 * 1_000;
     const endedAt = candidatePreview ? candidatePreview.endedAt : startedAt + 60 * 60 * 1_000;
-    const start = defaultDateTime(startedAt);
-    const end = defaultDateTime(endedAt);
+    const start = editableTimeFields(startedAt);
+    const end = editableTimeFields(endedAt);
     const draft = timer.draft || {};
     const originalTags = Array.isArray(draft.tags) ? draft.tags.slice() : [];
     const service = this.currentService || getService();
@@ -1036,14 +1104,21 @@ Page({
     this.manualPlanSelectionRange = planSelection.range;
     this.recoveryCandidatePreview = candidatePreview;
     this.manualEditingCandidate = false;
+    this.manualOriginalStartedAt = startedAt;
+    this.manualOriginalEndedAt = endedAt;
     this.setData({
       showManual: true,
       manualMode: 'recovery',
       manualLogId: null,
       manualStartDate: start.date,
       manualStartTime: start.time,
+      manualStartTimeEdited: false,
       manualEndDate: end.date,
       manualEndTime: end.time,
+      manualEndTimeEdited: false,
+      manualPausedDurationSeconds: candidatePreview
+        ? (candidatePreview.pausedDurationSeconds || 0)
+        : 0,
       manualNote: draft.note || '',
       manualTags: originalTags,
       manualTagCandidates: availableTagCandidates(this.manualTagCandidateQueue, originalTags),
@@ -1077,8 +1152,8 @@ Page({
     const id = event.currentTarget.dataset.id;
     const item = this.data.recentLogs.find((log) => log.id === id);
     if (!item) return;
-    const start = defaultDateTime(item.startedAt);
-    const end = defaultDateTime(item.endedAt);
+    const start = editableTimeFields(item.startedAt);
+    const end = editableTimeFields(item.endedAt);
     const service = this.currentService || getService();
     const snapshot = this.currentSnapshot || service.snapshot();
     const planSelection = planOptionsForRange(service, snapshot, item.startedAt, item.endedAt);
@@ -1088,14 +1163,19 @@ Page({
     this.manualPlanSelectionRange = planSelection.range;
     this.recoveryCandidatePreview = null;
     this.manualEditingCandidate = item.status === 'candidate';
+    this.manualOriginalStartedAt = item.startedAt;
+    this.manualOriginalEndedAt = item.endedAt;
     this.setData({
       showManual: true,
       manualMode: 'edit',
       manualLogId: item.id,
       manualStartDate: start.date,
       manualStartTime: start.time,
+      manualStartTimeEdited: false,
       manualEndDate: end.date,
       manualEndTime: end.time,
+      manualEndTimeEdited: false,
+      manualPausedDurationSeconds: item.pausedDurationSeconds || 0,
       manualNote: item.note || '',
       manualTags: originalTags,
       manualTagCandidates: availableTagCandidates(this.manualTagCandidateQueue, originalTags),
@@ -1145,6 +1225,8 @@ Page({
       showManual: false,
       manualMode: 'manual',
       manualLogId: null,
+      manualStartTimeEdited: false,
+      manualEndTimeEdited: false,
       manualTagCandidates: [],
       manualTagInputVisible: false
     });
@@ -1152,34 +1234,51 @@ Page({
 
   onManualField(event) {
     const key = event.currentTarget.dataset.key;
-    this.setData({ [key]: event.detail.value }, () => {
+    const updates = { [key]: event.detail.value };
+    if (key === 'manualStartDate') updates.manualStartTimeEdited = true;
+    if (key === 'manualEndDate') updates.manualEndTimeEdited = true;
+    this.setData(updates, () => {
       if (['manualStartDate', 'manualStartTime', 'manualEndDate', 'manualEndTime'].includes(key)) {
         this.refreshManualPlanOptions();
       }
     });
   },
 
+  onManualTimeChange(event) {
+    const { key, editedKey } = event.currentTarget.dataset;
+    this.setData({ [key]: event.detail.value, [editedKey]: true }, () => {
+      this.refreshManualPlanOptions();
+    });
+  },
+
+  onManualPausedDurationChange(event) {
+    this.setData({ manualPausedDurationSeconds: event.detail.value });
+  },
+
   onManualSave() {
     try {
-      let startedAt = parseLocalDateTime(this.data.manualStartDate, this.data.manualStartTime);
-      let endedAt = parseLocalDateTime(this.data.manualEndDate, this.data.manualEndTime);
-      const candidatePreview = this.data.manualMode === 'recovery' && this.recoveryCandidatePreview;
-      if (isCandidatePreview(candidatePreview)) {
-        const candidateStart = defaultDateTime(candidatePreview.startedAt);
-        const candidateEnd = defaultDateTime(candidatePreview.endedAt);
-        const unchangedCandidateTime = this.data.manualStartDate === candidateStart.date
-          && this.data.manualStartTime === candidateStart.time
-          && this.data.manualEndDate === candidateEnd.date
-          && this.data.manualEndTime === candidateEnd.time;
-        if (unchangedCandidateTime) {
-          startedAt = candidatePreview.startedAt;
-          endedAt = candidatePreview.endedAt;
-        }
-      }
-      const input = { ...this.selectedManualInput(), startedAt, endedAt, note: this.data.manualNote };
+      const startedAt = resolvePageTimestamp(
+        this.manualOriginalStartedAt,
+        this.data.manualStartTimeEdited,
+        this.data.manualStartDate,
+        this.data.manualStartTime
+      );
+      const endedAt = resolvePageTimestamp(
+        this.manualOriginalEndedAt,
+        this.data.manualEndTimeEdited,
+        this.data.manualEndDate,
+        this.data.manualEndTime
+      );
+      const input = {
+        ...this.selectedManualInput(),
+        startedAt,
+        endedAt,
+        pausedDurationSeconds: this.data.manualPausedDurationSeconds,
+        note: this.data.manualNote
+      };
       const isEdit = this.data.manualMode === 'edit';
       const result = this.data.manualMode === 'recovery'
-        ? { log: getService().createRecoveryConfirmedLog(input), hasOverlap: false }
+        ? { log: getService().createRecoveryConfirmedLog(input) }
         : isEdit
           ? getService().updateLog(this.data.manualLogId, input)
           : getService().createManualLog(input);
@@ -1191,6 +1290,9 @@ Page({
         showManual: false,
         manualMode: 'manual',
         manualLogId: null,
+        manualStartTimeEdited: false,
+        manualEndTimeEdited: false,
+        manualPausedDurationSeconds: 0,
         manualNote: '',
         manualTags: [],
         manualTagCandidates: [],
@@ -1200,7 +1302,7 @@ Page({
         ? '恢复记录已确认'
         : isEdit
           ? (wasCandidateEdit ? '候选已编辑并确认' : '记录已更新')
-          : (result.hasOverlap ? '已保存：存在重叠时间' : '补录已保存'));
+          : '补录已保存');
       this.refresh(isEdit && !wasCandidateEdit ? undefined : { newLogId: result.log.id });
     } catch (error) {
       showError(error);

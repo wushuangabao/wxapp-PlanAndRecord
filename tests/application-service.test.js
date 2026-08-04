@@ -60,32 +60,49 @@ function createHarness(start = 1_700_000_000_000, storage = new TrackingStorage(
     exportTempFileStore,
     ...applicationOptions
   });
-  service.initialize();
+  const initialized = service.initialize();
   return {
     service,
     repository,
     storage,
     exportTempFileStore,
+    initialized,
     setNow(value) { now = value; },
     now() { return now; }
   };
 }
 
+function createStoredTimerHarness(timer, capturedNow) {
+  const database = createInitialDatabase(capturedNow);
+  database.timer = clone(timer);
+  const storage = new TrackingStorage();
+  storage.set(STORAGE_KEY, database);
+  let nowCalls = 0;
+  const sharedNow = () => {
+    nowCalls += 1;
+    if (nowCalls > 1) throw new Error('同一次公开操作重复读取 now');
+    return capturedNow;
+  };
+  const repository = new LocalRepository(storage, { now: sharedNow });
+  const service = new ApplicationService(repository, { now: sharedNow });
+  return { service, nowCalls: () => nowCalls };
+}
+
 test('开发验收的超时恢复只创建一份待审核候选预览', () => {
   const { service, setNow, now } = createHarness(undefined, undefined, {
-    recoveryTimerSpanMs: 2_000,
-    minimumRecoveryDurationMinutes: 1
+    recoveryTimerSpanMs: 2_000
   });
   const startedAt = now();
   service.startTimer({ note: '开发验收候选预览' });
   setNow(startedAt + 3_000);
 
-  const recovered = service.recoverTimer(now());
+  const recovered = service.recoverTimer();
 
   assert.equal(recovered.state, 'draft');
   assert.deepEqual(recovered.recoveryDraft.candidatePreview, {
     startedAt,
     endedAt: startedAt + 2_000,
+    pausedDurationSeconds: 0,
     durationMinutes: 1,
     source: LOG_SOURCE.TIMER
   });
@@ -107,6 +124,324 @@ function createRecurringPlanForTask(service, input) {
   return service.createRecurringPlan({ ...input, taskId });
 }
 
+test('重复规则投影返回 virtual plan 而不是候选日志', () => {
+  const { service, now } = createHarness();
+  const task = service.createTask({ title: '重复任务' });
+  const project = service.createProject({
+    title: '重复项目',
+    deadlineAt: now() + 86_400_000,
+    objectives: requiredObjectives()
+  });
+  service.updateTask(task.id, { projectId: project.id });
+  const startedAt = now() + 60 * 60 * 1000;
+  const { rule } = service.createRecurringPlan({
+    title: '重复计划',
+    startedAt,
+    endedAt: startedAt + 30 * 60 * 1000,
+    priority: 2,
+    frequency: 'daily',
+    interval: 1,
+    taskId: task.id
+  });
+
+  const occurrence = projectRule(
+    rule,
+    startedAt + 86_400_000,
+    startedAt + 86_400_000,
+    []
+  )[0];
+
+  assert.deepEqual(
+    {
+      type: occurrence.type,
+      virtual: occurrence.virtual,
+      ruleId: occurrence.ruleId,
+      originRuleId: occurrence.originRuleId,
+      occurrenceStart: occurrence.occurrenceStart,
+      originOccurrenceId: occurrence.originOccurrenceId,
+      title: occurrence.title,
+      startedAt: occurrence.startedAt,
+      endedAt: occurrence.endedAt,
+      priority: occurrence.priority,
+      projectId: occurrence.projectId,
+      projectNameSnapshot: occurrence.projectNameSnapshot,
+      taskId: occurrence.taskId,
+      taskNameSnapshot: occurrence.taskNameSnapshot
+    },
+    {
+      type: 'plan',
+      virtual: true,
+      ruleId: rule.id,
+      originRuleId: rule.id,
+      occurrenceStart: startedAt + 86_400_000,
+      originOccurrenceId: occurrence.id,
+      title: '重复计划',
+      startedAt: startedAt + 86_400_000,
+      endedAt: startedAt + 86_400_000 + 30 * 60 * 1000,
+      priority: 2,
+      projectId: null,
+      projectNameSnapshot: project.title,
+      taskId: task.id,
+      taskNameSnapshot: task.title
+    }
+  );
+});
+
+test('确认 virtual plan 只创建一条 confirmed rule 日志且重复确认被拒绝', () => {
+  const { service, now } = createHarness();
+  const startedAt = now() + 60 * 60 * 1000;
+  const { rule } = createRecurringPlanForTask(service, {
+    title: '确认重复计划',
+    startedAt,
+    endedAt: startedAt + 30 * 60 * 1000,
+    frequency: 'daily',
+    interval: 1
+  });
+  const occurrenceStart = startedAt + 86_400_000;
+  const occurrence = service.timeline(occurrenceStart, occurrenceStart + 30 * 60 * 1000)
+    .find((item) => item.virtual);
+
+  const log = service.confirmVirtualOccurrence(occurrence);
+
+  assert.deepEqual(
+    [log.status, log.source, log.originRuleId, log.originOccurrenceId],
+    [LOG_STATUS.CONFIRMED, LOG_SOURCE.RULE, rule.id, occurrence.originOccurrenceId]
+  );
+  assert.equal(service.snapshot().timeLogs.length, 1);
+  assert.throws(
+    () => service.confirmVirtualOccurrence(occurrence),
+    (error) => error.code === 'OCCURRENCE_ALREADY_CONFIRMED'
+  );
+  assert.equal(service.snapshot().timeLogs.length, 1);
+});
+
+test('单次修改在一个事务内写入完整 override 与唯一 confirmed rule 日志', () => {
+  const { service, now } = createHarness();
+  const firstTask = service.createTask({ title: '原任务' });
+  const secondTask = service.createTask({ title: '改单次任务' });
+  const startedAt = now() + 60 * 60 * 1000;
+  const { rule } = service.createRecurringPlan({
+    title: '原重复计划',
+    startedAt,
+    endedAt: startedAt + 30 * 60 * 1000,
+    frequency: 'daily',
+    interval: 1,
+    taskId: firstTask.id
+  });
+  const occurrenceStart = startedAt + 86_400_000;
+  const overrideInput = {
+    title: '改单次计划',
+    startedAt: occurrenceStart + 60 * 60 * 1000,
+    endedAt: occurrenceStart + 2 * 60 * 60 * 1000,
+    priority: 3,
+    taskId: secondTask.id
+  };
+  const originalOccurrence = service.timeline(
+    occurrenceStart,
+    occurrenceStart + 30 * 60 * 1000
+  ).find((item) => item.virtual);
+
+  const result = service.overrideOccurrence(rule.id, occurrenceStart, overrideInput);
+
+  assert.deepEqual(result.exception.override, {
+    ...overrideInput,
+    projectId: null,
+    projectNameSnapshot: null,
+    taskNameSnapshot: secondTask.title
+  });
+  assert.deepEqual(
+    [
+      result.log.status,
+      result.log.source,
+      result.log.originRuleId,
+      result.log.originOccurrenceId,
+      result.log.startedAt,
+      result.log.endedAt,
+      result.log.taskNameSnapshot
+    ],
+    [
+      LOG_STATUS.CONFIRMED,
+      LOG_SOURCE.RULE,
+      rule.id,
+      originalOccurrence.originOccurrenceId,
+      overrideInput.startedAt,
+      overrideInput.endedAt,
+      secondTask.title
+    ]
+  );
+  const snapshot = service.snapshot();
+  assert.equal(snapshot.occurrenceExceptions.length, 1);
+  assert.equal(snapshot.timeLogs.length, 1);
+  assert.equal(
+    service.timeline(overrideInput.startedAt, overrideInput.endedAt)
+      .filter((item) => item.originOccurrenceId === result.log.originOccurrenceId).length,
+    1
+  );
+  assert.throws(
+    () => service.overrideOccurrence(rule.id, occurrenceStart, overrideInput),
+    (error) => error.code === 'OCCURRENCE_ALREADY_CONFIRMED'
+  );
+  assert.equal(service.snapshot().occurrenceExceptions.length, 1);
+  assert.equal(service.snapshot().timeLogs.length, 1);
+});
+
+test('单次修改提交失败时 override 与日志一起回滚', () => {
+  const { service, storage, now } = createHarness();
+  const startedAt = now() + 60 * 60 * 1000;
+  const { rule } = createRecurringPlanForTask(service, {
+    title: '原子单次修改',
+    startedAt,
+    endedAt: startedAt + 30 * 60 * 1000,
+    frequency: 'daily',
+    interval: 1
+  });
+  storage.failNextSet = true;
+
+  assert.throws(() => service.overrideOccurrence(rule.id, startedAt + 86_400_000, {
+    title: '不得半写入',
+    startedAt: startedAt + 86_400_000,
+    endedAt: startedAt + 86_400_000 + 30 * 60 * 1000,
+    priority: 1
+  }), (error) => error.code === 'WRITE_FAILED');
+  assert.equal(service.snapshot().occurrenceExceptions.length, 0);
+  assert.equal(service.snapshot().timeLogs.length, 0);
+});
+
+test('本地手工、计时和规则路径都不会生成 candidate', () => {
+  const { service, setNow, now } = createHarness();
+  const manual = service.createManualLog({
+    startedAt: now() - 60 * 60 * 1000,
+    endedAt: now() - 30 * 60 * 1000
+  }).log;
+  service.startTimer();
+  setNow(now() + 60_000);
+  const timer = service.finishTimer().log;
+  const startedAt = now() + 60 * 60 * 1000;
+  createRecurringPlanForTask(service, {
+    title: '本地规则',
+    startedAt,
+    endedAt: startedAt + 30 * 60 * 1000,
+    frequency: 'daily',
+    interval: 1
+  });
+  const virtual = service.timeline(startedAt + 86_400_000, startedAt + 86_400_000 + 30 * 60 * 1000)
+    .find((item) => item.virtual);
+  const rule = service.confirmVirtualOccurrence(virtual);
+
+  assert.deepEqual(
+    service.snapshot().timeLogs.map((item) => item.status),
+    [manual.status, timer.status, rule.status]
+  );
+  assert.equal(service.snapshot().timeLogs.every((item) => item.status === LOG_STATUS.CONFIRMED), true);
+});
+
+test('新建和后续修订共享重复 pattern 规范化', () => {
+  const { service, now } = createHarness();
+  const startedAt = now() + 60 * 60 * 1000;
+  const { rule } = createRecurringPlanForTask(service, {
+    title: '规范化重复规则',
+    startedAt,
+    endedAt: startedAt + 30 * 60 * 1000,
+    frequency: 'daily',
+    interval: 2,
+    weekdays: [6, 2],
+    monthDay: 18
+  });
+
+  assert.deepEqual(
+    (({ frequency, interval, weekdays, monthDay }) => ({ frequency, interval, weekdays, monthDay }))(
+      rule.revisions[0]
+    ),
+    { frequency: 'daily', interval: 2, weekdays: [], monthDay: null }
+  );
+
+  const revised = service.reviseRuleFollowing(rule.id, startedAt, {
+    frequency: 'weekly',
+    interval: 3,
+    weekdays: [6, 1, 4]
+  });
+  assert.deepEqual(
+    (({ frequency, interval, weekdays, monthDay }) => ({ frequency, interval, weekdays, monthDay }))(
+      revised
+    ),
+    { frequency: 'weekly', interval: 3, weekdays: [1, 4, 6], monthDay: null }
+  );
+});
+
+test('新建和后续修订拒绝非法重复 pattern 且不写入半成品', () => {
+  const { service, now } = createHarness();
+  const startedAt = now() + 60 * 60 * 1000;
+  const before = service.snapshot();
+
+  assert.throws(() => createRecurringPlanForTask(service, {
+    title: '非法周规则',
+    startedAt,
+    endedAt: startedAt + 30 * 60 * 1000,
+    frequency: 'weekly',
+    interval: 1,
+    weekdays: []
+  }));
+  assert.deepEqual(service.snapshot().repeatRules, before.repeatRules);
+  assert.deepEqual(service.snapshot().calendarEvents, before.calendarEvents);
+});
+
+test('新建和后续修订严格拒绝字符串重复 pattern 字段', () => {
+  const cases = [
+    {
+      label: 'interval',
+      patch: { frequency: 'daily', interval: '2' },
+      code: 'REPEAT_INTERVAL_INVALID'
+    },
+    {
+      label: 'weekday',
+      patch: { frequency: 'weekly', interval: 1, weekdays: ['1'] },
+      code: 'REPEAT_WEEKDAYS_INVALID'
+    },
+    {
+      label: 'monthDay',
+      patch: { frequency: 'monthly', interval: 1, monthDay: '15' },
+      code: 'REPEAT_MONTH_DAY_INVALID'
+    }
+  ];
+
+  cases.forEach(({ label, patch, code }) => {
+    const createHarnessResult = createHarness();
+    const createStart = createHarnessResult.now() + 60 * 60 * 1000;
+    assert.throws(
+      () => createRecurringPlanForTask(createHarnessResult.service, {
+        title: `新建严格校验 ${label}`,
+        startedAt: createStart,
+        endedAt: createStart + 30 * 60 * 1000,
+        ...patch
+      }),
+      (error) => error.code === code,
+      `createRecurringPlan 应拒绝字符串 ${label}`
+    );
+    assert.equal(createHarnessResult.service.snapshot().repeatRules.length, 0);
+    assert.equal(createHarnessResult.service.snapshot().calendarEvents.length, 0);
+
+    const reviseHarnessResult = createHarness();
+    const reviseStart = reviseHarnessResult.now() + 60 * 60 * 1000;
+    const { rule } = createRecurringPlanForTask(reviseHarnessResult.service, {
+      title: `修订严格校验 ${label}`,
+      startedAt: reviseStart,
+      endedAt: reviseStart + 30 * 60 * 1000,
+      frequency: 'daily',
+      interval: 1
+    });
+    const beforeRevisions = reviseHarnessResult.service.snapshot().repeatRules[0].revisions;
+    assert.throws(
+      () => reviseHarnessResult.service.reviseRuleFollowing(rule.id, reviseStart, patch),
+      (error) => error.code === code,
+      `reviseRuleFollowing 应拒绝字符串 ${label}`
+    );
+    assert.deepEqual(
+      reviseHarnessResult.service.snapshot().repeatRules[0].revisions,
+      beforeRevisions
+    );
+  });
+});
+
 function createCrossTaskOverrideFixture(service, repository, now, sourceTask, overrideTask) {
   const dayMs = 24 * 60 * 60 * 1000;
   const start = now() + 60 * 60 * 1000;
@@ -119,18 +454,17 @@ function createCrossTaskOverrideFixture(service, repository, now, sourceTask, ov
     taskId: sourceTask.id
   });
   const occurrenceStart = start + dayMs;
-  service.overrideOccurrence(rule.id, occurrenceStart, {
+  const occurrence = service.timeline(
+    occurrenceStart,
+    occurrenceStart + 30 * 60 * 1000
+  ).find((item) => item.virtual && item.occurrenceStart === occurrenceStart);
+  const { log: confirmed } = service.overrideOccurrence(rule.id, occurrenceStart, {
     title: '临时改绑任务',
     startedAt: occurrenceStart,
     endedAt: occurrenceStart + 30 * 60 * 1000,
     priority: 2,
     taskId: overrideTask.id
   });
-  const occurrence = service.timeline(
-    occurrenceStart,
-    occurrenceStart + 30 * 60 * 1000
-  ).find((item) => item.virtual && item.occurrenceStart === occurrenceStart);
-  const confirmed = service.confirmVirtualOccurrence(occurrence);
   const candidate = service.createManualLog({
     startedAt: occurrence.startedAt + 5 * 60 * 1000,
     endedAt: occurrence.startedAt + 10 * 60 * 1000,
@@ -255,35 +589,62 @@ test('新建记录和计时草稿统一规范化标签并执行 10/5 中英文�
   );
 });
 
-test('时间日志允许开始与结束相同并按短时计时记为一分钟，但不允许结束早于开始', () => {
-  const { service, repository, now } = createHarness();
+test('手工日志按秒级暂停契约创建，且拒绝无有效秒的区间', () => {
+  const { service, now } = createHarness();
   const timestamp = now() - 60_000;
-  const manual = service.createManualLog({ startedAt: timestamp, endedAt: timestamp }).log;
-  assert.equal(manual.durationMinutes, 1);
-
   const shortManual = service.createManualLog({ startedAt: timestamp, endedAt: timestamp + 20_000 }).log;
-  assert.equal(shortManual.durationMinutes, 0);
+  assert.equal(shortManual.pausedDurationSeconds, 0);
+  assert.equal(shortManual.durationMinutes, 1);
 
-  const updated = service.updateLog(manual.id, { startedAt: timestamp, endedAt: timestamp }).log;
-  assert.equal(updated.durationMinutes, 1);
+  const paused = service.createManualLog({
+    startedAt: timestamp,
+    endedAt: timestamp + 120_999,
+    pausedDurationSeconds: 61
+  }).log;
+  assert.equal(paused.pausedDurationSeconds, 61);
+  assert.equal(paused.durationMinutes, 1);
 
-  repository.transaction((database) => {
-    database.recoveryDraft = {
-      reason: '零时长恢复记录',
-      timer: createIdleTimer(),
-      createdAt: now()
-    };
-  });
-  const recovered = service.createRecoveryConfirmedLog({ startedAt: timestamp, endedAt: timestamp });
-  assert.equal(recovered.durationMinutes, 1);
-
-  service.startTimer();
-  assert.equal(service.finishTimer().log.durationMinutes, 1);
+  assert.throws(
+    () => service.createManualLog({ startedAt: timestamp, endedAt: timestamp }),
+    (error) => error.code === 'LOG_TIMING_INVALID'
+  );
 
   assert.throws(
     () => service.createManualLog({ startedAt: timestamp, endedAt: timestamp - 1 }),
     (error) => error.code === 'TIME_RANGE_INVALID' && error.message === '手工补录时间的结束时间不能早于开始时间'
   );
+});
+
+test('更新日志保留旧暂停秒数或按新值重算，非法缩短时零写入', () => {
+  const { service, storage, now } = createHarness();
+  const startedAt = now() - 300_000;
+  const created = service.createManualLog({
+    startedAt,
+    endedAt: startedAt + 180_000,
+    pausedDurationSeconds: 61
+  }).log;
+
+  const inheritedResult = service.updateLog(created.id, { note: '保留暂停' });
+  assert.deepEqual(Object.keys(inheritedResult), ['log']);
+  const inherited = inheritedResult.log;
+  assert.equal(inherited.pausedDurationSeconds, 61);
+  assert.equal(inherited.durationMinutes, 2);
+
+  const recalculated = service.updateLog(created.id, { pausedDurationSeconds: 1 }).log;
+  assert.equal(recalculated.pausedDurationSeconds, 1);
+  assert.equal(recalculated.durationMinutes, 3);
+
+  const before = service.snapshot();
+  storage.resetCalls();
+  assert.throws(
+    () => service.updateLog(created.id, {
+      endedAt: startedAt + 1_000,
+      pausedDurationSeconds: 1
+    }),
+    (error) => error.code === 'LOG_TIMING_INVALID'
+  );
+  assert.deepEqual(service.snapshot(), before);
+  assert.deepEqual(storage.setCalls, []);
 });
 
 test('导入的超限计时草稿在不改标签时可生成记录或从恢复草稿确认', () => {
@@ -370,6 +731,48 @@ test('M3：新建任务插入开头，后续修改不重排保存顺序', () => 
   assert.deepEqual(service.snapshot().tasks.map((task) => task.id), [second.id, first.id]);
 });
 
+test('M3：新建任务忽略外部完成状态并始终保存为 todo', () => {
+  const { service } = createHarness();
+
+  const task = service.createTask({ title: '不能直接完成', status: TASK_STATUS.COMPLETED });
+
+  assert.equal(task.status, TASK_STATUS.TODO);
+  assert.equal(task.completedAt, null);
+});
+
+test('M3：任务首次完成记录时间且重复完成保持原完成时间', () => {
+  const { service, setNow, now } = createHarness();
+  const task = service.createTask({ title: '完成一次' });
+  const firstCompletedAt = now() + 1_000;
+  setNow(firstCompletedAt);
+
+  const completed = service.updateTask(task.id, { status: TASK_STATUS.COMPLETED });
+  setNow(firstCompletedAt + 1_000);
+  const completedAgain = service.updateTask(task.id, { status: TASK_STATUS.COMPLETED });
+
+  assert.equal(completed.completedAt, firstCompletedAt);
+  assert.equal(completed.updatedAt, firstCompletedAt);
+  assert.equal(completedAgain.completedAt, firstCompletedAt);
+  assert.equal(completedAgain.updatedAt, firstCompletedAt);
+});
+
+test('M3：重新打开清空完成时间且再次完成生成新时间', () => {
+  const { service, setNow, now } = createHarness();
+  const task = service.createTask({ title: '重新完成' });
+  const firstCompletedAt = now() + 1_000;
+  setNow(firstCompletedAt);
+  service.updateTask(task.id, { status: TASK_STATUS.COMPLETED });
+  setNow(firstCompletedAt + 1_000);
+
+  const reopened = service.updateTask(task.id, { status: TASK_STATUS.TODO });
+  assert.equal(reopened.completedAt, null);
+
+  const secondCompletedAt = firstCompletedAt + 2_000;
+  setNow(secondCompletedAt);
+  const completedAgain = service.updateTask(task.id, { status: TASK_STATUS.COMPLETED });
+  assert.equal(completedAgain.completedAt, secondCompletedAt);
+});
+
 test('M2：点击结束计时会立即写入 confirmed', () => {
   const { service, setNow, now } = createHarness();
   service.startTimer({ note: '专注' });
@@ -378,10 +781,126 @@ test('M2：点击结束计时会立即写入 confirmed', () => {
   setNow(now() + 10 * 60 * 1000);
   service.resumeTimer();
   setNow(now() + 20 * 60 * 1000);
-  const { log } = service.finishTimer();
+  const result = service.finishTimer();
+  assert.deepEqual(Object.keys(result), ['log']);
+  const { log } = result;
   assert.equal(log.durationMinutes, 50);
   assert.equal(log.status, LOG_STATUS.CONFIRMED);
   assert.equal(service.snapshot().timer.status, TIMER_STATUS.IDLE);
+});
+
+test('M2：暂停遇到墙钟倒退时单次取时并原子转为恢复草稿', () => {
+  const capturedNow = 1_700_000_000_000;
+  const originalTimer = {
+    ...createIdleTimer(),
+    status: TIMER_STATUS.RUNNING,
+    startedAt: capturedNow + 1_000,
+    draft: { note: '暂停前原稿', tags: ['原稿'] }
+  };
+  const { service, nowCalls } = createStoredTimerHarness(originalTimer, capturedNow);
+
+  const result = service.pauseTimer();
+  const snapshot = service.snapshot();
+
+  assert.equal(nowCalls(), 1);
+  assert.equal(result.state, 'draft');
+  assert.equal(snapshot.timer.status, TIMER_STATUS.IDLE);
+  assert.equal(snapshot.timeLogs.length, 0);
+  assert.deepEqual(snapshot.recoveryDraft.timer, originalTimer);
+  assert.equal(snapshot.recoveryDraft.createdAt, capturedNow);
+  assert.equal(snapshot.updatedAt, capturedNow);
+});
+
+test('M2：恢复遇到 pausedAt 晚于墙钟时单次取时并保留原 timer', () => {
+  const capturedNow = 1_700_000_000_000;
+  const originalTimer = {
+    ...createIdleTimer(),
+    status: TIMER_STATUS.PAUSED,
+    startedAt: capturedNow - 60_000,
+    pausedAt: capturedNow + 1,
+    draft: { note: '恢复前原稿', tags: [] }
+  };
+  const { service, nowCalls } = createStoredTimerHarness(originalTimer, capturedNow);
+
+  const result = service.resumeTimer();
+  const snapshot = service.snapshot();
+
+  assert.equal(nowCalls(), 1);
+  assert.equal(result.state, 'draft');
+  assert.equal(snapshot.timer.status, TIMER_STATUS.IDLE);
+  assert.equal(snapshot.timeLogs.length, 0);
+  assert.deepEqual(snapshot.recoveryDraft.timer, originalTimer);
+});
+
+test('M2：结束遇到倒序、重叠或晚于当前时刻的暂停时只保留完整恢复草稿', () => {
+  const capturedNow = 1_700_000_100_000;
+  const startedAt = capturedNow - 100_000;
+  const invalidPauses = [
+    [
+      { startedAt: startedAt + 50_000, endedAt: startedAt + 60_000 },
+      { startedAt: startedAt + 10_000, endedAt: startedAt + 20_000 }
+    ],
+    [
+      { startedAt: startedAt + 10_000, endedAt: startedAt + 60_000 },
+      { startedAt: startedAt + 50_000, endedAt: startedAt + 70_000 }
+    ],
+    [{ startedAt: startedAt + 10_000, endedAt: capturedNow + 1 }]
+  ];
+
+  invalidPauses.forEach((pauses) => {
+    const originalTimer = {
+      ...createIdleTimer(),
+      status: TIMER_STATUS.RUNNING,
+      startedAt,
+      pauses,
+      draft: { note: '不能生成日志', tags: [] }
+    };
+    const { service, nowCalls } = createStoredTimerHarness(originalTimer, capturedNow);
+
+    const result = service.finishTimer({ note: '不得解析的新值' });
+    const snapshot = service.snapshot();
+
+    assert.equal(nowCalls(), 1);
+    assert.equal(result.state, 'draft');
+    assert.equal(snapshot.timer.status, TIMER_STATUS.IDLE);
+    assert.equal(snapshot.timeLogs.length, 0);
+    assert.deepEqual(snapshot.recoveryDraft.timer, originalTimer);
+  });
+});
+
+test('M2：正常结束按完整暂停区间写入精确暂停秒数', () => {
+  const { service, setNow, now } = createHarness();
+  const startedAt = now();
+  service.startTimer({ note: '两小时区间' });
+  setNow(startedAt + 30 * 60_000);
+  service.pauseTimer();
+  setNow(startedAt + 90 * 60_000);
+  service.resumeTimer();
+  setNow(startedAt + 120 * 60_000);
+
+  const { log } = service.finishTimer({ pausedDurationSeconds: 1 });
+
+  assert.equal(log.pausedDurationSeconds, 3_600);
+  assert.equal(log.durationMinutes, 60);
+});
+
+test('M2：正常结束使用唯一捕获时刻同时写日志和根更新时间', () => {
+  const capturedNow = 1_700_000_060_000;
+  const originalTimer = {
+    ...createIdleTimer(),
+    status: TIMER_STATUS.RUNNING,
+    startedAt: capturedNow - 60_000,
+    draft: { note: '单时刻结束', tags: [] }
+  };
+  const { service, nowCalls } = createStoredTimerHarness(originalTimer, capturedNow);
+
+  const { log } = service.finishTimer();
+  const snapshot = service.snapshot();
+
+  assert.equal(nowCalls(), 1);
+  assert.equal(log.endedAt, capturedNow);
+  assert.equal(log.createdAt, capturedNow);
+  assert.equal(snapshot.updatedAt, capturedNow);
 });
 
 test('M2：短时计时生成的已确认记录至少计为一分钟', () => {
@@ -395,7 +914,7 @@ test('M2：短时计时生成的已确认记录至少计为一分钟', () => {
 });
 
 test('M2：计时记录超过整分钟后向上取整', () => {
-  for (const [elapsedMilliseconds, expectedMinutes] of [[60_000, 1], [60_001, 2], [119_999, 2]]) {
+  for (const [elapsedMilliseconds, expectedMinutes] of [[60_000, 1], [60_999, 1], [61_000, 2], [119_999, 2]]) {
     const { service, setNow, now } = createHarness();
     service.startTimer({ note: '向上取整' });
     setNow(now() + elapsedMilliseconds);
@@ -408,7 +927,7 @@ test('M2：恢复草稿经用户修正并保存后创建实际记录、纳入默
   const startedAt = now();
   service.startTimer({ note: '需修正的计时' });
   setNow(startedAt - 1_000);
-  const recovered = service.recoverTimer(now());
+  const recovered = service.recoverTimer();
   assert.equal(recovered.state, 'draft');
 
   setNow(startedAt + 60_000);
@@ -431,7 +950,7 @@ test('M2：待修正恢复草稿必须先确认或明确放弃，才可开始新
   const startedAt = now();
   service.startTimer({ note: '需要修正的计时' });
   setNow(startedAt - 1_000);
-  assert.equal(service.recoverTimer(now()).state, 'draft');
+  assert.equal(service.recoverTimer().state, 'draft');
 
   assert.throws(
     () => service.startTimer({ note: '不应静默覆盖草稿' }),
@@ -484,12 +1003,13 @@ test('M2：超过 24 小时的计时恢复为待审核草稿，不写入候选�
     database.timer.draft.tags = importedTags;
   });
   setNow(now() + MAX_TIMER_SPAN_MS + 60_000);
-  const recovered = service.recoverTimer(now());
+  const recovered = service.recoverTimer();
 
   assert.equal(recovered.state, 'draft');
   assert.deepEqual(recovered.recoveryDraft.candidatePreview, {
     startedAt: now() - MAX_TIMER_SPAN_MS - 60_000,
     endedAt: now() - 60_000,
+    pausedDurationSeconds: 0,
     durationMinutes: 24 * 60,
     source: LOG_SOURCE.TIMER
   });
@@ -506,7 +1026,7 @@ test('M2：暂停状态超时恢复时扣除尚未结束的暂停区间', () => 
   service.pauseTimer();
   setNow(startedAt + MAX_TIMER_SPAN_MS + 60 * 60 * 1000);
 
-  const recovered = service.recoverTimer(now());
+  const recovered = service.recoverTimer();
 
   assert.equal(recovered.state, 'draft');
   assert.equal(recovered.recoveryDraft.candidatePreview.startedAt, startedAt);
@@ -524,7 +1044,7 @@ test('M2：超时恢复候选沿用计时器向上取整口径', () => {
   service.pauseTimer();
   setNow(startedAt + MAX_TIMER_SPAN_MS + 1);
 
-  const recovered = service.recoverTimer(now());
+  const recovered = service.recoverTimer();
   const preview = recovered.recoveryDraft.candidatePreview;
   const log = service.createRecoveryConfirmedLog({
     startedAt: preview.startedAt,
@@ -543,7 +1063,7 @@ test('M2：直接核实超时恢复候选时保留已扣除暂停区间的时长
   service.pauseTimer();
   setNow(startedAt + MAX_TIMER_SPAN_MS + 60 * 60 * 1_000);
 
-  const recovered = service.recoverTimer(now());
+  const recovered = service.recoverTimer();
   const preview = recovered.recoveryDraft.candidatePreview;
   const log = service.createRecoveryConfirmedLog({
     startedAt: preview.startedAt,
@@ -556,40 +1076,35 @@ test('M2：直接核实超时恢复候选时保留已扣除暂停区间的时长
   assert.equal(service.snapshot().recoveryDraft, null);
 });
 
-test('M2：全程暂停的超时计时仍生成可审核的一分钟候选预览', () => {
+test('M2：全程暂停的超时计时不伪造一分钟候选预览', () => {
   const { service, setNow, now } = createHarness();
   const startedAt = now();
   service.startTimer({ note: '全程暂停' });
   service.pauseTimer();
   setNow(startedAt + MAX_TIMER_SPAN_MS + 1);
 
-  const recovered = service.recoverTimer(now());
+  const recovered = service.recoverTimer();
 
   assert.equal(recovered.state, 'draft');
-  assert.deepEqual(recovered.recoveryDraft.candidatePreview, {
-    startedAt,
-    endedAt: startedAt + MAX_TIMER_SPAN_MS,
-    durationMinutes: 1,
-    source: LOG_SOURCE.TIMER
-  });
+  assert.equal(Object.hasOwn(recovered.recoveryDraft, 'candidatePreview'), false);
 });
 
 test('M2：暂停区间不自洽时只保留恢复草稿', () => {
-  const { service, repository, setNow, now } = createHarness();
+  const { service, storage, setNow, now } = createHarness();
   const startedAt = now();
   service.startTimer({ note: '暂停数据异常' });
   setNow(startedAt + 60 * 60 * 1000);
   service.pauseTimer();
-  repository.transaction((database) => {
-    database.timer.pauses = [{
-      startedAt: startedAt + 30 * 60 * 1000,
-      endedAt: startedAt + 90 * 60 * 1000
-    }];
-  });
-  setNow(startedAt + MAX_TIMER_SPAN_MS + 60 * 60 * 1000);
-
-  const recovered = service.recoverTimer(now());
-  const snapshot = service.snapshot();
+  const corrupted = service.snapshot();
+  corrupted.timer.pauses = [{
+    startedAt: startedAt + 30 * 60 * 1000,
+    endedAt: startedAt + 90 * 60 * 1000
+  }];
+  storage.set(STORAGE_KEY, corrupted);
+  const recoveryNow = startedAt + MAX_TIMER_SPAN_MS + 60 * 60 * 1000;
+  setNow(recoveryNow);
+  const { service: reloadedService, initialized: recovered } = createHarness(recoveryNow, storage);
+  const snapshot = reloadedService.snapshot();
 
   assert.equal(recovered.state, 'draft');
   assert.equal(snapshot.timer.status, TIMER_STATUS.IDLE);
@@ -598,21 +1113,36 @@ test('M2：暂停区间不自洽时只保留恢复草稿', () => {
 });
 
 test('M2：运行态字段矛盾时不得恢复或生成候选', () => {
-  const { service, repository, setNow, now } = createHarness();
+  const { service, storage, now } = createHarness();
   const startedAt = now();
   service.startTimer({ note: '运行态字段异常' });
-  repository.transaction((database) => {
-    database.timer.pausedAt = startedAt + 30 * 60 * 1000;
-  });
-  setNow(startedAt + 60 * 60 * 1000);
-
-  const recovered = service.recoverTimer(now());
-  const snapshot = service.snapshot();
+  const corrupted = service.snapshot();
+  corrupted.timer.pausedAt = startedAt + 30 * 60 * 1000;
+  storage.set(STORAGE_KEY, corrupted);
+  const recoveryNow = startedAt + 60 * 60 * 1000;
+  const { service: reloadedService, initialized: recovered } = createHarness(recoveryNow, storage);
+  const snapshot = reloadedService.snapshot();
 
   assert.equal(recovered.state, 'draft');
   assert.equal(snapshot.timer.status, TIMER_STATUS.IDLE);
   assert.equal(snapshot.timeLogs.length, 0);
   assert.equal(snapshot.recoveryDraft.timer.pausedAt, startedAt + 30 * 60 * 1000);
+});
+
+test('M2：冷启动恢复只捕获一次当前时刻', () => {
+  const capturedNow = 1_700_000_000_000;
+  const originalTimer = {
+    ...createIdleTimer(),
+    status: TIMER_STATUS.RUNNING,
+    startedAt: capturedNow - 1_000,
+    draft: { note: '有效计时', tags: [] }
+  };
+  const { service, nowCalls } = createStoredTimerHarness(originalTimer, capturedNow);
+
+  const recovered = service.recoverTimer();
+
+  assert.equal(nowCalls(), 1);
+  assert.equal(recovered.state, 'resumed');
 });
 
 test('M4：重复实例按需投影，确认后不会再次投影', () => {
@@ -667,7 +1197,7 @@ test('M4/M5：跨查询起点的过夜重复实例进入时间线和计划统计
   assert.equal(statistics.planVariance.events[0].actualMinutes, 0);
 });
 
-test('M4：时间线按单次改期后的最终区间决定候选移入和移出', () => {
+test('M4：单次改期产生的实际记录按最终区间移入和移出时间线', () => {
   const { service } = createHarness();
   const firstStart = new Date(2026, 6, 1, 9, 0, 0, 0).getTime();
   const occurrenceStart = new Date(2026, 6, 3, 9, 0, 0, 0).getTime();
@@ -680,7 +1210,7 @@ test('M4：时间线按单次改期后的最终区间决定候选移入和移出
     frequency: 'daily',
     interval: 1
   });
-  service.overrideOccurrence(rule.id, occurrenceStart, {
+  const { log } = service.overrideOccurrence(rule.id, occurrenceStart, {
     title: '移入查询范围',
     startedAt: queryStart + 15 * 60 * 1000,
     endedAt: queryStart + 75 * 60 * 1000,
@@ -688,13 +1218,14 @@ test('M4：时间线按单次改期后的最终区间决定候选移入和移出
   });
 
   const movedIn = service.timeline(queryStart, queryStart + 60 * 60 * 1000)
-    .filter((item) => item.virtual && item.occurrenceStart === occurrenceStart);
+    .filter((item) => item.id === log.id);
   const movedOut = service.timeline(occurrenceStart, occurrenceStart + 60 * 60 * 1000)
-    .filter((item) => item.virtual && item.occurrenceStart === occurrenceStart);
+    .filter((item) => item.id === log.id);
 
   assert.equal(movedIn.length, 1);
   assert.equal(movedIn[0].startedAt, queryStart + 15 * 60 * 1000);
-  assert.equal(movedIn[0].priority, 2);
+  assert.equal(movedIn[0].type, 'confirmed');
+  assert.equal(movedIn[0].source, LOG_SOURCE.RULE);
   assert.equal(movedOut.length, 0);
 });
 
@@ -761,24 +1292,78 @@ test('M4：种子计划块改时后仍按规则最早逻辑实例抑制虚拟首
   assert.equal(movedRange.filter((item) => item.id === event.id).length, 1);
 });
 
-test('M5：候选默认不计统计，重叠提示计算相交分钟数', () => {
-  const { service, now } = createHarness();
+test('重叠只作为范围内持久化日志的 timeline 元数据，保存结果与统计不再返回重叠提示', () => {
+  const { service, repository, now } = createHarness();
   const start = now() - 60 * 60 * 1000;
-  service.createManualLog({ startedAt: start, endedAt: start + 40 * 60 * 1000, note: '甲' });
-  service.createManualLog({ startedAt: start + 20 * 60 * 1000, endedAt: start + 50 * 60 * 1000, note: '乙' });
+  const firstResult = service.createManualLog({
+    startedAt: start,
+    endedAt: start + 40 * 60 * 1000,
+    note: '甲'
+  });
+  const secondResult = service.createManualLog({
+    startedAt: start + 20 * 60 * 1000,
+    endedAt: start + 50 * 60 * 1000,
+    note: '乙'
+  });
+  assert.deepEqual(Object.keys(firstResult), ['log']);
+  assert.deepEqual(Object.keys(secondResult), ['log']);
+  repository.transaction((database) => {
+    database.timeLogs.find((item) => item.id === secondResult.log.id).status = LOG_STATUS.CANDIDATE;
+  });
+
+  const task = service.createTask({ title: '重叠测试任务' });
+  const plan = createCalendarEventForTask(service, {
+    title: '范围内计划',
+    startedAt: start,
+    endedAt: start + 30 * 60 * 1000,
+    taskId: task.id
+  });
+  createRecurringPlanForTask(service, {
+    title: '范围内重复计划',
+    startedAt: start,
+    endedAt: start + 30 * 60 * 1000,
+    frequency: 'daily',
+    interval: 1,
+    taskId: task.id
+  });
+
+  const timeline = service.timeline(start - 1, start + 24 * 60 * 60 * 1000 + 1);
+  const first = timeline.find((item) => item.id === firstResult.log.id);
+  const second = timeline.find((item) => item.id === secondResult.log.id);
+  assert.deepEqual(first.overlapMeta, {
+    totalCount: 1,
+    confirmedCount: 0,
+    candidateCount: 1
+  });
+  assert.deepEqual(second.overlapMeta, {
+    totalCount: 1,
+    confirmedCount: 1,
+    candidateCount: 0
+  });
+  assert.equal(Object.hasOwn(timeline.find((item) => item.id === plan.id), 'overlapMeta'), false);
+  assert.equal(
+    timeline.filter((item) => item.virtual).every((item) => !Object.hasOwn(item, 'overlapMeta')),
+    true
+  );
+  const narrowTimeline = service.timeline(start - 1, start + 10 * 60 * 1000);
+  assert.equal(
+    Object.hasOwn(narrowTimeline.find((item) => item.id === firstResult.log.id), 'overlapMeta'),
+    false
+  );
+  assert.equal(narrowTimeline.some((item) => item.id === secondResult.log.id), false);
+
   const stats = service.statistics({ rangeStart: start - 1, rangeEnd: now() + 1 });
 
-  assert.equal(stats.totalMinutes, 70);
-  assert.equal(stats.overlaps.length, 1);
-  assert.equal(stats.overlaps[0].minutes, 20);
+  assert.equal(stats.totalMinutes, 40);
+  assert.equal(Object.hasOwn(stats, 'overlaps'), false);
 });
 
 test('M3：放弃项目删除未来对象但保留已确认历史和快照', () => {
   const { service, now } = createHarness();
   const project = service.createProject({ title: '待放弃项目', deadlineAt: now() + 86_400_000, objectives: requiredObjectives() });
-  const completedTask = service.createTask({ title: '历史任务', projectId: project.id, status: 'completed' });
-  service.updateTask(completedTask.id, { status: 'completed' });
-  const activeTask = service.createTask({ title: '未来任务', projectId: project.id, status: 'todo' });
+  const completedTask = service.createTask({ title: '历史任务', projectId: project.id });
+  service.updateTask(completedTask.id, { status: TASK_STATUS.COMPLETED });
+  const activeTask = service.createTask({ title: '未来任务', projectId: project.id });
   const historicalEvent = createCalendarEventForTask(service, { title: '历史计划', startedAt: now() - 3_600_000, endedAt: now() - 1_800_000, taskId: completedTask.id });
   const futureEvent = createCalendarEventForTask(service, { title: '未来计划', startedAt: now() + 3_600_000, endedAt: now() + 7_200_000, taskId: activeTask.id });
   const confirmed = service.createManualLog({
@@ -1045,8 +1630,7 @@ test('M3：放弃项目断开计时草稿失效引用且保留仍有效的项目
     calendarEventId: futureEvent.id
   });
   repository.transaction((database) => {
-    database.timer.draft.originRuleId = rule.id;
-    database.timer.draft.originOccurrenceId = `${rule.id}:1:${rule.revisions[0].effectiveFrom}`;
+    database.timer.draft.originRuleSummarySnapshot = rule.title;
     database.recoveryDraft = {
       reason: '待修正',
       timer: {
@@ -1055,10 +1639,13 @@ test('M3：放弃项目断开计时草稿失效引用且保留仍有效的项目
           projectId: retainedProject.id,
           projectNameSnapshot: retainedProject.title,
           taskId: deletingTask.id,
-          calendarEventId: futureEvent.id,
+          calendarEventId: null,
+          calendarEventSummarySnapshot: futureEvent.title,
           repeatRuleId: rule.id,
+          repeatRuleSummarySnapshot: rule.title,
           originRuleId: rule.id,
-          originOccurrenceId: `${rule.id}:1:${rule.revisions[0].effectiveFrom}`
+          originOccurrenceId: `${rule.id}:1:${rule.revisions[0].effectiveFrom}`,
+          originRuleSummarySnapshot: rule.title
         }
       },
       createdAt: now()
@@ -1147,8 +1734,8 @@ test('M3：删除任务清除未结束计划并保留历史计划和计时记录
           taskNameSnapshot: task.title,
           calendarEventId: historicalEvent.id,
           calendarEventSummarySnapshot: historicalEvent.title,
-          originRuleId: rule.id,
-          originOccurrenceId: virtual.originOccurrenceId
+          originRuleId: null,
+          originOccurrenceId: null
         }
       },
       createdAt: now()
@@ -1525,7 +2112,7 @@ test('新关系链：计划创建、更新、修订和单次改期只能关联�
     }),
     (error) => error.code === 'PLAN_PROJECT_DIRECT_FORBIDDEN'
   );
-  const exception = service.overrideOccurrence(rule.id, occurrenceStart, {
+  const { exception } = service.overrideOccurrence(rule.id, occurrenceStart, {
     title: '合法改期',
     startedAt: occurrenceStart,
     endedAt: occurrenceStart + 30 * 60 * 1000,
@@ -1607,8 +2194,6 @@ test('新关系链：日志和计时只写计划关联，direct task/project 始
     stored.projectId = project.id;
     stored.taskNameSnapshot = '旧重复任务';
     stored.projectNameSnapshot = '旧重复项目';
-    stored.originRuleId = 'rule_legacy';
-    stored.originOccurrenceId = 'rule_legacy:1:1700000000000';
   });
   const normalizedLegacyLog = service.updateLog(manual.id, { note: '兼容旧字段' }).log;
   assert.deepEqual(
@@ -1717,7 +2302,7 @@ test('重复计划实例可作为日志和计时的统一计划关联，并校�
     originOccurrenceId: virtual.originOccurrenceId
   });
   setNow(recoveryStart - 1);
-  assert.equal(service.recoverTimer(recoveryStart - 1).state, 'draft');
+  assert.equal(service.recoverTimer().state, 'draft');
   setNow(recoveryStart + 60_000);
   assert.throws(
     () => service.createRecoveryConfirmedLog({
@@ -1819,10 +2404,6 @@ test('确认候选记录执行统一关联归一化，并保证具体计划与�
     startedAt: now() - 40 * 60 * 1000,
     endedAt: now() - 30 * 60 * 1000
   }).log;
-  const incompleteOrigin = service.createManualLog({
-    startedAt: now() - 30 * 60 * 1000,
-    endedAt: now() - 20 * 60 * 1000
-  }).log;
   const repeatStart = now() + 60 * 60 * 1000;
   const { rule } = service.createRecurringPlan({
     title: '候选重复计划',
@@ -1843,9 +2424,7 @@ test('确认候选记录执行统一关联归一化，并保证具体计划与�
     Object.assign(concreteCandidate, {
       status: LOG_STATUS.CANDIDATE,
       projectId: project.id,
-      taskId: task.id,
-      originRuleId: rule.id,
-      originOccurrenceId: virtual.originOccurrenceId
+      taskId: task.id
     });
     const detachedCandidate = database.timeLogs.find((item) => item.id === detached.id);
     Object.assign(detachedCandidate, {
@@ -1853,13 +2432,6 @@ test('确认候选记录执行统一关联归一化，并保证具体计划与�
       projectId: project.id,
       taskId: task.id,
       originOccurrenceId: '已删除规则的历史实例'
-    });
-    const incompleteCandidate = database.timeLogs.find((item) => item.id === incompleteOrigin.id);
-    Object.assign(incompleteCandidate, {
-      status: LOG_STATUS.CANDIDATE,
-      projectId: project.id,
-      taskId: task.id,
-      originRuleId: rule.id
     });
     const recurringCandidate = database.timeLogs.find((item) => item.id === recurring.id);
     Object.assign(recurringCandidate, {
@@ -1871,7 +2443,6 @@ test('确认候选记录执行统一关联归一化，并保证具体计划与�
 
   const confirmedConcrete = service.confirmCandidateLog(concrete.id);
   const confirmedDetached = service.confirmCandidateLog(detached.id);
-  const confirmedIncomplete = service.confirmCandidateLog(incompleteOrigin.id);
   const confirmedRecurring = service.confirmCandidateLog(recurring.id);
 
   assert.deepEqual(
@@ -1894,15 +2465,6 @@ test('确认候选记录执行统一关联归一化，并保证具体计划与�
       confirmedDetached.source
     ],
     [null, null, null, null, '已删除规则的历史实例', LOG_SOURCE.MANUAL]
-  );
-  assert.deepEqual(
-    [
-      confirmedIncomplete.projectId,
-      confirmedIncomplete.taskId,
-      confirmedIncomplete.originRuleId,
-      confirmedIncomplete.originOccurrenceId
-    ],
-    [null, null, null, null]
   );
   assert.deepEqual(
     [
@@ -2106,12 +2668,35 @@ test('导入准备和预览不写入，只有提交 token 才单次写入并保�
   assert.equal(snapshot.wishes.some((item) => item.id === 'wish_import'), true);
   assert.equal(log.status, LOG_STATUS.CANDIDATE);
   assert.equal(log.source, LOG_SOURCE.FILE);
+  assert.equal(log.pausedDurationSeconds, 0);
   assert.equal(committed.addedCounts.timeLogs, 1);
   assert.deepEqual(storage.setCalls, [STORAGE_KEY]);
   assert.throws(
     () => service.commitJsonImport(prepared.token),
     (error) => error.code === 'IMPORT_PREVIEW_NOT_FOUND'
   );
+});
+
+test('导入 candidate 可确认、编辑确认或作废且 source 始终不被改写', () => {
+  const { service, now } = createHarness();
+  const imported = service.snapshot();
+  const direct = importedLog('candidate_direct', now());
+  const edited = { ...importedLog('candidate_edited', now()), startedAt: now() - 7_200_000, endedAt: now() - 5_400_000 };
+  const discarded = { ...importedLog('candidate_discarded', now()), startedAt: now() - 10_800_000, endedAt: now() - 9_000_000 };
+  imported.timeLogs.push(direct, edited, discarded);
+  const prepared = service.prepareJsonImport(JSON.stringify(imported));
+  service.previewJsonImport(prepared.token, { mode: IMPORT_MODE.INCREMENTAL });
+  service.commitJsonImport(prepared.token);
+
+  const confirmed = service.confirmCandidateLog(direct.id);
+  const editedConfirmed = service.updateLog(edited.id, { note: '编辑后确认' }).log;
+  service.deleteLog(discarded.id, true);
+
+  assert.deepEqual(
+    [confirmed.status, confirmed.source, editedConfirmed.status, editedConfirmed.source],
+    [LOG_STATUS.CONFIRMED, LOG_SOURCE.FILE, LOG_STATUS.CONFIRMED, LOG_SOURCE.FILE]
+  );
+  assert.equal(service.snapshot().timeLogs.some((item) => item.id === discarded.id), false);
 });
 
 test('冲突必须先预览并对每个冲突统一应用所选策略', () => {

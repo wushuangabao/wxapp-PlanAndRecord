@@ -95,13 +95,118 @@ function validOverrideException(override = {}) {
 
 function validLog() {
   return {
-    id: 'log_1', schemaVersion: 1, startedAt: NOW, endedAt: NOW + 3_600_000, durationMinutes: 60,
+    id: 'log_1', schemaVersion: 1, startedAt: NOW, endedAt: NOW + 3_600_000,
+    pausedDurationSeconds: 0, durationMinutes: 60,
     projectId: null, projectNameSnapshot: null, taskId: null, taskNameSnapshot: null,
     calendarEventId: null, calendarEventSummarySnapshot: null,
     note: '', status: 'confirmed', source: 'manual', originRuleId: null, originOccurrenceId: null,
     originRuleSummarySnapshot: null, tags: [], createdAt: NOW, updatedAt: NOW
   };
 }
+
+test('同版本旧 TimeLog 缺失暂停秒数时同步重算非边界派生分钟', () => {
+  const database = copySnapshot();
+  const legacyLog = {
+    ...validLog(),
+    endedAt: NOW + 61_000,
+    durationMinutes: 1,
+    updatedAt: NOW + 61_000
+  };
+  delete legacyLog.pausedDurationSeconds;
+  database.timeLogs.push(legacyLog);
+
+  const parsed = parseJsonSnapshot(JSON.stringify(database));
+  assert.equal(parsed.schemaVersion, 1);
+  assert.equal(parsed.timeLogs[0].pausedDurationSeconds, 0);
+  assert.equal(parsed.timeLogs[0].durationMinutes, 2);
+
+  const exported = JSON.parse(exportJson(parsed));
+  assert.equal(exported.schemaVersion, 1);
+  assert.equal(exported.timeLogs[0].pausedDurationSeconds, 0);
+  assert.equal(exported.timeLogs[0].durationMinutes, 2);
+});
+
+test('同版本旧 TimeLog 的 20 秒零分钟记录规范化为 1 分钟', () => {
+  const database = copySnapshot();
+  const legacyLog = {
+    ...validLog(),
+    endedAt: NOW + 20_000,
+    durationMinutes: 0,
+    updatedAt: NOW + 20_000
+  };
+  delete legacyLog.pausedDurationSeconds;
+  database.timeLogs.push(legacyLog);
+
+  const parsed = parseJsonSnapshot(JSON.stringify(database));
+
+  assert.equal(parsed.timeLogs[0].pausedDurationSeconds, 0);
+  assert.equal(parsed.timeLogs[0].durationMinutes, 1);
+});
+
+test('TimeLog 显式暂停为 0 时不会修正错误的派生分钟', () => {
+  const database = copySnapshot();
+  database.timeLogs.push({
+    ...validLog(),
+    endedAt: NOW + 61_000,
+    pausedDurationSeconds: 0,
+    durationMinutes: 1,
+    updatedAt: NOW + 61_000
+  });
+
+  assert.throws(
+    () => parseJsonSnapshot(JSON.stringify(database)),
+    (error) => error.code === 'IMPORT_SCHEMA_INVALID'
+  );
+});
+
+test('TimeLog 暂停秒数和派生分钟数必须严格符合秒级公式', () => {
+  const invalidCases = [
+    ['负数', { pausedDurationSeconds: -1 }],
+    ['小数', { pausedDurationSeconds: 0.5 }],
+    ['字符串', { pausedDurationSeconds: '0' }],
+    ['等于区间总秒数', { pausedDurationSeconds: 3_600 }],
+    ['大于区间总秒数', { pausedDurationSeconds: 3_601 }],
+    ['分钟数低于公式', { durationMinutes: 59 }],
+    ['分钟数高于公式', { durationMinutes: 61 }]
+  ];
+
+  for (const [label, patch] of invalidCases) {
+    const database = copySnapshot();
+    database.timeLogs.push({ ...validLog(), ...patch });
+    assert.throws(
+      () => validateJsonSnapshot(database),
+      (error) => error.code === 'IMPORT_SCHEMA_INVALID',
+      label
+    );
+  }
+});
+
+test('TimeLog 缺失暂停字段与显式 0 规范化后持久化内容相同', () => {
+  const explicit = copySnapshot();
+  explicit.timeLogs.push({
+    ...validLog(),
+    endedAt: NOW + 61_000,
+    durationMinutes: 2,
+    updatedAt: NOW + 61_000
+  });
+  const missing = JSON.parse(JSON.stringify(explicit));
+  const legacyLog = {
+    ...validLog(),
+    endedAt: NOW + 61_000,
+    durationMinutes: 1,
+    updatedAt: NOW + 61_000
+  };
+  delete legacyLog.pausedDurationSeconds;
+  missing.timeLogs = [legacyLog];
+
+  assert.equal(
+    persistedValueEquals(
+      parseJsonSnapshot(JSON.stringify(missing)),
+      parseJsonSnapshot(JSON.stringify(explicit))
+    ),
+    true
+  );
+});
 
 function createService(now = NOW) {
   class MemoryStorage {
@@ -121,6 +226,273 @@ test('合法的当前版本全量快照可以解析并返回克隆', () => {
   const parsed = parseJsonSnapshot(JSON.stringify(database));
   assert.equal(parsed.schemaVersion, 1);
   assert.notEqual(parsed, database);
+});
+
+test('JSON 快照的八类真实标题统一按 Unicode 码点 trim 和校验', () => {
+  const emoji = '🙂';
+  const titleFields = [
+    ['Wish', (database, title) => { database.wishes.push({ id: 'wish_1', title, createdAt: NOW, updatedAt: NOW }); }],
+    ['Project', (database, title) => { database.projects.push({ ...validProject(), title }); }],
+    ['Objective', (database, title) => { const project = validProject(); project.objectives[0].title = title; database.projects.push(project); }],
+    ['KeyResult', (database, title) => { const project = validProject(); project.objectives[0].keyResults[0].title = title; database.projects.push(project); }],
+    ['Task', (database, title) => { database.tasks.push({ ...validTask(), title }); }],
+    ['CalendarEvent', (database, title) => { database.calendarEvents.push({ ...validEvent(), title }); }],
+    ['RepeatRule', (database, title) => { database.repeatRules.push({ ...validRule(), title }); }],
+    ['override', (database, title) => {
+      database.repeatRules.push(validRule());
+      database.occurrenceExceptions.push(validOverrideException({ title }));
+    }]
+  ];
+
+  for (const [label, insert] of titleFields) {
+    const accepted = copySnapshot();
+    insert(accepted, `  ${emoji.repeat(25)}  `);
+    const parsed = parseJsonSnapshot(JSON.stringify(accepted));
+    const exported = JSON.stringify(parsed);
+    assert.equal(exported.includes(`  ${emoji}`), false, `${label} 应 trim`);
+    assert.equal(exported.includes(emoji.repeat(25)), true, `${label} 应接受 25 个 emoji`);
+
+    const rejected = copySnapshot();
+    insert(rejected, emoji.repeat(26));
+    assert.throws(
+      () => parseJsonSnapshot(JSON.stringify(rejected)),
+      (error) => error.code === 'IMPORT_SCHEMA_INVALID',
+      `${label} 应拒绝 26 个 emoji`
+    );
+  }
+});
+
+test('JSON 快照拒绝 Objective/KeyResult 空白标题', () => {
+  for (const field of ['objective', 'keyResult']) {
+    const database = copySnapshot();
+    const project = validProject();
+    if (field === 'objective') project.objectives[0].title = '   ';
+    else project.objectives[0].keyResults[0].title = '   ';
+    database.projects.push(project);
+    assert.throws(
+      () => parseJsonSnapshot(JSON.stringify(database)),
+      (error) => error.code === 'IMPORT_SCHEMA_INVALID'
+    );
+  }
+});
+
+test('JSON 稀疏 override 缺失 title 时从规则物化，显式 null 拒绝整次导入', () => {
+  const missing = copySnapshot();
+  missing.repeatRules.push(validRule());
+  const missingTitle = validOverrideException();
+  delete missingTitle.override.title;
+  missing.occurrenceExceptions.push(missingTitle);
+  const parsed = parseJsonSnapshot(JSON.stringify(missing));
+  assert.equal(parsed.occurrenceExceptions[0].override.title, '重复计划');
+
+  const explicitNull = copySnapshot();
+  explicitNull.repeatRules.push(validRule());
+  explicitNull.occurrenceExceptions.push(validOverrideException({ title: null }));
+  assert.throws(
+    () => parseJsonSnapshot(JSON.stringify(explicitNull)),
+    (error) => error.code === 'IMPORT_SCHEMA_INVALID'
+  );
+});
+
+test('JSON 修订 pattern 按频率规范无关字段且每周排序', () => {
+  const daily = copySnapshot();
+  daily.repeatRules.push({
+    ...validRule(),
+    revisions: [{
+      ...validRevision(),
+      frequency: 'daily',
+      weekdays: [6, 1],
+      monthDay: 18
+    }]
+  });
+  const parsedDaily = parseJsonSnapshot(JSON.stringify(daily)).repeatRules[0].revisions[0];
+  assert.deepEqual(
+    [parsedDaily.frequency, parsedDaily.weekdays, parsedDaily.monthDay],
+    ['daily', [], null]
+  );
+
+  const weekly = copySnapshot();
+  weekly.repeatRules.push({
+    ...validRule(),
+    revisions: [{ ...validRevision(), weekdays: [6, 1, 4], monthDay: 18 }]
+  });
+  const parsedWeekly = parseJsonSnapshot(JSON.stringify(weekly)).repeatRules[0].revisions[0];
+  assert.deepEqual([parsedWeekly.weekdays, parsedWeekly.monthDay], [[1, 4, 6], null]);
+
+  const monthly = copySnapshot();
+  monthly.repeatRules.push({
+    ...validRule(),
+    revisions: [{
+      ...validRevision(),
+      frequency: 'monthly',
+      weekdays: [6, 1],
+      monthDay: 31
+    }]
+  });
+  const parsedMonthly = parseJsonSnapshot(JSON.stringify(monthly)).repeatRules[0].revisions[0];
+  assert.deepEqual([parsedMonthly.weekdays, parsedMonthly.monthDay], [[], 31]);
+});
+
+test('JSON 重复规则修订链的有效区间不得重叠', () => {
+  const database = copySnapshot();
+  database.repeatRules.push({
+    ...validRule(),
+    revisions: [
+      { ...validRevision(), effectiveUntil: NOW + 60_000 },
+      {
+        ...validRevision(),
+        id: 'revision_2',
+        revision: 2,
+        effectiveFrom: NOW + 60_000,
+        startedAt: NOW + 60_000,
+        endedAt: NOW + 3_660_000
+      }
+    ]
+  });
+
+  assert.throws(
+    () => parseJsonSnapshot(JSON.stringify(database)),
+    (error) => error.code === 'IMPORT_SCHEMA_INVALID'
+  );
+});
+
+test('JSON 稀疏 override 依次继承八个字段并持久化完整对象', () => {
+  const inherited = {
+    title: '重复计划',
+    startedAt: NOW,
+    endedAt: NOW + 3_600_000,
+    priority: 1,
+    projectId: 'project_from_revision',
+    projectNameSnapshot: '修订项目',
+    taskId: 'task_from_revision',
+    taskNameSnapshot: '修订任务'
+  };
+
+  Object.keys(inherited).forEach((field) => {
+    const database = copySnapshot();
+    database.repeatRules.push({
+      ...validRule(),
+      revisions: [{
+        ...validRevision(),
+        projectId: inherited.projectId,
+        projectNameSnapshot: inherited.projectNameSnapshot,
+        taskId: inherited.taskId,
+        taskNameSnapshot: inherited.taskNameSnapshot
+      }]
+    });
+    const exception = validOverrideException();
+    delete exception.override[field];
+    database.occurrenceExceptions.push(exception);
+
+    const override = parseJsonSnapshot(JSON.stringify(database)).occurrenceExceptions[0].override;
+    assert.equal(override[field], inherited[field], `${field} 应从有效修订继承`);
+    assert.deepEqual(Object.keys(override).sort(), Object.keys(inherited).sort());
+  });
+});
+
+test('JSON override 显式 nullable 关联 null 不继承修订值', () => {
+  const database = copySnapshot();
+  database.repeatRules.push({
+    ...validRule(),
+    revisions: [{
+      ...validRevision(),
+      projectId: 'project_from_revision',
+      projectNameSnapshot: '修订项目',
+      taskId: 'task_from_revision',
+      taskNameSnapshot: '修订任务'
+    }]
+  });
+  database.occurrenceExceptions.push(validOverrideException({
+    projectId: null,
+    projectNameSnapshot: null,
+    taskId: null,
+    taskNameSnapshot: null
+  }));
+
+  const override = parseJsonSnapshot(JSON.stringify(database)).occurrenceExceptions[0].override;
+  assert.deepEqual(
+    [override.projectId, override.projectNameSnapshot, override.taskId, override.taskNameSnapshot],
+    [null, null, null, null]
+  );
+});
+
+test('JSON override 核心字段 null、缺规则、非唯一修订或非法物化区间整次拒绝', () => {
+  for (const field of ['title', 'startedAt', 'endedAt', 'priority']) {
+    const database = copySnapshot();
+    database.repeatRules.push(validRule());
+    database.occurrenceExceptions.push(validOverrideException({ [field]: null }));
+    assert.throws(
+      () => parseJsonSnapshot(JSON.stringify(database)),
+      (error) => error.code === 'IMPORT_SCHEMA_INVALID',
+      `${field} 显式 null 应拒绝`
+    );
+  }
+
+  const missingRule = copySnapshot();
+  missingRule.occurrenceExceptions.push(validOverrideException());
+  assert.throws(
+    () => parseJsonSnapshot(JSON.stringify(missingRule)),
+    (error) => error.code === 'IMPORT_SCHEMA_INVALID'
+  );
+
+  const noRevision = copySnapshot();
+  noRevision.repeatRules.push(validRule());
+  noRevision.occurrenceExceptions.push({
+    ...validOverrideException(),
+    occurrenceStart: NOW - 1
+  });
+  assert.throws(
+    () => parseJsonSnapshot(JSON.stringify(noRevision)),
+    (error) => error.code === 'IMPORT_SCHEMA_INVALID'
+  );
+
+  const multipleRevisions = copySnapshot();
+  multipleRevisions.repeatRules.push({
+    ...validRule(),
+    revisions: [
+      validRevision(),
+      { ...validRevision(), id: 'revision_2', revision: 2 }
+    ]
+  });
+  multipleRevisions.occurrenceExceptions.push(validOverrideException());
+  assert.throws(
+    () => parseJsonSnapshot(JSON.stringify(multipleRevisions)),
+    (error) => error.code === 'IMPORT_SCHEMA_INVALID'
+  );
+
+  const invalidRange = copySnapshot();
+  invalidRange.repeatRules.push(validRule());
+  const sparse = validOverrideException({ startedAt: NOW + 3_600_000 });
+  delete sparse.override.endedAt;
+  invalidRange.occurrenceExceptions.push(sparse);
+  assert.throws(
+    () => parseJsonSnapshot(JSON.stringify(invalidRange)),
+    (error) => error.code === 'IMPORT_SCHEMA_INVALID'
+  );
+});
+
+test('完整 override 导出再导入保持语义相等', () => {
+  const database = copySnapshot();
+  database.repeatRules.push(validRule());
+  database.occurrenceExceptions.push(validOverrideException());
+
+  const first = parseJsonSnapshot(JSON.stringify(database));
+  const second = parseJsonSnapshot(exportJson(first));
+  assert.equal(persistedValueEquals(first, second), true);
+});
+
+test('非法嵌套标题拒绝整快照且不修改输入对象', () => {
+  const database = copySnapshot();
+  database.wishes.push({ id: 'wish_1', title: '  保持原值  ', createdAt: NOW, updatedAt: NOW });
+  const project = validProject();
+  project.objectives[0].keyResults[0].title = '🙂'.repeat(26);
+  database.projects.push(project);
+
+  assert.throws(
+    () => parseJsonSnapshot(JSON.stringify(database)),
+    (error) => error.code === 'IMPORT_SCHEMA_INVALID'
+  );
+  assert.equal(database.wishes[0].title, '  保持原值  ');
 });
 
 test('解析会忽略未知字段，但保留已知字段的严格校验', () => {
@@ -400,6 +772,8 @@ test('任务、日历事件和重复规则字段类型与枚举严格校验', ()
   expectSchemaInvalid((database) => { database.tasks.push({ ...validTask(), status: 'active' }); });
   expectSchemaInvalid((database) => { database.tasks.push({ ...validTask(), status: 'inbox' }); });
   expectSchemaInvalid((database) => { database.tasks.push({ ...validTask(), completedAt: String(NOW) }); });
+  expectSchemaInvalid((database) => { database.tasks.push({ ...validTask(), completedAt: NOW }); });
+  expectSchemaInvalid((database) => { database.tasks.push({ ...validTask(), status: 'completed', completedAt: null }); });
   expectSchemaInvalid((database) => { database.calendarEvents.push({ ...validEvent(), endedAt: NOW }); });
   expectSchemaInvalid((database) => { database.calendarEvents.push({ ...validEvent(), priority: 4 }); });
   expectSchemaInvalid((database) => { database.repeatRules.push({ ...validRule(), revisions: [] }); });
@@ -460,6 +834,15 @@ test('override 的时间类型错误或逆序被拒绝', () => {
 
 test('override 的 priority 越界被拒绝', () => {
   expectSchemaInvalid((database) => { database.occurrenceExceptions.push(validOverrideException({ priority: 4 })); });
+  expectSchemaInvalid((database) => { database.occurrenceExceptions.push(validOverrideException({ priority: '2' })); });
+
+  const parsedInput = copySnapshot();
+  parsedInput.repeatRules.push(validRule());
+  parsedInput.occurrenceExceptions.push(validOverrideException({ priority: '2' }));
+  assert.throws(
+    () => parseJsonSnapshot(JSON.stringify(parsedInput)),
+    (error) => error.code === 'IMPORT_SCHEMA_INVALID'
+  );
 });
 
 test('override 的关联 ID 和名称快照类型错误被拒绝', () => {
@@ -506,26 +889,21 @@ test('日志时长不得超过墙钟分钟上限', () => {
   expectSchemaInvalid((database) => { database.timeLogs.push({ ...validLog(), durationMinutes: 61 }); });
 });
 
-test('日志允许零时长和扣除暂停后小于墙钟上限的时长，即时记录固定为 1 分钟', () => {
+test('日志拒绝即时、零分钟和与暂停后有效秒数不一致的时长', () => {
   const database = copySnapshot();
   database.timeLogs.push({ ...validLog(), id: 'log_instant', endedAt: NOW, durationMinutes: 1 });
   database.timeLogs.push({ ...validLog(), id: 'log_zero', durationMinutes: 0 });
-  database.timeLogs.push({ ...validLog(), id: 'log_paused', durationMinutes: 45, source: 'timer' });
-  assert.doesNotThrow(() => validateJsonSnapshot(database));
-
-  for (const durationMinutes of [0, 2]) {
-    const invalidDatabase = copySnapshot();
-    invalidDatabase.timeLogs.push({
-      ...validLog(),
-      id: `log_instant_${durationMinutes}`,
-      endedAt: NOW,
-      durationMinutes
-    });
-    assert.throws(
-      () => parseJsonSnapshot(JSON.stringify(invalidDatabase)),
-      (error) => error.code === 'IMPORT_SCHEMA_INVALID'
-    );
-  }
+  database.timeLogs.push({
+    ...validLog(),
+    id: 'log_paused',
+    pausedDurationSeconds: 900,
+    durationMinutes: 60,
+    source: 'timer'
+  });
+  assert.throws(
+    () => validateJsonSnapshot(database),
+    (error) => error.code === 'IMPORT_SCHEMA_INVALID'
+  );
 });
 
 test('根 timer 拒绝与状态机矛盾的时间戳组合', () => {
@@ -567,6 +945,7 @@ test('JSON 导入将旧 ended 计时转为可确认的恢复草稿，而不恢�
   assert.deepEqual(parsed.recoveryDraft.candidatePreview, {
     startedAt: NOW,
     endedAt: NOW + 60_000,
+    pausedDurationSeconds: 0,
     durationMinutes: 1,
     source: 'timer'
   });
@@ -615,6 +994,7 @@ test('JSON 导入会兼容恢复草稿中旧 ended 计时器的完成时间字�
   assert.deepEqual(parsed.recoveryDraft.candidatePreview, {
     startedAt: NOW,
     endedAt: NOW + 60_000,
+    pausedDurationSeconds: 0,
     durationMinutes: 1,
     source: 'timer'
   });
@@ -699,6 +1079,7 @@ test('recoveryDraft 的候选预览必须是完整且有效的计时器建议', 
     candidatePreview: {
       startedAt: NOW,
       endedAt: NOW + 8_000,
+      pausedDurationSeconds: 0,
       durationMinutes: 1,
       source: 'timer'
     },
@@ -708,10 +1089,10 @@ test('recoveryDraft 的候选预览必须是完整且有效的计时器建议', 
   assert.deepEqual(parsed.recoveryDraft.candidatePreview, database.recoveryDraft.candidatePreview);
 
   for (const candidatePreview of [
-    { startedAt: NOW, endedAt: NOW, durationMinutes: 1, source: 'timer' },
-    { startedAt: NOW, endedAt: NOW + 8_000, durationMinutes: 0, source: 'timer' },
-    { startedAt: NOW, endedAt: NOW + 8_000, durationMinutes: 1, source: 'manual' },
-    { startedAt: NOW, endedAt: NOW + 8_000, durationMinutes: 1 }
+    { startedAt: NOW, endedAt: NOW, pausedDurationSeconds: 0, durationMinutes: 1, source: 'timer' },
+    { startedAt: NOW, endedAt: NOW + 8_000, pausedDurationSeconds: 0, durationMinutes: 0, source: 'timer' },
+    { startedAt: NOW, endedAt: NOW + 8_000, pausedDurationSeconds: 0, durationMinutes: 1, source: 'manual' },
+    { startedAt: NOW, endedAt: NOW + 8_000, pausedDurationSeconds: 0, durationMinutes: 1 }
   ]) {
     expectSchemaInvalid((invalidDatabase) => {
       invalidDatabase.recoveryDraft = {
@@ -730,6 +1111,7 @@ test('recoveryDraft 的候选预览必须是完整且有效的计时器建议', 
       candidatePreview: {
         startedAt: NOW,
         endedAt: NOW + 60_000,
+        pausedDurationSeconds: 0,
         durationMinutes: 2,
         source: 'timer'
       },

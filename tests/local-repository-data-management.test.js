@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const { APP_SCHEMA_VERSION } = require('../miniprogram/domain/constants');
-const { createInitialDatabase, clone } = require('../miniprogram/domain/entities');
+const { createInitialDatabase, createTimeLog, clone } = require('../miniprogram/domain/entities');
 const { DomainError, StorageError } = require('../miniprogram/domain/errors');
 const {
   LocalRepository,
@@ -95,6 +95,85 @@ test('MemoryStorageAdapter.remove 只删除指定键', () => {
   assert.equal(storage.get('remove'), undefined);
 });
 
+test('MemoryStorageAdapter.has 区分键缺失与 falsy 原值', () => {
+  const missing = new MemoryStorageAdapter();
+  assert.equal(missing.has(STORAGE_KEY), false);
+
+  for (const value of ['', 0, false, null]) {
+    const storage = new MemoryStorageAdapter(value);
+    assert.equal(storage.has(STORAGE_KEY), true);
+  }
+});
+
+test('initialize 对已有 falsy 原值报损坏且全程零写入', () => {
+  for (const value of ['', 0, false, null]) {
+    const storage = new MemoryStorageAdapter(value);
+    const calls = { set: 0, remove: 0 };
+    const originalSet = storage.set.bind(storage);
+    const originalRemove = storage.remove.bind(storage);
+    storage.set = (...args) => { calls.set += 1; return originalSet(...args); };
+    storage.remove = (...args) => { calls.remove += 1; return originalRemove(...args); };
+    const repository = new LocalRepository(storage);
+
+    assert.throws(
+      () => repository.initialize(),
+      (error) => error instanceof StorageError && error.code === 'DATA_CORRUPTED'
+    );
+    assert.equal(storage.has(STORAGE_KEY), true);
+    assert.equal(storage.get(STORAGE_KEY), value);
+    assert.deepEqual(calls, { set: 0, remove: 0 });
+  }
+});
+
+test('initialize 对低版本资料库报不支持且不再写迁移备份', () => {
+  const stored = createInitialDatabase(1_700_000_000_000);
+  stored.schemaVersion = APP_SCHEMA_VERSION - 1;
+  const storage = new MemoryStorageAdapter(stored);
+  const calls = { set: 0, remove: 0 };
+  const originalSet = storage.set.bind(storage);
+  const originalRemove = storage.remove.bind(storage);
+  storage.set = (...args) => { calls.set += 1; return originalSet(...args); };
+  storage.remove = (...args) => { calls.remove += 1; return originalRemove(...args); };
+
+  assert.throws(
+    () => new LocalRepository(storage).initialize(),
+    (error) => error instanceof StorageError && error.code === 'DATA_VERSION_UNSUPPORTED'
+  );
+  assert.equal(storage.get(BACKUP_KEY), undefined);
+  assert.deepEqual(calls, { set: 0, remove: 0 });
+});
+
+test('initialize 在键枚举或主值读取失败时停止启动且零写入', () => {
+  const cases = [
+    {
+      label: '枚举失败',
+      storage: {
+        has() { throw new Error('enumeration failed'); },
+        get() { throw new Error('get should not run'); }
+      }
+    },
+    {
+      label: '读取失败',
+      storage: {
+        has() { return true; },
+        get() { throw new Error('read failed'); }
+      }
+    }
+  ];
+
+  for (const item of cases) {
+    const writes = [];
+    item.storage.set = (...args) => writes.push(['set', ...args]);
+    item.storage.remove = (...args) => writes.push(['remove', ...args]);
+    assert.throws(
+      () => new LocalRepository(item.storage).initialize(),
+      (error) => error instanceof StorageError && error.code === 'DATA_CORRUPTED',
+      item.label
+    );
+    assert.deepEqual(writes, [], item.label);
+  }
+});
+
 test('initialize 严格校验合法当前版本快照且不重复写入', () => {
   const storage = new FaultStorage();
   const stored = createInitialDatabase(1_700_000_000_000);
@@ -111,6 +190,200 @@ test('initialize 严格校验合法当前版本快照且不重复写入', () => 
   assert.deepEqual(storage.get(STORAGE_KEY), stored);
   assert.deepEqual(storage.setCalls, []);
   assert.deepEqual(storage.removeCalls, []);
+});
+
+test('initialize 对同版本缺失暂停字段的日志只规范化内存且零写入', () => {
+  const storage = new FaultStorage();
+  const stored = createInitialDatabase(1_700_000_000_000);
+  const legacyLog = createTimeLog({
+    startedAt: 1_700_000_000_000,
+    endedAt: 1_700_000_061_000,
+    source: 'manual'
+  }, 1_700_000_061_000);
+  legacyLog.durationMinutes = 1;
+  delete legacyLog.pausedDurationSeconds;
+  stored.timeLogs.push(legacyLog);
+  storage.set(STORAGE_KEY, stored);
+  storage.setCalls.length = 0;
+  const repository = new LocalRepository(storage, { now: () => 1_700_000_061_001 });
+
+  const loaded = repository.initialize();
+
+  assert.equal(loaded.schemaVersion, 1);
+  assert.equal(loaded.timeLogs[0].pausedDurationSeconds, 0);
+  assert.equal(loaded.timeLogs[0].durationMinutes, 2);
+  assert.equal(Object.hasOwn(storage.get(STORAGE_KEY).timeLogs[0], 'pausedDurationSeconds'), false);
+  assert.equal(storage.get(STORAGE_KEY).timeLogs[0].durationMinutes, 1);
+  assert.equal(storage.get(BACKUP_KEY), undefined);
+  assert.deepEqual(storage.setCalls, []);
+  assert.deepEqual(storage.removeCalls, []);
+});
+
+test('transaction 在写入前校验完整快照并对非法 TimeLog 零写入', () => {
+  const storage = new FaultStorage();
+  const { repository } = createRepository(storage);
+  const oldSnapshot = repository.read();
+  storage.setCalls.length = 0;
+
+  assert.throws(
+    () => repository.transaction((database) => {
+      const log = createTimeLog({
+        startedAt: 1_700_000_000_000,
+        endedAt: 1_700_000_060_000,
+        source: 'manual'
+      }, 1_700_000_060_000);
+      log.pausedDurationSeconds = 60;
+      database.timeLogs.push(log);
+    }),
+    (error) => error instanceof DomainError && error.code === 'IMPORT_SCHEMA_INVALID'
+  );
+
+  assert.deepEqual(repository.cache, oldSnapshot);
+  assert.deepEqual(storage.get(STORAGE_KEY), oldSnapshot);
+  assert.deepEqual(storage.setCalls, []);
+});
+
+test('transaction 主快照写入后抛错时恢复旧存储和缓存，同一操作可安全重试', () => {
+  const storage = new FaultStorage();
+  const { repository } = createRepository(storage);
+  const oldSnapshot = repository.read();
+  storage.setCalls.length = 0;
+  storage.failSetAfterWriteOnce = true;
+
+  const addWish = (database) => {
+    database.wishes.push({
+      id: 'wish_transaction_retry',
+      title: '事务重试',
+      createdAt: oldSnapshot.updatedAt,
+      updatedAt: oldSnapshot.updatedAt
+    });
+  };
+
+  assert.throws(
+    () => repository.transaction(addWish),
+    (error) => error instanceof StorageError
+      && error.code === 'WRITE_FAILED'
+      && /已保留/.test(error.message)
+  );
+
+  assert.deepEqual(storage.get(STORAGE_KEY), oldSnapshot);
+  assert.deepEqual(repository.cache, oldSnapshot);
+  assert.deepEqual(repository.read(), oldSnapshot);
+  assert.deepEqual(storage.setCalls, [STORAGE_KEY, STORAGE_KEY]);
+
+  const retried = repository.transaction(addWish).database;
+  assert.equal(retried.wishes.filter((wish) => wish.id === 'wish_transaction_retry').length, 1);
+  assert.equal(storage.get(STORAGE_KEY).wishes.filter((wish) => wish.id === 'wish_transaction_retry').length, 1);
+  assert.deepEqual(storage.setCalls, [STORAGE_KEY, STORAGE_KEY, STORAGE_KEY]);
+});
+
+test('transaction 原主快照不存在时写后失败会删除主键并恢复缓存', () => {
+  const storage = new FaultStorage();
+  const { repository } = createRepository(storage);
+  const oldSnapshot = repository.read();
+  storage.remove(STORAGE_KEY);
+  storage.setCalls.length = 0;
+  storage.removeCalls.length = 0;
+  storage.failSetAfterWriteOnce = true;
+
+  assert.throws(
+    () => repository.transaction((database) => {
+      database.wishes.push({
+        id: 'wish_transaction_missing_main',
+        title: '缺失主键回滚',
+        createdAt: oldSnapshot.updatedAt,
+        updatedAt: oldSnapshot.updatedAt
+      });
+    }),
+    (error) => error instanceof StorageError
+      && error.code === 'WRITE_FAILED'
+      && /已保留/.test(error.message)
+  );
+
+  assert.equal(storage.get(STORAGE_KEY), undefined);
+  assert.deepEqual(repository.cache, oldSnapshot);
+  assert.deepEqual(repository.read(), oldSnapshot);
+  assert.deepEqual(storage.setCalls, [STORAGE_KEY]);
+  assert.deepEqual(storage.removeCalls, [STORAGE_KEY]);
+});
+
+test('transaction 补偿失败时恢复缓存并报告持久化结果不确定', () => {
+  const storage = new FaultStorage();
+  const { repository } = createRepository(storage);
+  const oldSnapshot = repository.read();
+  storage.setCalls.length = 0;
+  storage.failSetAfterWriteOnce = true;
+  storage.failSetOnCall = 2;
+
+  const error = captureThrown(() => repository.transaction((database) => {
+    database.wishes.push({
+      id: 'wish_transaction_uncertain',
+      title: '补偿失败',
+      createdAt: oldSnapshot.updatedAt,
+      updatedAt: oldSnapshot.updatedAt
+    });
+  }));
+
+  assert.ok(error instanceof StorageError);
+  assert.equal(error.code, 'WRITE_FAILED');
+  assert.match(error.message, /无法确认原数据是否完整保留/);
+  assert.deepEqual(repository.cache, oldSnapshot);
+  assert.deepEqual(repository.read(), oldSnapshot);
+  assert.equal(
+    storage.get(STORAGE_KEY).wishes.some((wish) => wish.id === 'wish_transaction_uncertain'),
+    true
+  );
+  assert.deepEqual(storage.setCalls, [STORAGE_KEY, STORAGE_KEY]);
+});
+
+test('transaction 显式 updatedAt 会持久化且不调用 repository.now', () => {
+  const storage = new FaultStorage();
+  let nowCalls = 0;
+  const repository = new LocalRepository(storage, {
+    now: () => {
+      nowCalls += 1;
+      return 1_700_000_000_000;
+    }
+  });
+  repository.initialize();
+  const updatedAt = 1_700_000_000_100;
+  nowCalls = 0;
+  storage.setCalls.length = 0;
+
+  const database = repository.transaction((next) => {
+    next.localProfile.updatedAt = updatedAt;
+  }, { updatedAt }).database;
+
+  assert.equal(nowCalls, 0);
+  assert.equal(database.updatedAt, updatedAt);
+  assert.equal(storage.get(STORAGE_KEY).updatedAt, updatedAt);
+  assert.equal(storage.get(STORAGE_KEY).localProfile.updatedAt, updatedAt);
+  assert.deepEqual(storage.setCalls, [STORAGE_KEY]);
+});
+
+test('成功事务会将读入时补全的暂停 0 和重算分钟自然持久化', () => {
+  const storage = new FaultStorage();
+  const stored = createInitialDatabase(1_700_000_000_000);
+  const legacyLog = createTimeLog({
+    startedAt: 1_700_000_000_000,
+    endedAt: 1_700_000_061_000,
+    source: 'manual'
+  }, 1_700_000_061_000);
+  legacyLog.durationMinutes = 1;
+  delete legacyLog.pausedDurationSeconds;
+  stored.timeLogs.push(legacyLog);
+  storage.set(STORAGE_KEY, stored);
+  storage.setCalls.length = 0;
+  const repository = new LocalRepository(storage, { now: () => 1_700_000_061_001 });
+  repository.initialize();
+
+  repository.transaction((database) => {
+    database.localProfile.updatedAt = 1_700_000_061_001;
+  });
+
+  assert.equal(storage.get(STORAGE_KEY).timeLogs[0].pausedDurationSeconds, 0);
+  assert.equal(storage.get(STORAGE_KEY).timeLogs[0].durationMinutes, 2);
+  assert.deepEqual(storage.setCalls, [STORAGE_KEY]);
 });
 
 test('initialize 兼容旧 idle 计时器的 endedAt，并只在读取结果中剥离', () => {
@@ -159,6 +432,7 @@ test('initialize 将旧 ended 计时安全降级为可核实的恢复草稿', ()
   assert.deepEqual(loaded.recoveryDraft.candidatePreview, {
     startedAt,
     endedAt,
+    pausedDurationSeconds: 0,
     durationMinutes: 1,
     source: 'timer'
   });
@@ -244,10 +518,7 @@ test('initialize 允许已保存恢复草稿保留反向暂停区间供用户修
   assert.deepEqual(storage.get(STORAGE_KEY), stored);
   assert.deepEqual(storage.setCalls, []);
   assert.deepEqual(storage.removeCalls, []);
-  assert.throws(
-    () => repository.replace(loaded),
-    (error) => error instanceof DomainError && error.code === 'IMPORT_SCHEMA_INVALID'
-  );
+  assert.doesNotThrow(() => repository.replace(loaded));
 });
 
 test('initialize 对可恢复计时仍严格校验必需字段、容器、枚举、时间戳和草稿类型', () => {
@@ -712,4 +983,29 @@ test('WxStorageAdapter.remove 只调用目标键的 wx.removeStorageSync', () =>
   }
 
   assert.deepEqual(calls, [['removeStorageSync', 'target-key']]);
+});
+
+test('WxStorageAdapter.has 只通过同步键列表判断键是否存在', () => {
+  const previousWx = global.wx;
+  const calls = [];
+  global.wx = {
+    getStorageInfoSync() {
+      calls.push('getStorageInfoSync');
+      return { keys: ['stored-falsy'] };
+    },
+    getStorageSync() {
+      calls.push('getStorageSync');
+      return '';
+    }
+  };
+
+  try {
+    const storage = new WxStorageAdapter();
+    assert.equal(storage.has('stored-falsy'), true);
+    assert.equal(storage.has('missing'), false);
+  } finally {
+    if (previousWx === undefined) delete global.wx; else global.wx = previousWx;
+  }
+
+  assert.deepEqual(calls, ['getStorageInfoSync', 'getStorageInfoSync']);
 });

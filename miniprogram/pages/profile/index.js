@@ -563,7 +563,6 @@ Page({
     tagStats: [],
     projectStats: [],
     variance: [],
-    overlaps: [],
     review: null
   },
 
@@ -592,7 +591,6 @@ Page({
         })),
         projectStats: statistics.projects,
         variance: statistics.planVariance.events,
-        overlaps: statistics.overlaps,
         review: statistics.weeklyReview
       });
     } catch (error) {

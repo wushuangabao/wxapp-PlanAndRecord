@@ -1,0 +1,3 @@
+:host { display: block; min-width: 0; }
+.second-time-picker { display: block; width: 100%; }
+.second-time-picker__field { box-sizing: border-box; display: flex; align-items: center; width: 100%; min-height: 72rpx; padding: 16rpx 20rpx; overflow: hidden; border-radius: 12rpx; background: #f3f1ed; color: #343a36; font-size: 26rpx; line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }

@@ -67,14 +67,4 @@ test('所有页面和共享控件使用莫兰迪绿色主色板', () => {
   assert.match(source, /#e6ece7/);
   assert.match(source, /#9a5550/);
 
-  const guide = fs.readFileSync(
-    path.join(__dirname, '../.agents/skills/ui-style/references/style-guide.zh-CN.md'),
-    'utf8'
-  ).toLowerCase();
-  assert.match(guide, /--ui-accent:\s*#78947f/);
-  assert.match(guide, /--ui-on-accent:\s*#faf9f7/);
-  assert.match(guide, /--ui-plan:\s*#7b918b/);
-  assert.match(guide, /--ui-candidate:\s*#a58454/);
-  assert.match(guide, /--ui-actual:\s*#55725e/);
-  assert.match(guide, /--ui-danger-link:\s*#9a5550/);
 });

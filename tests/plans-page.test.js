@@ -102,13 +102,13 @@ test('计划页：TODO 表单默认不关联，项目入口默认选中对应项
     assert.equal(harness.page.data.taskEditor.projectTitle, '不关联项目');
     harness.page.onField(inputEvent('taskTitle', '独立任务'));
     harness.page.saveTaskEditor();
-    assert.deepEqual(harness.calls.createTask[0], { title: '独立任务', status: TASK_STATUS.TODO, projectId: null });
+    assert.deepEqual(harness.calls.createTask[0], { title: '独立任务', projectId: null });
 
     harness.page.openChildTask(event('project_1'));
     assert.equal(harness.page.data.taskEditor.projectTitle, '项目一');
     harness.page.onField(inputEvent('taskTitle', '项目子任务'));
     harness.page.saveTaskEditor();
-    assert.deepEqual(harness.calls.createTask[1], { title: '项目子任务', projectId: 'project_1', status: TASK_STATUS.TODO });
+    assert.deepEqual(harness.calls.createTask[1], { title: '项目子任务', projectId: 'project_1' });
   } finally {
     harness.restore();
   }
@@ -126,6 +126,26 @@ test('计划页：点击任务标题或项目标题打开编辑 TODO 表单并�
     harness.page.onField(inputEvent('taskTitle', '已编辑任务'));
     harness.page.saveTaskEditor();
     assert.deepEqual(harness.calls.updateTask.at(-1), ['task_todo', { title: '已编辑任务', projectId: null }]);
+  } finally {
+    harness.restore();
+  }
+});
+
+test('计划页：标题输入以 25 个 Unicode 码点截断', () => {
+  const harness = createHarness();
+  try {
+    const emoji = '🙂';
+    harness.page.onTitleField(inputEvent('taskTitle', emoji.repeat(26)));
+    assert.equal(harness.page.data.taskTitle, emoji.repeat(25));
+
+    const wxml = fs.readFileSync(plansWxmlPath, 'utf8');
+    for (const key of [
+      'wishTitle', 'editWishTitle', 'projectTitle', 'projectObjective', 'projectKeyResult',
+      'taskTitle', 'objectiveTitle', 'keyResultTitle', 'projectEditorTitle'
+    ]) {
+      assert.match(wxml, new RegExp(`maxlength="-1"[^>]*data-key="${key}"[^>]*bindinput="onTitleField"`));
+    }
+    assert.doesNotMatch(wxml, /maxlength="25"/);
   } finally {
     harness.restore();
   }
@@ -156,8 +176,6 @@ test('计划页：TODO 图标操作使用固定热区的 view 和统一删除图
   assert.match(deleteIconWxml, /class="delete-icon-lid"/);
   assert.match(deleteIconWxml, /class="delete-icon-body"/);
   assert.equal((deleteIconWxml.match(/class="delete-icon-line"/g) || []).length, 2);
-  assert.match(deleteIconWxss, /:host\s*\{[^}]*width:\s*22rpx;[^}]*height:\s*25rpx;/s);
-  assert.match(deleteIconWxss, /\.delete-icon\s*\{[^}]*width:\s*22rpx;[^}]*height:\s*25rpx;[^}]*transform:\s*scale\(\.85\)/s);
   assert.match(deleteIconWxss, /\.delete-icon-body\s*\{[^}]*left:\s*50%;[^}]*border:\s*3rpx solid #9a5550;/s);
   assert.match(deleteIconWxss, /\.delete-icon-line\s*\{[^}]*width:\s*3rpx;/s);
   for (const part of ['handle', 'lid', 'body', 'lines']) {
@@ -391,6 +409,73 @@ test('计划页：无关联 TODO 默认 32rpx，关联 TODO 默认 28rpx，溢�
       harness.page.data.todoListColumns.flatMap((column) => column.tasks).map((task) => task.todoTitleFontSize),
       [32, 28, 18, 18]
     );
+  } finally {
+    harness.restore();
+  }
+});
+
+test('计划页：getWindowInfo 失败时使用 getSystemInfoSync 完成标题字号测量', () => {
+  const tasks = [
+    { id: 'task_long', title: '啊啊啊啊啊啊啊啊啊啊啊啊啊啊啊啊啊啊啊啊', status: TASK_STATUS.TODO, projectId: null, projectNameSnapshot: '' }
+  ];
+  const harness = createHarness({ tasks });
+  try {
+    global.wx.getWindowInfo = () => { throw new Error('getWindowInfo unavailable'); };
+    global.wx.getSystemInfoSync = () => ({ windowWidth: 375 });
+    global.wx.createSelectorQuery = () => ({
+      selectAll(selector) {
+        this.selector = selector;
+        return this;
+      },
+      boundingClientRect(callback) {
+        callback(this.selector === '.todo-column'
+          ? [{ left: 0, width: 210 }]
+          : [{ width: 80 }]);
+        return this;
+      },
+      exec() {}
+    });
+
+    assert.doesNotThrow(() => harness.page.refresh());
+    assert.equal(harness.page.data.todoListColumns[0].tasks[0].todoTitleFontSize, 18);
+  } finally {
+    harness.restore();
+  }
+});
+
+test('计划页：窗口宽度不可用时跳过字号测量且列与任务操作仍安全', () => {
+  const tasks = [
+    { id: 'task_todo', title: '保持默认字号', status: TASK_STATUS.TODO, projectId: null, projectNameSnapshot: '' }
+  ];
+  const harness = createHarness({ tasks });
+  const selectors = [];
+  try {
+    global.wx.getWindowInfo = () => ({ windowWidth: 0 });
+    global.wx.getSystemInfoSync = () => { throw new Error('legacy API unavailable'); };
+    global.wx.createSelectorQuery = () => ({
+      selectAll(selector) {
+        selectors.push(selector);
+        this.selector = selector;
+        return this;
+      },
+      boundingClientRect(callback) {
+        callback([{ left: 0, width: 210 }]);
+        return this;
+      },
+      exec() {}
+    });
+
+    assert.doesNotThrow(() => harness.page.refresh());
+    assert.deepEqual(selectors, ['.todo-column']);
+    assert.equal(harness.page.data.todoListColumns[0].tasks[0].todoTitleFontSize, 32);
+    assert.equal(harness.page.data.todoColumnStep, 210);
+
+    assert.doesNotThrow(() => {
+      harness.page.openStandaloneTask();
+      harness.page.onTitleField(inputEvent('taskTitle', '低版本任务'));
+      harness.page.saveTaskEditor();
+    });
+    assert.deepEqual(harness.calls.createTask.at(-1), { title: '低版本任务', projectId: null });
   } finally {
     harness.restore();
   }

@@ -1,0 +1,9 @@
+<picker
+  class="second-time-picker"
+  mode="multiSelector"
+  range="{{columns}}"
+  value="{{indices}}"
+  bindchange="onPickerChange"
+>
+  <view class="second-time-picker__field">{{value || '00:00:00'}}</view>
+</picker>

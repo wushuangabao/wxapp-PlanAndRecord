@@ -1,0 +1,14 @@
+<view class="pause-duration" aria-label="暂停时长">
+  <view class="pause-duration__part">
+    <input class="pause-duration__input" type="number" value="{{hours}}" data-key="hours" bindinput="onPartInput" bindblur="onPartBlur" />
+    <text class="pause-duration__unit">时</text>
+  </view>
+  <view class="pause-duration__part">
+    <input class="pause-duration__input" type="number" value="{{minutes}}" data-key="minutes" bindinput="onPartInput" bindblur="onPartBlur" />
+    <text class="pause-duration__unit">分</text>
+  </view>
+  <view class="pause-duration__part">
+    <input class="pause-duration__input" type="number" value="{{seconds}}" data-key="seconds" bindinput="onPartInput" bindblur="onPartBlur" />
+    <text class="pause-duration__unit">秒</text>
+  </view>
+</view>

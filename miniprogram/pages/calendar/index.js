@@ -1,6 +1,8 @@
 const { MAX_TAGS_PER_LOG } = require('../../domain/constants');
 const { parseLocalDateTime } = require('../../domain/time');
 const { normalizeTags } = require('../../domain/tags');
+const { limitTitleCodePoints } = require('../../domain/validation');
+const { resolveEditedTimestamp, timePickerState } = require('../../utils/log-time-editor');
 const { rangeForView, shiftAnchor } = require('../../utils/date-range');
 const {
   defaultDateTime,
@@ -132,6 +134,27 @@ function associationInput(option) {
   };
 }
 
+function secondTimeValue(value) {
+  return /^\d{2}:\d{2}$/.test(value || '') ? `${value}:00` : value;
+}
+
+function resolveLogTimestamp(originalTimestamp, edited, date, time) {
+  return resolveEditedTimestamp({
+    originalTimestamp,
+    edited,
+    date,
+    time: secondTimeValue(time)
+  });
+}
+
+function overlapLabel(overlapMeta) {
+  if (!overlapMeta || !overlapMeta.totalCount) return '';
+  const counts = [];
+  if (overlapMeta.confirmedCount > 0) counts.push(`实际 ${overlapMeta.confirmedCount} 条`);
+  if (overlapMeta.candidateCount > 0) counts.push(`候选 ${overlapMeta.candidateCount} 条`);
+  return counts.length ? `与其他记录重叠：${counts.join('、')}` : '';
+}
+
 Page({
   data: {
     view: 'week',
@@ -159,9 +182,13 @@ Page({
     editorEnd: '',
     editorPriority: 1,
     logEditor: null,
-    logDate: '',
-    logStart: '',
-    logEnd: '',
+    logStartDate: '',
+    logStartTimeValue: '',
+    logStartTimeEdited: false,
+    logEndDate: '',
+    logEndTimeValue: '',
+    logEndTimeEdited: false,
+    logPausedDurationSeconds: 0,
     logNote: '',
     logTags: [],
     logTagInputVisible: false,
@@ -205,7 +232,14 @@ Page({
         return {
           ...item,
           displayTime: `${formatDateTime(item.startedAt)} – ${formatDateTime(item.endedAt)}`,
-          displayKind: item.type === 'plan' ? '计划' : item.type === 'candidate' ? '候选' : '实际',
+          displayKind: item.virtual
+            ? '重复计划·待确认'
+            : item.type === 'candidate'
+              ? '候选记录'
+              : item.type === 'plan'
+                ? '计划'
+                : '实际记录',
+          displayOverlap: overlapLabel(item.overlapMeta),
           priority: item.priority || 1,
           canAssociate,
           canEditPlan: item.type === 'plan'
@@ -248,6 +282,10 @@ Page({
 
   onField(event) {
     this.setData({ [event.currentTarget.dataset.key]: event.detail.value });
+  },
+
+  onTitleField(event) {
+    this.setData({ [event.currentTarget.dataset.key]: limitTitleCodePoints(event.detail.value) });
   },
 
   onPicker(event) {
@@ -315,7 +353,7 @@ Page({
         ? service.confirmVirtualOccurrence(item)
         : service.confirmCandidateLog(item.id);
       writeRecentLogHighlight(this.currentSnapshot, log && log.id);
-      showSaved('候选已确认');
+      showSaved(item.virtual ? '重复计划已确认' : '候选记录已确认');
       this.refresh();
     } catch (error) {
       showError(error);
@@ -327,9 +365,20 @@ Page({
     wx.showModal({ title: '作废候选记录', content: '作废后不会写入实际投入。', success: (result) => {
       if (!result.confirm) return;
       try {
-        if (item.virtual) getService().skipOccurrence(item.ruleId, item.occurrenceStart);
-        else getService().deleteLog(item.id, true);
+        getService().deleteLog(item.id, true);
         showSaved('候选已作废');
+        this.refresh();
+      } catch (error) { showError(error); }
+    } });
+  },
+
+  skipVirtualOccurrence(event) {
+    const item = event.currentTarget.dataset.item;
+    wx.showModal({ title: '跳过重复计划', content: '跳过后本次重复计划不会再出现。', success: (result) => {
+      if (!result.confirm) return;
+      try {
+        getService().skipOccurrence(item.ruleId, item.occurrenceStart);
+        showSaved('本次重复计划已跳过');
         this.refresh();
       } catch (error) { showError(error); }
     } });
@@ -422,11 +471,43 @@ Page({
 
   onEditorField(event) {
     const key = event.currentTarget.dataset.key;
-    this.setData({ [key]: event.detail.value }, () => {
-      if (this.data.logEditor && ['logDate', 'logStart', 'logEnd'].includes(key)) {
+    const legacyLogFields = {
+      logDate: ['logStartDate', 'logEndDate'],
+      logStart: ['logStartTimeValue'],
+      logEnd: ['logEndTimeValue']
+    };
+    const targetKeys = legacyLogFields[key] || [key];
+    const updates = {};
+    targetKeys.forEach((targetKey) => {
+      updates[targetKey] = targetKey.includes('TimeValue')
+        ? secondTimeValue(event.detail.value)
+        : event.detail.value;
+    });
+    if (key === 'logDate' || key === 'logStart') updates.logStartTimeEdited = true;
+    if (key === 'logDate' || key === 'logEnd') updates.logEndTimeEdited = true;
+    this.setData(updates, () => {
+      if (this.data.logEditor && legacyLogFields[key]) {
         this.refreshLogPlanOptions();
       }
     });
+  },
+
+  onLogDateChange(event) {
+    const { key, editedKey } = event.currentTarget.dataset;
+    this.setData({ [key]: event.detail.value, [editedKey]: true }, () => {
+      this.refreshLogPlanOptions();
+    });
+  },
+
+  onLogTimeChange(event) {
+    const { key, editedKey } = event.currentTarget.dataset;
+    this.setData({ [key]: event.detail.value, [editedKey]: true }, () => {
+      this.refreshLogPlanOptions();
+    });
+  },
+
+  onLogPausedDurationChange(event) {
+    this.setData({ logPausedDurationSeconds: event.detail.value });
   },
 
   chooseEditorPriority(event) {
@@ -440,7 +521,7 @@ Page({
   saveOccurrenceOverride() {
     try {
       const item = this.data.editor;
-      getService().overrideOccurrence(item.ruleId, item.occurrenceStart, {
+      const result = getService().overrideOccurrence(item.ruleId, item.occurrenceStart, {
         title: this.data.editorTitle,
         startedAt: parseLocalDateTime(this.data.editorDate, this.data.editorStart),
         endedAt: parseLocalDateTime(this.data.editorDate, this.data.editorEnd),
@@ -448,8 +529,9 @@ Page({
         taskId: item.taskId,
         taskNameSnapshot: item.taskNameSnapshot
       });
+      writeRecentLogHighlight(this.currentSnapshot, result && result.log && result.log.id);
       this.closeOccurrenceEditor();
-      showSaved('本次实例已修改');
+      showSaved('本次实例已修改并确认');
       this.refresh();
     } catch (error) { showError(error); }
   },
@@ -519,11 +601,17 @@ Page({
       currentPlan = { options: planSelection.options, index: 0 };
     }
     this.logPlanSelectionRange = planSelection.range;
+    this.logOriginalStartedAt = item.startedAt;
+    this.logOriginalEndedAt = item.endedAt;
     this.setData({
       logEditor: item,
-      logDate: start.date,
-      logStart: start.time,
-      logEnd: end.time,
+      logStartDate: start.date,
+      logStartTimeValue: timePickerState(item.startedAt).value,
+      logStartTimeEdited: false,
+      logEndDate: end.date,
+      logEndTimeValue: timePickerState(item.endedAt).value,
+      logEndTimeEdited: false,
+      logPausedDurationSeconds: item.pausedDurationSeconds || 0,
       logNote: item.note || '',
       logTags: originalTags,
       logTagInputVisible: false,
@@ -534,8 +622,18 @@ Page({
 
   refreshLogPlanOptions() {
     try {
-      const startedAt = parseLocalDateTime(this.data.logDate, this.data.logStart);
-      const endedAt = parseLocalDateTime(this.data.logDate, this.data.logEnd);
+      const startedAt = resolveLogTimestamp(
+        this.logOriginalStartedAt,
+        this.data.logStartTimeEdited,
+        this.data.logStartDate,
+        this.data.logStartTimeValue
+      );
+      const endedAt = resolveLogTimestamp(
+        this.logOriginalEndedAt,
+        this.data.logEndTimeEdited,
+        this.data.logEndDate,
+        this.data.logEndTimeValue
+      );
       const selected = this.data.logEvents[this.data.logEventIndex];
       const service = this.currentService || getService();
       const snapshot = this.currentSnapshot || service.snapshot();
@@ -552,7 +650,13 @@ Page({
   },
 
   closeLogEditor() {
-    this.setData({ logEditor: null });
+    this.logOriginalStartedAt = null;
+    this.logOriginalEndedAt = null;
+    this.setData({
+      logEditor: null,
+      logStartTimeEdited: false,
+      logEndTimeEdited: false
+    });
   },
 
   openTagInput(event) {
@@ -601,8 +705,19 @@ Page({
       const item = this.data.logEditor;
       const calendarEvent = this.data.logEvents[this.data.logEventIndex];
       const input = {
-        startedAt: parseLocalDateTime(this.data.logDate, this.data.logStart),
-        endedAt: parseLocalDateTime(this.data.logDate, this.data.logEnd),
+        startedAt: resolveLogTimestamp(
+          this.logOriginalStartedAt,
+          this.data.logStartTimeEdited,
+          this.data.logStartDate,
+          this.data.logStartTimeValue
+        ),
+        endedAt: resolveLogTimestamp(
+          this.logOriginalEndedAt,
+          this.data.logEndTimeEdited,
+          this.data.logEndDate,
+          this.data.logEndTimeValue
+        ),
+        pausedDurationSeconds: this.data.logPausedDurationSeconds,
         note: this.data.logNote,
         tags: this.data.logTags.slice()
       };

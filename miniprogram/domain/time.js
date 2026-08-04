@@ -1,4 +1,6 @@
 const MINUTE_MS = 60 * 1000;
+const SECOND_MS = 1000;
+const { TIMER_STATUS } = require('./constants');
 
 function isFiniteTimestamp(value) {
   return Number.isFinite(value) && value > 0;
@@ -25,6 +27,32 @@ function sumPausedMilliseconds(pauses, now) {
   }, 0);
 }
 
+function calculateIntervalTotalSeconds(startedAt, endedAt) {
+  if (!isFiniteTimestamp(startedAt) || !isFiniteTimestamp(endedAt)) {
+    return 0;
+  }
+  return Math.floor((endedAt - startedAt) / SECOND_MS);
+}
+
+function calculatePausedDurationSeconds(pauses) {
+  const milliseconds = (pauses || []).reduce(
+    (total, pause) => total + pause.endedAt - pause.startedAt,
+    0
+  );
+  return Math.floor(milliseconds / SECOND_MS);
+}
+
+function calculateLogTiming(startedAt, endedAt, pausedDurationSeconds = 0) {
+  const intervalTotalSeconds = calculateIntervalTotalSeconds(startedAt, endedAt);
+  const activeDurationSeconds = intervalTotalSeconds - pausedDurationSeconds;
+  return {
+    intervalTotalSeconds,
+    pausedDurationSeconds,
+    activeDurationSeconds,
+    durationMinutes: Math.ceil(activeDurationSeconds / 60)
+  };
+}
+
 function calculateDurationMinutes(startedAt, endedAt, pauses) {
   if (!isFiniteTimestamp(startedAt) || !isFiniteTimestamp(endedAt) || endedAt <= startedAt) {
     return 0;
@@ -33,20 +61,80 @@ function calculateDurationMinutes(startedAt, endedAt, pauses) {
 }
 
 function calculateLogDurationMinutes(startedAt, endedAt, pauses) {
-  if (!isFiniteTimestamp(startedAt) || !isFiniteTimestamp(endedAt) || endedAt < startedAt) {
-    return 0;
-  }
-  if (endedAt === startedAt) {
-    return 1;
-  }
-  return calculateDurationMinutes(startedAt, endedAt, pauses);
+  const pausedDurationSeconds = calculatePausedDurationSeconds(pauses);
+  const timing = calculateLogTiming(startedAt, endedAt, pausedDurationSeconds);
+  return timing.intervalTotalSeconds > pausedDurationSeconds ? timing.durationMinutes : 0;
 }
 
 function calculateTimerDurationMinutes(startedAt, endedAt, pauses) {
-  if (!isFiniteTimestamp(startedAt) || !isFiniteTimestamp(endedAt) || endedAt < startedAt) {
-    return 0;
+  return calculateLogDurationMinutes(startedAt, endedAt, pauses);
+}
+
+function validOrderedPauses(pauses, startedAt, capturedNow) {
+  if (!Array.isArray(pauses)
+    || !isFiniteTimestamp(startedAt)
+    || !isFiniteTimestamp(capturedNow)
+    || capturedNow < startedAt) {
+    return false;
   }
-  return toTimerMinutes(Math.max(0, endedAt - startedAt - sumPausedMilliseconds(pauses, endedAt)));
+  let precedingEnd = startedAt;
+  return pauses.every((pause) => {
+    if (!pause || typeof pause !== 'object'
+      || !isFiniteTimestamp(pause.startedAt)
+      || !isFiniteTimestamp(pause.endedAt)
+      || pause.endedAt < pause.startedAt
+      || pause.startedAt < precedingEnd
+      || pause.endedAt > capturedNow) {
+      return false;
+    }
+    precedingEnd = pause.endedAt;
+    return true;
+  });
+}
+
+function validActivePause(timer, capturedNow) {
+  if (!timer || !Array.isArray(timer.pauses)) return false;
+  if (timer.status === TIMER_STATUS.RUNNING) return timer.pausedAt === null;
+  if (timer.status !== TIMER_STATUS.PAUSED || !isFiniteTimestamp(timer.pausedAt)) return false;
+  const precedingEnd = timer.pauses.length
+    ? timer.pauses[timer.pauses.length - 1].endedAt
+    : timer.startedAt;
+  return timer.pausedAt >= precedingEnd && timer.pausedAt <= capturedNow;
+}
+
+function inspectTimerAt(timer, capturedNow) {
+  if (!timer || typeof timer !== 'object'
+    || !isFiniteTimestamp(timer.startedAt)
+    || !isFiniteTimestamp(capturedNow)) {
+    return { valid: false, reason: '计时器时间戳无效，请手工修正并确认记录' };
+  }
+  if (capturedNow < timer.startedAt) {
+    return { valid: false, reason: '系统时钟早于计时开始时间，请手工修正并确认记录' };
+  }
+  if (!validOrderedPauses(timer.pauses, timer.startedAt, capturedNow)) {
+    return { valid: false, reason: '暂停区间不自洽，请手工修正并确认记录' };
+  }
+  if (!validActivePause(timer, capturedNow)) {
+    return { valid: false, reason: '计时状态与暂停时间不一致，请手工修正并确认记录' };
+  }
+  return { valid: true };
+}
+
+function moveTimerToRecoveryDraft(database, timer, capturedNow, reason) {
+  const originalTimer = JSON.parse(JSON.stringify(timer));
+  database.timer = {
+    status: TIMER_STATUS.IDLE,
+    startedAt: null,
+    pausedAt: null,
+    pauses: [],
+    draft: {}
+  };
+  database.recoveryDraft = {
+    reason,
+    timer: originalTimer,
+    createdAt: capturedNow
+  };
+  return { state: 'draft', recoveryDraft: database.recoveryDraft };
 }
 
 function localDateKey(timestamp) {
@@ -97,27 +185,28 @@ function toTimeInput(timestamp) {
   return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
 }
 
-function overlapMinutes(first, second) {
-  const startedAt = Math.max(first.startedAt, second.startedAt);
-  const endedAt = Math.min(first.endedAt, second.endedAt);
-  return endedAt > startedAt ? toMinutes(endedAt - startedAt) : 0;
-}
-
 module.exports = {
   MINUTE_MS,
+  SECOND_MS,
   isFiniteTimestamp,
   toMinutes,
   toTimerMinutes,
   sumPausedMilliseconds,
+  calculateIntervalTotalSeconds,
+  calculatePausedDurationSeconds,
+  calculateLogTiming,
   calculateDurationMinutes,
   calculateLogDurationMinutes,
   calculateTimerDurationMinutes,
+  validOrderedPauses,
+  validActivePause,
+  inspectTimerAt,
+  moveTimerToRecoveryDraft,
   localDateKey,
   formatDateTime,
   startOfLocalDay,
   endOfLocalDay,
   parseLocalDateTime,
   toDateInput,
-  toTimeInput,
-  overlapMinutes
+  toTimeInput
 };

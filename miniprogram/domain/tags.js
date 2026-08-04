@@ -39,7 +39,7 @@ function normalizeTags(tags, options = {}) {
     if (enforceLimits && tagLengthUnits(tag) > MAX_TAG_LENGTH * 2) {
       throw new DomainError(
         'TAG_TOO_LONG',
-        `单个标签最多 ${MAX_TAG_LENGTH} 个汉字或 ${MAX_TAG_LENGTH * 2} 个英文字符（中英文折算），请缩短后重试`
+        `字数太多了~`
       );
     }
     seen.add(tag);

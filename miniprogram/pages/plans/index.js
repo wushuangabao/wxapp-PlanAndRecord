@@ -1,6 +1,8 @@
 const { TASK_STATUS } = require('../../domain/constants');
 const { parseLocalDateTime } = require('../../domain/time');
+const { limitTitleCodePoints } = require('../../domain/validation');
 const { defaultDateTime, formatDateTime, getService, showError, showSaved } = require('../../utils/page');
+const { getRuntimeWindowWidth } = require('../../utils/wechat-runtime');
 
 const TODO_COLUMN_SIZE = 3;
 const TODO_SWIPE_DISTANCE_RATIO = 0.15;
@@ -195,10 +197,10 @@ Page({
   },
 
   measureTodoTitleFontSizes() {
-    if (!wx.createSelectorQuery || !wx.getWindowInfo) return;
-    const windowInfo = wx.getWindowInfo();
-    if (!windowInfo || !windowInfo.windowWidth) return;
-    const rpxPerPixel = 750 / windowInfo.windowWidth;
+    if (!wx.createSelectorQuery) return;
+    const windowWidth = getRuntimeWindowWidth(wx);
+    if (windowWidth === null) return;
+    const rpxPerPixel = 750 / windowWidth;
     wx.createSelectorQuery()
       .selectAll('.todo-main')
       .boundingClientRect((rects) => {
@@ -333,6 +335,10 @@ Page({
     this.setData({ [event.currentTarget.dataset.key]: event.detail.value });
   },
 
+  onTitleField(event) {
+    this.setData({ [event.currentTarget.dataset.key]: limitTitleCodePoints(event.detail.value) });
+  },
+
   openProjectCreate() {
     this.setData({ isProjectCreateOpen: true, pendingTaskProjectLinkId: '' });
   },
@@ -448,7 +454,7 @@ Page({
         if (editor.projectSelectionTouched) input.projectId = projectId;
         getService().updateTask(editor.taskId, input);
       } else {
-        getService().createTask({ title: this.data.taskTitle, status: TASK_STATUS.TODO, projectId });
+        getService().createTask({ title: this.data.taskTitle, projectId });
       }
       this.closeTaskEditor();
       showSaved(editor.mode === 'edit' ? 'TODO 已更新' : 'TODO 已创建');

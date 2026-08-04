@@ -1,5 +1,12 @@
 const { REPEAT_FREQUENCY } = require('./constants');
+const { DomainError } = require('./errors');
 const { createId } = require('./id');
+const {
+  requiredTitle,
+  validNullableString,
+  validPriority,
+  validTimeRange
+} = require('./validation');
 
 function hasOwn(object, key) {
   return Boolean(object) && Object.prototype.hasOwnProperty.call(object, key);
@@ -82,7 +89,62 @@ function monthDifference(firstTimestamp, secondTimestamp) {
 
 function isWithinRevision(revision, occurrenceStart) {
   return occurrenceStart >= revision.effectiveFrom
-    && (!revision.effectiveUntil || occurrenceStart <= revision.effectiveUntil);
+    && (revision.effectiveUntil === null || occurrenceStart <= revision.effectiveUntil);
+}
+
+function invalidOccurrenceOverride() {
+  throw new DomainError('IMPORT_SCHEMA_INVALID', '导入文件的数据结构无效');
+}
+
+function findUniqueRevisionAt(revisions, occurrenceStart) {
+  if (!Array.isArray(revisions) || !Number.isFinite(occurrenceStart)) {
+    invalidOccurrenceOverride();
+  }
+  const matches = revisions.filter((revision) => (
+    revision
+    && revision.effectiveFrom <= occurrenceStart
+    && (revision.effectiveUntil === null || occurrenceStart <= revision.effectiveUntil)
+  ));
+  if (matches.length !== 1) invalidOccurrenceOverride();
+  return matches[0];
+}
+
+function materializeOccurrenceOverride(rule, exception) {
+  if (!rule || !Array.isArray(rule.revisions)
+    || !exception || exception.kind !== 'override'
+    || !exception.override || typeof exception.override !== 'object'
+    || Array.isArray(exception.override)) {
+    invalidOccurrenceOverride();
+  }
+  const revision = findUniqueRevisionAt(rule.revisions, exception.occurrenceStart);
+  const projectedStartedAt = projectRevisionStartedAt(revision, exception.occurrenceStart);
+  const projectedEndedAt = projectedStartedAt + (revision.endedAt - revision.startedAt);
+  const sparse = exception.override;
+  const inherit = (field, fallback) => (hasOwn(sparse, field) ? sparse[field] : fallback);
+  const override = {
+    title: inherit('title', rule.title),
+    startedAt: inherit('startedAt', projectedStartedAt),
+    endedAt: inherit('endedAt', projectedEndedAt),
+    priority: inherit('priority', revision.priority),
+    projectId: inherit('projectId', revision.projectId),
+    projectNameSnapshot: inherit('projectNameSnapshot', revision.projectNameSnapshot),
+    taskId: inherit('taskId', revision.taskId),
+    taskNameSnapshot: inherit('taskNameSnapshot', revision.taskNameSnapshot)
+  };
+
+  try {
+    if (!Number.isInteger(override.priority)) {
+      invalidOccurrenceOverride();
+    }
+    override.title = requiredTitle(override.title, '计划标题');
+    validTimeRange(override.startedAt, override.endedAt, '单次修改时间');
+    override.priority = validPriority(override.priority);
+    ['projectId', 'projectNameSnapshot', 'taskId', 'taskNameSnapshot']
+      .forEach((field) => validNullableString(override[field], field));
+  } catch (error) {
+    invalidOccurrenceOverride();
+  }
+  return override;
 }
 
 function isScheduledDate(revision, occurrenceStart) {
@@ -174,20 +236,23 @@ function projectRule(rule, rangeStart, rangeEnd, exceptions) {
       if (exception && exception.kind === 'skip') {
         continue;
       }
-      const override = exception && exception.kind === 'override' ? exception.override : null;
+      const override = exception && exception.kind === 'override'
+        ? materializeOccurrenceOverride(rule, exception)
+        : null;
       projected.push({
         id: occurrenceId(rule.id, revision.revision, occurrenceStart),
         occurrenceKey: key,
         occurrenceStart,
         ruleId: rule.id,
+        originRuleId: rule.id,
         ruleRevision: revision.revision,
         originOccurrenceId: occurrenceId(rule.id, revision.revision, occurrenceStart),
         virtual: true,
-        type: 'candidate',
-        title: (override && override.title) || rule.title,
-        startedAt: (override && override.startedAt) || startedAt,
-        endedAt: (override && override.endedAt) || endedAt,
-        priority: (override && override.priority) || revision.priority,
+        type: 'plan',
+        title: override ? override.title : rule.title,
+        startedAt: override ? override.startedAt : startedAt,
+        endedAt: override ? override.endedAt : endedAt,
+        priority: override ? override.priority : revision.priority,
         projectId: null,
         projectNameSnapshot: hasOwn(override, 'projectNameSnapshot')
           ? override.projectNameSnapshot
@@ -264,6 +329,8 @@ module.exports = {
   initialRuleOccurrenceStart,
   intervalIntersectsRange,
   projectRevisionStartedAt,
+  findUniqueRevisionAt,
+  materializeOccurrenceOverride,
   projectRule,
   projectRuleIntersectingRange,
   createOccurrenceException

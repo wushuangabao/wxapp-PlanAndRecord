@@ -5,6 +5,7 @@ const {
 } = require('./constants');
 const { createId } = require('./id');
 const { normalizeTags } = require('./tags');
+const { canonicalizeRepeatPattern, validLogTiming } = require('./validation');
 
 function createInitialDatabase(now = Date.now()) {
   const profileId = createId('profile', now);
@@ -40,12 +41,18 @@ function createIdleTimer() {
 }
 
 function createTimeLog(input, now = Date.now(), options = {}) {
+  const timing = validLogTiming(
+    input.startedAt,
+    input.endedAt,
+    input.pausedDurationSeconds === undefined ? 0 : input.pausedDurationSeconds
+  );
   return {
     id: createId('log', now),
     schemaVersion: APP_SCHEMA_VERSION,
     startedAt: input.startedAt,
     endedAt: input.endedAt,
-    durationMinutes: input.durationMinutes,
+    pausedDurationSeconds: timing.pausedDurationSeconds,
+    durationMinutes: timing.durationMinutes,
     projectId: input.projectId || null,
     projectNameSnapshot: input.projectNameSnapshot || null,
     taskId: input.taskId || null,
@@ -86,6 +93,7 @@ function createCalendarEvent(input, now = Date.now()) {
 
 function createRepeatRule(input, now = Date.now()) {
   const revisionId = createId('revision', now);
+  const pattern = canonicalizeRepeatPattern(input);
   return {
     id: createId('rule', now),
     title: input.title,
@@ -96,10 +104,7 @@ function createRepeatRule(input, now = Date.now()) {
       revision: 1,
       effectiveFrom: input.startedAt,
       effectiveUntil: null,
-      frequency: input.frequency,
-      interval: input.interval,
-      weekdays: input.weekdays || [],
-      monthDay: input.monthDay || null,
+      ...pattern,
       startedAt: input.startedAt,
       endedAt: input.endedAt,
       priority: input.priority,

@@ -35,6 +35,7 @@
 - `wx.shareFileMessage` 必须由用户点击手势直接触发，不要在 `writeFile`、`downloadFile`、Promise 或定时器等异步回调中直接调用，否则可能返回 `shareFileMessage:fail can only be invoked by user TAP gesture.`。若必须异步，可以在回调中让用户再次点击确认，并在该点击的回调中调用 `wx.shareFileMessage`。
 - 为横向 `scroll-view` 实现手动吸附时，不得把最后一次 `bindscroll` 的 `scrollLeft` 作为松手位置的唯一依据：慢速短拖时 `scroll` 事件可能晚于 `touchend`，造成列表先归位、再被迟到的原生滚动拉回。应在 `touchstart` 保存起始位置，并在 `touchend` 以手指位移计算动画起点；回到原列必须使用不越过目标的单调缓动，只有真正换列时才可使用轻微过冲。测试至少覆盖“`touchend` 早于最后一次 `scroll`”以及“回原列过程中不跨越目标位置”。
 - 在窄横向 `flex` 容器中排列多个图标操作时，避免用原生 `<button>` 作为外壳：iOS 真机可能因默认外边距把标题压缩为 `0` 宽，并将后续操作推到 `overflow: hidden` 区域外，模拟器未必复现。应使用带 `role="button"`、`aria-label` 和点击事件的 `<view>`，并固定操作组和点击区宽度。
+- 验证指定微信基础库时，项目配置值、下拉顶部显示值、本地 `.wxvpkg`、单文件编译、`pageStack` 或 Page data 都不能单独证明目标版本通过；必须交叉核对当前可选清单（或 `cfg.json`）、实际 `SDKVersion`、关键渲染节点和业务截图，以及开发者工具是否出现启动层错误。wechatide 应用 console 采样可能漏掉 DevTools UI 的 `simulator launch failed` / `Foundation.onLoad` 等启动层错误；清单刷新后，已移除版本可能仍显示为当前值，但启动时实际改用其他版本。因此不得仅凭页面后来恢复就认定原目标版本已修复，也不得在没有证据时推断具体成因或固定回退版本。
 
 ## 验证与交付
 

@@ -1,0 +1,5 @@
+:host { display: block; min-width: 0; }
+.pause-duration { display: flex; align-items: center; gap: 12rpx; width: 100%; }
+.pause-duration__part { display: flex; flex: 1; align-items: center; min-width: 0; gap: 6rpx; }
+.pause-duration__input { box-sizing: border-box; width: 100%; min-height: 72rpx; padding: 14rpx 12rpx; border: 1rpx solid #d0cdc6; border-radius: 12rpx; background: #faf9f7; color: #343a36; font-size: 26rpx; text-align: center; }
+.pause-duration__unit { flex: 0 0 auto; color: #626b65; font-size: 24rpx; }

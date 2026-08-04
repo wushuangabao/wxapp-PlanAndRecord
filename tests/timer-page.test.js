@@ -189,6 +189,7 @@ test('恢复草稿手工保存会确认记录而非创建待核实候选', () =>
     assert.match(wxml, /\{\{recoveryDraft\.confirmLabel\}\}/);
     assert.match(wxml, /放弃并删除记录/);
     assert.match(wxml, /bindtap="onDiscardRecoveryDraft"/);
+    assert.doesNotMatch(wxml, /confirmCandidateLog|discardCandidate/);
   } finally {
     global.getApp = originalGetApp;
     global.wx = originalWx;
@@ -199,18 +200,19 @@ test('手工补录会替换最近记录的 new 标记', () => {
   const originalGetApp = global.getApp;
   const originalWx = global.wx;
   const refreshCalls = [];
+  const toasts = [];
   global.getApp = () => ({
     globalData: {
       bootstrap: {
         applicationService: {
           createManualLog() {
-            return { log: { id: 'manual_log' }, hasOverlap: false };
+            return { log: { id: 'manual_log' }, hasOverlap: true };
           }
         }
       }
     }
   });
-  global.wx = { showToast() {} };
+  global.wx = { showToast(options) { toasts.push(options); } };
   try {
     const page = loadTimerPage();
     page.setData = (updates, callback) => {
@@ -233,6 +235,7 @@ test('手工补录会替换最近记录的 new 标记', () => {
     page.onManualSave();
 
     assert.deepEqual(refreshCalls, [{ newLogId: 'manual_log' }]);
+    assert.equal(toasts.at(-1).title, '补录已保存');
   } finally {
     global.getApp = originalGetApp;
     global.wx = originalWx;
@@ -247,6 +250,7 @@ test('核实自动恢复候选预览且未修改时间时保留其秒级区间',
   const candidatePreview = {
     startedAt: NOW + 8_000,
     endedAt: NOW + 16_000,
+    pausedDurationSeconds: 3,
     durationMinutes: 1,
     source: 'timer'
   };
@@ -286,7 +290,52 @@ test('核实自动恢复候选预览且未修改时间时保留其秒级区间',
     assert.equal(calls.length, 1);
     assert.equal(calls[0].startedAt, candidatePreview.startedAt);
     assert.equal(calls[0].endedAt, candidatePreview.endedAt);
+    assert.equal(calls[0].pausedDurationSeconds, 3);
     assert.deepEqual(refreshCalls, [{ newLogId: 'confirmed_from_preview' }]);
+  } finally {
+    global.getApp = originalGetApp;
+    global.wx = originalWx;
+  }
+});
+
+test('手工补录支持跨日秒级区间与暂停秒数', () => {
+  const originalGetApp = global.getApp;
+  const originalWx = global.wx;
+  let received;
+  global.getApp = () => ({ globalData: { bootstrap: { applicationService: {
+    createManualLog(input) {
+      received = input;
+      return { log: { id: 'manual_cross_day' }, hasOverlap: false };
+    }
+  } } } });
+  global.wx = { showToast() {} };
+  try {
+    const page = loadTimerPage();
+    page.setData = (values, callback) => {
+      Object.assign(page.data, values);
+      if (callback) callback();
+    };
+    Object.assign(page.data, {
+      manualMode: 'manual',
+      manualStartDate: '2026-08-04',
+      manualStartTime: '23:59:58',
+      manualStartTimeEdited: true,
+      manualEndDate: '2026-08-05',
+      manualEndTime: '00:01:02',
+      manualEndTimeEdited: true,
+      manualPausedDurationSeconds: 4,
+      manualNote: '跨日补录',
+      manualTags: [],
+      manualEvents: [{ id: '', associationType: 'none' }],
+      manualEventIndex: 0
+    });
+    page.refresh = () => {};
+
+    page.onManualSave();
+
+    assert.equal(received.startedAt, new Date(2026, 7, 4, 23, 59, 58, 0).getTime());
+    assert.equal(received.endedAt, new Date(2026, 7, 5, 0, 1, 2, 0).getTime());
+    assert.equal(received.pausedDurationSeconds, 4);
   } finally {
     global.getApp = originalGetApp;
     global.wx = originalWx;
@@ -1021,19 +1070,20 @@ test('结束计时会直接创建记录并提交当前记录字段', () => {
   const originalGetApp = global.getApp;
   const originalWx = global.wx;
   const calls = [];
+  const toasts = [];
   global.getApp = () => ({
     globalData: {
       bootstrap: {
         applicationService: {
           finishTimer(input) {
             calls.push(['finish', input]);
-            return { log: { id: 'log_new' }, hasOverlap: false };
+            return { log: { id: 'log_new' }, hasOverlap: true };
           }
         }
       }
     }
   });
-  global.wx = { showToast() {} };
+  global.wx = { showToast(options) { toasts.push(options); } };
   try {
     const page = loadTimerPage();
     page.setData = (updates, callback) => {
@@ -1058,6 +1108,8 @@ test('结束计时会直接创建记录并提交当前记录字段', () => {
       ['finish', { calendarEventId: 'event_focus', note: '补充备注', tags: ['工作', '复盘'] }],
       ['refresh', { newLogId: 'log_new' }]
     ]);
+    assert.equal(toasts.at(-1).title, '记录已生成');
+    assert.doesNotMatch(fs.readFileSync(timerPagePath, 'utf8'), /hasOverlap|存在重叠时间/);
   } finally {
     global.getApp = originalGetApp;
     global.wx = originalWx;
@@ -1242,16 +1294,121 @@ test('计时页只提交可选标签和计划块，不暴露分类、项目或�
   assert.match(wxml, /<view class="manual-field-label">开始时间<\/view>/);
   assert.match(wxml, /<view class="manual-field-label">结束时间<\/view>/);
   assert.match(wxml, /<view class="manual-field-label">计划块<\/view>/);
-  assert.match(wxml, /class="manual-date-picker" mode="date" value="\{\{manualStartDate\}\}"[\s\S]*?class="manual-time-picker" mode="time" value="\{\{manualStartTime\}\}"/);
-  assert.match(wxml, /class="manual-date-picker" mode="date" value="\{\{manualEndDate\}\}"[\s\S]*?class="manual-time-picker" mode="time" value="\{\{manualEndTime\}\}"/);
+  assert.match(wxml, /class="manual-date-picker" mode="date" value="\{\{manualStartDate\}\}"[\s\S]*?<second-time-picker[^>]*value="\{\{manualStartTime\}\}"/);
+  assert.match(wxml, /class="manual-date-picker" mode="date" value="\{\{manualEndDate\}\}"[\s\S]*?<second-time-picker[^>]*value="\{\{manualEndTime\}\}"/);
   assert.doesNotMatch(wxml, /开始日期：|开始：|结束日期：|结束：|计划块：/);
   assert.doesNotMatch(wxml, /分类：|项目：|任务：/);
   assert.match(wxml, /wx:for="\{\{tags\}\}"/);
   assert.match(wxml, /class="tag-chip tag-add"/);
-  assert.equal((wxml.match(/最多添加 \{\{maxTagsPerLog\}\} 个标签；每个最多 5 个汉字或 10 个英文字符（中英文折算）/g) || []).length, 2);
   assert.equal((wxml.match(/class="tag-input"[^>]*maxlength="10"/g) || []).length, 2);
   assert.doesNotMatch(wxml, /逗号分隔/);
   assert.doesNotMatch(wxml, /保存本次字段|onSaveTimerDraft/);
+});
+
+test('计时页秒级编辑器为开始和结束分别提供日期、三列时间与暂停时长', () => {
+  const wxml = fs.readFileSync(timerWxmlPath, 'utf8');
+  const config = JSON.parse(fs.readFileSync(timerJsonPath, 'utf8'));
+  const manualMarkup = wxml.slice(wxml.indexOf('wx:if="{{showManual}}"'));
+
+  assert.equal((manualMarkup.match(/mode="date"/g) || []).length, 2);
+  assert.equal((manualMarkup.match(/<second-time-picker\b/g) || []).length, 2);
+  assert.equal((manualMarkup.match(/<pause-duration-input\b/g) || []).length, 1);
+  assert.doesNotMatch(manualMarkup, /mode="time"/);
+  assert.equal(config.usingComponents['second-time-picker'], '/components/second-time-picker/index');
+  assert.equal(config.usingComponents['pause-duration-input'], '/components/pause-duration-input/index');
+
+  const timerCard = wxml.slice(wxml.indexOf('class="timer-card"'), wxml.indexOf('class="text-input"'));
+  assert.doesNotMatch(timerCard, /pause-duration-input|暂停时长/);
+});
+
+test('最近记录只改开始端时，结束毫秒与暂停秒保持原值', () => {
+  const originalGetApp = global.getApp;
+  const originalWx = global.wx;
+  const updates = [];
+  const startedAt = new Date(2026, 7, 4, 9, 8, 7, 987).getTime();
+  const endedAt = new Date(2026, 7, 5, 10, 9, 8, 654).getTime();
+  const snapshot = { projects: [], tasks: [], calendarEvents: [], timeLogs: [] };
+  const service = {
+    snapshot() { return snapshot; },
+    planAssociationCandidates() { return []; },
+    updateLog(id, input) {
+      updates.push({ id, input });
+      return { log: { id }, hasOverlap: false };
+    }
+  };
+  global.getApp = () => ({ globalData: { bootstrap: { applicationService: service } } });
+  global.wx = { showToast() {} };
+  try {
+    const page = loadTimerPage();
+    page.setData = (values, callback) => {
+      Object.assign(page.data, values);
+      if (callback) callback();
+    };
+    page.currentService = service;
+    page.currentSnapshot = snapshot;
+    page.eventById = new Map();
+    page.data.recentLogs = [{
+      id: 'log_seconds',
+      status: 'confirmed',
+      startedAt,
+      endedAt,
+      pausedDurationSeconds: 3723,
+      note: '原记录',
+      tags: []
+    }];
+    page.refresh = () => {};
+
+    page.openRecentLogEditor({ currentTarget: { dataset: { id: 'log_seconds' } } });
+    assert.equal(page.data.manualStartTime, '09:08:07');
+    assert.equal(page.data.manualEndTime, '10:09:08');
+    assert.equal(page.data.manualPausedDurationSeconds, 3723);
+    page.onManualTimeChange({
+      currentTarget: { dataset: { key: 'manualStartTime', editedKey: 'manualStartTimeEdited' } },
+      detail: { value: '11:12:13' }
+    });
+    page.onManualSave();
+
+    assert.equal(updates[0].input.startedAt, new Date(2026, 7, 4, 11, 12, 13, 0).getTime());
+    assert.equal(updates[0].input.endedAt, endedAt);
+    assert.equal(updates[0].input.pausedDurationSeconds, 3723);
+  } finally {
+    global.getApp = originalGetApp;
+    global.wx = originalWx;
+  }
+});
+
+test('结束计时降级为恢复草稿时只刷新恢复卡，不读取日志 ID 或提示生成成功', () => {
+  const originalGetApp = global.getApp;
+  const originalWx = global.wx;
+  const toasts = [];
+  global.getApp = () => ({ globalData: { bootstrap: { applicationService: {
+    finishTimer() { return { state: 'draft', recoveryDraft: { reason: '待修正' } }; }
+  } } } });
+  global.wx = { showToast(options) { toasts.push(options); } };
+  try {
+    const page = loadTimerPage();
+    page.setData = (values, callback) => {
+      Object.assign(page.data, values);
+      if (callback) callback();
+    };
+    Object.assign(page.data, {
+      timer: { status: TIMER_STATUS.RUNNING },
+      events: [{ id: '', associationType: 'none' }],
+      eventIndex: 0,
+      tags: []
+    });
+    let refreshCalls = 0;
+    page.refresh = () => { refreshCalls += 1; };
+
+    page.onFinishTimer();
+
+    assert.equal(refreshCalls, 1);
+    assert.equal(toasts.some((item) => item.title === '记录已生成'), false);
+    assert.equal(toasts.some((item) => /log/.test(item.title)), false);
+  } finally {
+    global.getApp = originalGetApp;
+    global.wx = originalWx;
+  }
 });
 
 test('计时页标签只允许点击叉号移除，不响应标签胶囊点击', () => {
@@ -1354,7 +1511,6 @@ test('计时页以标签块添加、规范化和移除标签', () => {
       currentTarget: { dataset: { tagsKey: 'tags', inputVisibleKey: 'tagInputVisible' } },
       detail: { value: '超过五个汉字标签' }
     });
-    assert.equal(toasts.at(-1).title, '单个标签最多 5 个汉字或 10 个英文字符（中英文折算），请缩短后重试');
     assert.equal(page.data.tagInputVisible, true);
 
     page.removeTag({ currentTarget: { dataset: { tagsKey: 'tags', index: 0 } } });

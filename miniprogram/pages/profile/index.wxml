@@ -12,7 +12,5 @@
   <view class="card"><view class="section-title">标签投入</view><view class="stat-hint">一条记录有多个标签时，完整耗时会分别计入每个标签。</view><view wx:if="{{!tagStats.length}}" class="empty">本周还没有纳入统计的实际记录。</view><view wx:for="{{tagStats}}" wx:key="id" class="stat-row"><view>{{item.displayName}}</view><view>{{item.durationMinutes}} 分钟</view></view></view>
   <view class="card"><view class="section-title">项目投入</view><view wx:if="{{!projectStats.length}}" class="empty">暂无项目投入。</view><view wx:for="{{projectStats}}" wx:key="id" class="stat-row"><view>{{item.name}}</view><view>{{item.durationMinutes}} 分钟</view></view></view>
   <view class="card"><view class="section-title">计划与实际偏差</view><view wx:if="{{!variance.length}}" class="empty">本周没有计划块。</view><view wx:for="{{variance}}" wx:key="eventId" class="stat-row"><view>{{item.title}}</view><view>计划 {{item.plannedMinutes}} / 实际 {{item.actualMinutes}} / 偏差 {{item.varianceMinutes}} 分钟</view></view></view>
-  <view wx:if="{{overlaps.length}}" class="warning"><view>发现重叠时间（不阻断保存）</view><view wx:for="{{overlaps}}" wx:key="firstLogId" class="warning-detail">{{item.firstTitle}} 与 {{item.secondTitle}} 重叠 {{item.minutes}} 分钟</view></view>
-
   <view class="card"><view class="section-title">数据管理</view><button class="primary" disabled="{{dataOperationInProgress}}" bindtap="exportJson">导出 JSON</button><button class="secondary" disabled="{{dataOperationInProgress}}" bindtap="importJson">导入 JSON</button><button class="danger" disabled="{{dataOperationInProgress}}" bindtap="clearData">清空数据</button></view>
 </view>

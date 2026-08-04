@@ -1,0 +1,87 @@
+.page {
+  min-height: 100vh;
+  box-sizing: border-box;
+  padding: 44rpx 48rpx 40rpx;
+  padding-bottom: calc(40rpx + env(safe-area-inset-bottom));
+  background: #f3f1ed;
+  color: #343a36;
+}
+
+.eyebrow {
+  color: #55725e;
+  font-size: 21rpx;
+  font-weight: 700;
+  letter-spacing: 3rpx;
+}
+
+.hero {
+  margin-top: 36rpx;
+  padding: 32rpx;
+  border-radius: 24rpx;
+  background: #f5f0e6;
+}
+
+.title {
+  color: #795d32;
+  font-size: 40rpx;
+  font-weight: 700;
+}
+
+.explanation,
+.action-hint {
+  margin-top: 16rpx;
+  color: #626b65;
+  font-size: 26rpx;
+  line-height: 1.7;
+}
+
+.action-group {
+  margin-top: 32rpx;
+  padding: 30rpx;
+  border-radius: 24rpx;
+  background: #faf9f7;
+}
+
+.danger-group {
+  border: 1rpx solid #ead4d1;
+}
+
+.action-title {
+  font-size: 32rpx;
+  font-weight: 700;
+}
+
+.primary,
+.secondary,
+.danger {
+  margin-top: 22rpx;
+  border-radius: 14rpx;
+  font-size: 28rpx;
+}
+
+.primary {
+  background: #78947f;
+  color: #faf9f7;
+  font-weight: 700;
+}
+
+.secondary {
+  background: #d8e1da;
+  color: #486455;
+}
+
+.danger {
+  background: #f2e3e1;
+  color: #8a4945;
+  font-weight: 700;
+}
+
+.preview {
+  margin-top: 22rpx;
+  padding: 22rpx;
+  border-radius: 18rpx;
+  background: #e6ece7;
+  color: #486455;
+  font-size: 25rpx;
+  line-height: 1.8;
+}

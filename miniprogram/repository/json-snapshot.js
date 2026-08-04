@@ -11,7 +11,19 @@ const {
 const { clone, createIdleTimer } = require('../domain/entities');
 const { DomainError } = require('../domain/errors');
 const { normalizeTags, tagsEqual } = require('../domain/tags');
-const { calculateLogDurationMinutes, calculateTimerDurationMinutes, isFiniteTimestamp } = require('../domain/time');
+const {
+  calculateLogDurationMinutes,
+  calculatePausedDurationSeconds,
+  calculateTimerDurationMinutes,
+  isFiniteTimestamp
+} = require('../domain/time');
+const { materializeOccurrenceOverride } = require('../domain/recurrence');
+const {
+  canonicalizeRepeatPattern,
+  normalizeSnapshotTitles,
+  requiredTitle,
+  validLogTiming
+} = require('../domain/validation');
 
 const ROOT_COLLECTIONS = [
   'wishes',
@@ -51,6 +63,14 @@ function hasOwn(object, key) {
 
 function requiredString(value) {
   return typeof value === 'string' && value.length > 0;
+}
+
+function validTitle(value) {
+  try {
+    return requiredTitle(value) === value;
+  } catch (error) {
+    return false;
+  }
 }
 
 function nullableString(value) {
@@ -146,10 +166,19 @@ function normalizeCalendarEvent(event) {
 }
 
 function normalizeRevision(revision) {
-  return pickKnownFields(revision, [
+  const normalized = pickKnownFields(revision, [
     'id', 'revision', 'effectiveFrom', 'effectiveUntil', 'frequency', 'interval', 'weekdays',
     'monthDay', 'startedAt', 'endedAt', 'priority', 'projectId', 'projectNameSnapshot', 'taskId', 'taskNameSnapshot'
   ]);
+  if (isPlainObject(normalized)
+    && ['frequency', 'interval', 'weekdays', 'monthDay'].every((field) => hasOwn(normalized, field))) {
+    try {
+      Object.assign(normalized, canonicalizeRepeatPattern(normalized));
+    } catch (error) {
+      invalidSchema();
+    }
+  }
+  return normalized;
 }
 
 function normalizeRepeatRule(rule) {
@@ -176,10 +205,22 @@ function normalizeOccurrenceException(exception) {
 
 function normalizeTimeLog(log) {
   const normalized = pickKnownFields(log, [
-    'id', 'schemaVersion', 'startedAt', 'endedAt', 'durationMinutes',
+    'id', 'schemaVersion', 'startedAt', 'endedAt', 'pausedDurationSeconds', 'durationMinutes',
     'projectId', 'projectNameSnapshot', 'taskId', 'taskNameSnapshot', 'calendarEventId', 'calendarEventSummarySnapshot',
     'note', 'status', 'source', 'originRuleId', 'originOccurrenceId', 'originRuleSummarySnapshot', 'tags', 'createdAt', 'updatedAt'
   ]);
+  if (isPlainObject(normalized) && !hasOwn(normalized, 'pausedDurationSeconds')) {
+    normalized.pausedDurationSeconds = 0;
+    if (hasOwn(normalized, 'durationMinutes')
+      && Number.isInteger(normalized.durationMinutes)
+      && normalized.durationMinutes >= 0) {
+      normalized.durationMinutes = calculateLogDurationMinutes(
+        normalized.startedAt,
+        normalized.endedAt,
+        []
+      );
+    }
+  }
   if (isPlainObject(normalized) && hasOwn(normalized, 'tags')) {
     try {
       normalized.tags = normalizeTags(normalized.tags, { enforceLimits: false });
@@ -224,8 +265,12 @@ function normalizeRecoveryDraft(recoveryDraft) {
   }
   if (isPlainObject(normalized) && hasOwn(normalized, 'candidatePreview')) {
     normalized.candidatePreview = pickKnownFields(normalized.candidatePreview, [
-      'startedAt', 'endedAt', 'durationMinutes', 'source'
+      'startedAt', 'endedAt', 'pausedDurationSeconds', 'durationMinutes', 'source'
     ]);
+    if (isPlainObject(normalized.candidatePreview)
+      && !hasOwn(normalized.candidatePreview, 'pausedDurationSeconds')) {
+      normalized.candidatePreview.pausedDurationSeconds = 0;
+    }
   }
   return normalized;
 }
@@ -244,11 +289,13 @@ function legacyEndedCandidatePreview(timer, endedAt) {
     }
     precedingEnd = pause.endedAt;
   }
+  const pausedDurationSeconds = calculatePausedDurationSeconds(timer.pauses);
   const durationMinutes = calculateTimerDurationMinutes(timer.startedAt, endedAt, timer.pauses);
   return durationMinutes > 0
     ? {
       startedAt: timer.startedAt,
       endedAt,
+      pausedDurationSeconds,
       durationMinutes,
       source: LOG_SOURCE.TIMER
     }
@@ -362,11 +409,21 @@ function normalizeJsonSnapshot(database) {
       normalized[collection] = normalizeCollection(normalized[collection], COLLECTION_NORMALIZERS[collection]);
     }
   });
+  if (Array.isArray(normalized.repeatRules) && Array.isArray(normalized.occurrenceExceptions)) {
+    normalized.occurrenceExceptions.forEach((exception) => {
+      if (!isPlainObject(exception) || exception.kind !== 'override') return;
+      const rules = normalized.repeatRules.filter((rule) => (
+        isPlainObject(rule) && rule.id === exception.ruleId
+      ));
+      if (rules.length !== 1) invalidSchema();
+      exception.override = materializeOccurrenceOverride(rules[0], exception);
+    });
+  }
   if (hasOwn(normalized, 'timer')) normalized.timer = normalizeTimer(normalized.timer);
   if (hasOwn(normalized, 'recoveryDraft') && normalized.recoveryDraft !== null) {
     normalized.recoveryDraft = normalizeRecoveryDraft(normalized.recoveryDraft);
   }
-  return normalized;
+  return normalizeSnapshotTitles(normalized);
 }
 
 function validateTimestamps(object) {
@@ -386,17 +443,17 @@ function validateLocalProfile(profile, ids) {
 
 function validateWish(wish, ids) {
   if (!requireFields(wish, ['id', 'title', 'createdAt', 'updatedAt'])
-    || !requiredString(wish.id) || !requiredString(wish.title) || !validateTimestamps(wish)) invalidSchema();
+    || !requiredString(wish.id) || !validTitle(wish.title) || !validateTimestamps(wish)) invalidSchema();
   collectId(ids, wish.id);
 }
 
 function validateObjective(objective, ids) {
   if (!requireFields(objective, ['id', 'title', 'keyResults'])
-    || !requiredString(objective.id) || !requiredString(objective.title) || !Array.isArray(objective.keyResults)) invalidSchema();
+    || !requiredString(objective.id) || !validTitle(objective.title) || !Array.isArray(objective.keyResults)) invalidSchema();
   collectId(ids, objective.id);
   objective.keyResults.forEach((keyResult) => {
     if (!requireFields(keyResult, ['id', 'title', 'currentValue'])
-      || !requiredString(keyResult.id) || !requiredString(keyResult.title)
+      || !requiredString(keyResult.id) || !validTitle(keyResult.title)
       || !Number.isInteger(keyResult.currentValue) || keyResult.currentValue < 0 || keyResult.currentValue > 100) invalidSchema();
     collectId(ids, keyResult.id);
   });
@@ -404,38 +461,47 @@ function validateObjective(objective, ids) {
 
 function validateProject(project, ids) {
   if (!requireFields(project, ['id', 'title', 'deadlineAt', 'status', 'objectives', 'createdAt', 'updatedAt'])
-    || !requiredString(project.id) || !requiredString(project.title) || !isFiniteTimestamp(project.deadlineAt)
+    || !requiredString(project.id) || !validTitle(project.title) || !isFiniteTimestamp(project.deadlineAt)
     || !validEnum(project.status, PROJECT_STATUS) || !Array.isArray(project.objectives) || !validateTimestamps(project)) invalidSchema();
   collectId(ids, project.id);
   project.objectives.forEach((objective) => validateObjective(objective, ids));
 }
 
 function validateTask(task, ids) {
+  const completionStateValid = (task.status === TASK_STATUS.TODO && task.completedAt === null)
+    || (task.status === TASK_STATUS.COMPLETED && isFiniteTimestamp(task.completedAt));
   if (!requireFields(task, ['id', 'title', 'status', 'projectId', 'projectNameSnapshot', 'completedAt', 'createdAt', 'updatedAt'])
-    || !requiredString(task.id) || !requiredString(task.title) || !validEnum(task.status, TASK_STATUS)
+    || !requiredString(task.id) || !validTitle(task.title) || !validEnum(task.status, TASK_STATUS)
     || !nullableString(task.projectId) || !nullableString(task.projectNameSnapshot) || !nullableTimestamp(task.completedAt)
-    || !validateTimestamps(task)) invalidSchema();
+    || !completionStateValid || !validateTimestamps(task)) invalidSchema();
   collectId(ids, task.id);
 }
 
 function validateCalendarEvent(event, ids) {
   const references = ['projectId', 'projectNameSnapshot', 'taskId', 'taskNameSnapshot', 'repeatRuleId', 'repeatRuleSummarySnapshot'];
   if (!requireFields(event, ['id', 'title', 'startedAt', 'endedAt', 'priority', ...references, 'createdAt', 'updatedAt'])
-    || !requiredString(event.id) || !requiredString(event.title) || !validTimeRange(event.startedAt, event.endedAt)
+    || !requiredString(event.id) || !validTitle(event.title) || !validTimeRange(event.startedAt, event.endedAt)
     || !validPriority(event.priority) || !references.every((field) => nullableString(event[field])) || !validateTimestamps(event)) invalidSchema();
   collectId(ids, event.id);
 }
 
 function validateRevision(revision, ids, revisions) {
   const references = ['projectId', 'projectNameSnapshot', 'taskId', 'taskNameSnapshot'];
+  let canonicalPattern;
+  try {
+    canonicalPattern = canonicalizeRepeatPattern(revision);
+  } catch (error) {
+    invalidSchema();
+  }
+  const patternIsCanonical = canonicalPattern.frequency === revision.frequency
+    && canonicalPattern.interval === revision.interval
+    && canonicalPattern.monthDay === revision.monthDay
+    && persistedValueEquals(canonicalPattern.weekdays, revision.weekdays);
   if (!requireFields(revision, ['id', 'revision', 'effectiveFrom', 'effectiveUntil', 'frequency', 'interval', 'weekdays', 'monthDay', 'startedAt', 'endedAt', 'priority', ...references])
     || !requiredString(revision.id) || !Number.isInteger(revision.revision) || revision.revision < 1
     || revisions.has(revision.revision) || !isFiniteTimestamp(revision.effectiveFrom)
     || !nullableTimestamp(revision.effectiveUntil) || (revision.effectiveUntil !== null && revision.effectiveUntil < revision.effectiveFrom)
-    || !validEnum(revision.frequency, REPEAT_FREQUENCY) || !Number.isInteger(revision.interval) || revision.interval < 1
-    || !Array.isArray(revision.weekdays) || !revision.weekdays.every((weekday) => Number.isInteger(weekday) && weekday >= 0 && weekday <= 6)
-    || new Set(revision.weekdays).size !== revision.weekdays.length
-    || !(revision.monthDay === null || (Number.isInteger(revision.monthDay) && revision.monthDay >= 1 && revision.monthDay <= 31))
+    || !validEnum(revision.frequency, REPEAT_FREQUENCY) || !patternIsCanonical
     || !validTimeRange(revision.startedAt, revision.endedAt) || !validPriority(revision.priority)
     || !references.every((field) => nullableString(revision[field]))) invalidSchema();
   revisions.add(revision.revision);
@@ -444,21 +510,31 @@ function validateRevision(revision, ids, revisions) {
 
 function validateRepeatRule(rule, ids) {
   if (!requireFields(rule, ['id', 'title', 'revisions', 'createdAt', 'updatedAt'])
-    || !requiredString(rule.id) || !requiredString(rule.title) || !Array.isArray(rule.revisions) || !rule.revisions.length
+    || !requiredString(rule.id) || !validTitle(rule.title) || !Array.isArray(rule.revisions) || !rule.revisions.length
     || !validateTimestamps(rule)) invalidSchema();
   collectId(ids, rule.id);
   const revisions = new Set();
   rule.revisions.forEach((revision) => validateRevision(revision, ids, revisions));
+  rule.revisions.forEach((first, firstIndex) => {
+    rule.revisions.slice(firstIndex + 1).forEach((second) => {
+      const firstUntil = first.effectiveUntil === null ? Number.POSITIVE_INFINITY : first.effectiveUntil;
+      const secondUntil = second.effectiveUntil === null ? Number.POSITIVE_INFINITY : second.effectiveUntil;
+      if (first.effectiveFrom <= secondUntil && second.effectiveFrom <= firstUntil) invalidSchema();
+    });
+  });
 }
 
 function validateOverride(override) {
-  if (!isPlainObject(override)) invalidSchema();
-  const optionalStringFields = ['title', 'projectId', 'projectNameSnapshot', 'taskId', 'taskNameSnapshot'];
-  if (!optionalStringFields.every((field) => !hasOwn(override, field) || (field === 'title' ? typeof override[field] === 'string' : nullableString(override[field])))
-    || (hasOwn(override, 'startedAt') && !isFiniteTimestamp(override.startedAt))
-    || (hasOwn(override, 'endedAt') && !isFiniteTimestamp(override.endedAt))
-    || (hasOwn(override, 'priority') && !validPriority(override.priority))
-    || (hasOwn(override, 'startedAt') && hasOwn(override, 'endedAt') && !validTimeRange(override.startedAt, override.endedAt))) invalidSchema();
+  const fields = [
+    'title', 'startedAt', 'endedAt', 'priority',
+    'projectId', 'projectNameSnapshot', 'taskId', 'taskNameSnapshot'
+  ];
+  const nullableFields = ['projectId', 'projectNameSnapshot', 'taskId', 'taskNameSnapshot'];
+  if (!requireFields(override, fields)
+    || !validTitle(override.title)
+    || !validTimeRange(override.startedAt, override.endedAt)
+    || !validPriority(override.priority)
+    || !nullableFields.every((field) => nullableString(override[field]))) invalidSchema();
 }
 
 function validateOccurrenceException(exception, ids) {
@@ -470,16 +546,30 @@ function validateOccurrenceException(exception, ids) {
   collectId(ids, exception.id);
 }
 
+function validateOccurrenceOverrideRules(database) {
+  database.occurrenceExceptions.forEach((exception) => {
+    if (exception.kind !== 'override') return;
+    const rules = database.repeatRules.filter((rule) => rule.id === exception.ruleId);
+    if (rules.length !== 1) invalidSchema();
+    const materialized = materializeOccurrenceOverride(rules[0], exception);
+    if (!persistedValueEquals(exception.override, materialized)) invalidSchema();
+  });
+}
+
 function validateTimeLog(log, ids) {
   const nullableFields = ['projectId', 'projectNameSnapshot', 'taskId', 'taskNameSnapshot', 'calendarEventId', 'calendarEventSummarySnapshot', 'originRuleId', 'originOccurrenceId', 'originRuleSummarySnapshot'];
-  const maximumDurationMinutes = log.source === LOG_SOURCE.TIMER
-    ? calculateTimerDurationMinutes(log.startedAt, log.endedAt, [])
-    : calculateLogDurationMinutes(log.startedAt, log.endedAt, []);
-  if (!requireFields(log, ['id', 'schemaVersion', 'startedAt', 'endedAt', 'durationMinutes', ...nullableFields, 'note', 'status', 'source', 'tags', 'createdAt', 'updatedAt'])
-    || !requiredString(log.id) || log.schemaVersion !== APP_SCHEMA_VERSION || !validTimeRange(log.startedAt, log.endedAt, { allowSameTime: true })
-    || !Number.isInteger(log.durationMinutes) || log.durationMinutes < 0
-    || (log.startedAt === log.endedAt && log.durationMinutes !== 1)
-    || log.durationMinutes > maximumDurationMinutes || !nullableFields.every((field) => nullableString(log[field]))
+  if (!requireFields(log, ['id', 'schemaVersion', 'startedAt', 'endedAt', 'pausedDurationSeconds', 'durationMinutes', ...nullableFields, 'note', 'status', 'source', 'tags', 'createdAt', 'updatedAt'])) {
+    invalidSchema();
+  }
+  let timing;
+  try {
+    timing = validLogTiming(log.startedAt, log.endedAt, log.pausedDurationSeconds);
+  } catch (error) {
+    invalidSchema();
+  }
+  if (!requiredString(log.id) || log.schemaVersion !== APP_SCHEMA_VERSION
+    || log.durationMinutes !== timing.durationMinutes
+    || !nullableFields.every((field) => nullableString(log[field]))
     || typeof log.note !== 'string' || !validEnum(log.status, LOG_STATUS) || !validEnum(log.source, LOG_SOURCE)
     || !validNormalizedTags(log.tags) || !validateTimestamps(log)
     || !validPlanAssociationShape(log, { allowDetachedOccurrence: true })) invalidSchema();
@@ -522,6 +612,24 @@ function validateTimerStructure(timer) {
   if (timer.status !== TIMER_STATUS.IDLE && !hasOwn(timer.draft, 'tags')) invalidSchema();
 }
 
+function validateRecoveryTimerStructure(timer) {
+  if (!isPlainObject(timer)
+    || hasOwn(timer, 'endedAt')
+    || !requireFields(timer, ['status', 'startedAt', 'pausedAt', 'pauses', 'draft'])
+    || !validEnum(timer.status, TIMER_STATUS)
+    || !nullableTimestamp(timer.startedAt)
+    || !nullableTimestamp(timer.pausedAt)
+    || !Array.isArray(timer.pauses)) invalidSchema();
+  timer.pauses.forEach((pause) => {
+    if (!isPlainObject(pause)
+      || !requireFields(pause, ['startedAt', 'endedAt'])
+      || !isFiniteTimestamp(pause.startedAt)
+      || !isFiniteTimestamp(pause.endedAt)) invalidSchema();
+  });
+  validateTimerDraft(timer.draft);
+  if (timer.status !== TIMER_STATUS.IDLE && !hasOwn(timer.draft, 'tags')) invalidSchema();
+}
+
 function validateTimer(timer) {
   validateTimerStructure(timer);
 
@@ -545,7 +653,7 @@ function validateTimer(timer) {
   if (timer.status === TIMER_STATUS.PAUSED && timer.pausedAt < precedingEnd) invalidSchema();
 }
 
-function recoveryCandidateDurationUpperBound(timer, candidatePreview) {
+function recoveryCandidateTiming(timer, candidatePreview) {
   if (!isFiniteTimestamp(timer.startedAt)
     || candidatePreview.startedAt !== timer.startedAt
     || !Array.isArray(timer.pauses)) {
@@ -580,26 +688,38 @@ function recoveryCandidateDurationUpperBound(timer, candidatePreview) {
     return null;
   }
 
-  return calculateTimerDurationMinutes(
-    candidatePreview.startedAt,
-    candidatePreview.endedAt,
-    pauses
-  );
+  const pausedDurationSeconds = calculatePausedDurationSeconds(pauses);
+  try {
+    const timing = validLogTiming(
+      candidatePreview.startedAt,
+      candidatePreview.endedAt,
+      pausedDurationSeconds
+    );
+    return {
+      pausedDurationSeconds,
+      durationMinutes: timing.durationMinutes
+    };
+  } catch (error) {
+    return null;
+  }
 }
 
 function validateRecoveryDraft(recoveryDraft) {
   if (recoveryDraft === null) return;
   if (!requireFields(recoveryDraft, ['reason', 'timer', 'createdAt'])
     || typeof recoveryDraft.reason !== 'string' || !isFiniteTimestamp(recoveryDraft.createdAt)) invalidSchema();
-  validateTimerStructure(recoveryDraft.timer);
+  validateRecoveryTimerStructure(recoveryDraft.timer);
   if (hasOwn(recoveryDraft, 'candidatePreview')) {
     const preview = recoveryDraft.candidatePreview;
-    if (!requireFields(preview, ['startedAt', 'endedAt', 'durationMinutes', 'source'])
+    if (!requireFields(preview, ['startedAt', 'endedAt', 'pausedDurationSeconds', 'durationMinutes', 'source'])
       || !validTimeRange(preview.startedAt, preview.endedAt)
+      || !Number.isInteger(preview.pausedDurationSeconds) || preview.pausedDurationSeconds < 0
       || !Number.isInteger(preview.durationMinutes) || preview.durationMinutes <= 0
       || preview.source !== LOG_SOURCE.TIMER) invalidSchema();
-    const durationUpperBound = recoveryCandidateDurationUpperBound(recoveryDraft.timer, preview);
-    if (durationUpperBound === null || preview.durationMinutes > durationUpperBound) invalidSchema();
+    const timing = recoveryCandidateTiming(recoveryDraft.timer, preview);
+    if (timing === null
+      || preview.pausedDurationSeconds !== timing.pausedDurationSeconds
+      || preview.durationMinutes !== timing.durationMinutes) invalidSchema();
   }
 }
 
@@ -618,6 +738,7 @@ function validateJsonSnapshot(database) {
   database.calendarEvents.forEach((event) => validateCalendarEvent(event, ids));
   database.repeatRules.forEach((rule) => validateRepeatRule(rule, ids));
   database.occurrenceExceptions.forEach((exception) => validateOccurrenceException(exception, ids));
+  validateOccurrenceOverrideRules(database);
   database.timeLogs.forEach((log) => validateTimeLog(log, ids));
   validateTimer(database.timer);
   validateRecoveryDraft(database.recoveryDraft);
@@ -660,5 +781,6 @@ module.exports = {
   normalizeJsonSnapshot,
   parseJsonSnapshot,
   validateJsonSnapshot,
+  validateOccurrenceOverrideRules,
   persistedValueEquals
 };

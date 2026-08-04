@@ -91,5 +91,5 @@
 .manual-time-row, .manual-picker-row { display: flex; align-items: center; gap: 16rpx; margin: 18rpx 0; }
 .manual-field-label { flex: 0 0 120rpx; color: #505a54; font-size: 26rpx; line-height: 1.4; white-space: nowrap; }
 .manual-date-picker, .manual-picker-control { flex: 1 1 0; min-width: 0; }
-.manual-time-picker { flex: 0 0 172rpx; min-width: 0; }
+.manual-time-picker { flex: 0 0 190rpx; min-width: 0; }
 .picker-field { box-sizing: border-box; width: 100%; padding: 20rpx; overflow: hidden; border-radius: 12rpx; background: #f3f1ed; color: #343a36; font-size: 26rpx; line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }

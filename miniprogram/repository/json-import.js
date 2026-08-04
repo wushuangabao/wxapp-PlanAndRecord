@@ -4,7 +4,11 @@ const {
 const { clone, createInitialDatabase } = require('../domain/entities');
 const { DomainError } = require('../domain/errors');
 const { logicalOccurrenceStart, projectRule } = require('../domain/recurrence');
-const { validateJsonSnapshot, persistedValueEquals } = require('./json-snapshot');
+const {
+  persistedValueEquals,
+  validateJsonSnapshot,
+  validateOccurrenceOverrideRules
+} = require('./json-snapshot');
 
 const ENTITY_COLLECTIONS = [
   'wishes',
@@ -193,6 +197,9 @@ function repairFinalReferences(database) {
 
   database.occurrenceExceptions = database.occurrenceExceptions.filter((item) => {
     if (!ruleIds.has(item.ruleId)) {
+      if (item.kind === 'override') {
+        throw new DomainError('IMPORT_SCHEMA_INVALID', '导入文件的数据结构无效');
+      }
       repairedReferenceCount += 1;
       discardedExceptionCount += 1;
       return false;
@@ -226,6 +233,7 @@ function resolveImportAnalysis(analysis, conflictPolicy) {
 
   const database = clone(analysis.baseDatabase);
   const replacedCounts = mergeImportedEntities(database, analysis.importedDatabase, conflictPolicy);
+  validateOccurrenceOverrideRules(database);
   const repairs = repairFinalReferences(database);
   database.updatedAt = analysis.now;
   validateJsonSnapshot(database);

@@ -75,9 +75,24 @@ function occurrenceException(id, ruleId, override, now = NOW) {
   };
 }
 
+function fullOverride(overrides = {}) {
+  return {
+    title: '单次修改',
+    startedAt: NOW + 60_000,
+    endedAt: NOW + 120_000,
+    priority: 2,
+    projectId: null,
+    projectNameSnapshot: null,
+    taskId: null,
+    taskNameSnapshot: null,
+    ...overrides
+  };
+}
+
 function timeLog(id, references = {}, now = NOW) {
   return {
-    id, schemaVersion: 1, startedAt: now, endedAt: now + 3_600_000, durationMinutes: 60,
+    id, schemaVersion: 1, startedAt: now, endedAt: now + 3_600_000,
+    pausedDurationSeconds: 0, durationMinutes: 60,
     projectId: null, projectNameSnapshot: null, taskId: null, taskNameSnapshot: null,
     calendarEventId: null, calendarEventSummarySnapshot: null, note: '', status: 'confirmed',
     source: 'manual', originRuleId: null, originOccurrenceId: null,
@@ -212,6 +227,85 @@ test('同 ID 重复规则冲突按统一策略保留或整体替换 revisions', 
   assert.deepEqual(usedRule, importedRule);
   assert.deepEqual(usedRule.revisions.map((item) => item.id), ['revision_imported_only']);
   assert.equal(JSON.stringify(usedRule).includes('revision_local_only'), false);
+});
+
+test('缺规则 override 整次拒绝而缺规则 skip 仍按既有策略修复', () => {
+  const invalid = database();
+  invalid.occurrenceExceptions.push(occurrenceException(
+    'exception_orphan_override',
+    'rule_missing',
+    fullOverride()
+  ));
+  assert.throws(
+    () => createImportAnalysis(invalid, database(), {
+      mode: IMPORT_MODE.INCREMENTAL,
+      now: NOW + 1
+    }),
+    (error) => error.code === 'IMPORT_SCHEMA_INVALID'
+  );
+
+  const repairable = database();
+  repairable.occurrenceExceptions.push(occurrenceException(
+    'exception_orphan_skip',
+    'rule_missing',
+    null
+  ));
+  const resolved = resolveImportAnalysis(createImportAnalysis(repairable, database(), {
+    mode: IMPORT_MODE.INCREMENTAL,
+    now: NOW + 1
+  }));
+  assert.equal(resolved.database.occurrenceExceptions.length, 0);
+  assert.equal(resolved.summary.discardedExceptionCount, 1);
+});
+
+test('规则冲突后 override 零有效修订或导入链多有效修订时整次拒绝', () => {
+  function localWithOverride() {
+    const local = database();
+    local.repeatRules.push(repeatRule('rule_conflict_override', '本机规则', [
+      revision('revision_local')
+    ]));
+    local.occurrenceExceptions.push(occurrenceException(
+      'exception_local_override',
+      'rule_conflict_override',
+      fullOverride()
+    ));
+    return local;
+  }
+
+  const noRevision = database();
+  noRevision.repeatRules.push(repeatRule('rule_conflict_override', '导入规则', [{
+    ...revision('revision_imported_future', {}, NOW + 1),
+    effectiveFrom: NOW + 1,
+    startedAt: NOW + 1,
+    endedAt: NOW + 3_600_001
+  }], NOW + 1));
+  const noRevisionAnalysis = createImportAnalysis(localWithOverride(), noRevision, {
+    mode: IMPORT_MODE.INCREMENTAL,
+    now: NOW + 2
+  });
+  assert.throws(
+    () => resolveImportAnalysis(noRevisionAnalysis, CONFLICT_POLICY.USE_IMPORTED),
+    (error) => error.code === 'IMPORT_SCHEMA_INVALID'
+  );
+
+  const multipleRevisions = database();
+  multipleRevisions.repeatRules.push(repeatRule('rule_conflict_override', '导入规则', [
+    {
+      ...revision('revision_imported_1'),
+      effectiveFrom: NOW - 1_000,
+      effectiveUntil: NOW + 1_000,
+      startedAt: NOW - 1_000,
+      endedAt: NOW + 3_599_000
+    },
+    { ...revision('revision_imported_2'), revision: 2 }
+  ], NOW + 1));
+  assert.throws(
+    () => createImportAnalysis(localWithOverride(), multipleRevisions, {
+      mode: IMPORT_MODE.INCREMENTAL,
+      now: NOW + 2
+    }),
+    (error) => error.code === 'IMPORT_SCHEMA_INVALID'
+  );
 });
 
 test('七类顶层聚合均按 ID 合并，项目和规则的嵌套聚合随父实体移动', () => {

@@ -1,0 +1,33 @@
+<view class="page">
+  <view class="eyebrow">LOCAL DATA RECOVERY</view>
+  <view class="hero">
+    <view class="title">{{title}}</view>
+    <view class="explanation">{{explanation}}</view>
+  </view>
+
+  <view class="action-group">
+    <view class="action-title">1. 导出原始数据</view>
+    <view class="action-hint">先保存当前存储的原始内容，便于之后排查或使用更新版本处理。</view>
+    <button class="secondary" disabled="{{busy}}" bindtap="exportRawData">准备救援文件</button>
+    <button wx:if="{{rescueFileReady}}" class="primary" bindtap="shareRawData">发送原始数据文件</button>
+  </view>
+
+  <view class="action-group">
+    <view class="action-title">2. 从 Plan & Record JSON 恢复</view>
+    <view class="action-hint">只接受通过完整校验的本产品 JSON。成功后会覆盖本地资料库，并重置计时状态。</view>
+    <button class="secondary" disabled="{{busy}}" bindtap="chooseReplacementFile">选择 JSON 文件</button>
+    <view wx:if="{{replacementPreview}}" class="preview">
+      <view>结构版本：{{replacementPreview.schemaVersion}}</view>
+      <view>将恢复 {{replacementAddedCount}} 项数据</view>
+      <view>修复 {{replacementPreview.repairedReferenceCount}} 个失效关联</view>
+      <view>计时状态将重置</view>
+      <button class="danger" disabled="{{busy}}" bindtap="confirmReplacement">确认覆盖本地数据</button>
+    </view>
+  </view>
+
+  <view class="action-group danger-group">
+    <view class="action-title">3. 清空并重新开始</view>
+    <view class="action-hint">只有在不再需要当前本地数据时使用。系统会连续要求两次确认。</view>
+    <button class="danger" disabled="{{busy}}" bindtap="clearAndRestart">清空并重新开始</button>
+  </view>
+</view>
