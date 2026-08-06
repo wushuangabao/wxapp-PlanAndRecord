@@ -25,6 +25,7 @@ const RECENT_SNAP_ANIMATION_DURATION = 420;
 const RECENT_RETURN_ANIMATION_FRAME = 16;
 const RECENT_BOUNDARY_PULL_RESISTANCE = 0.45;
 const RECENT_BOUNDARY_MAX_OFFSET = 72;
+const TIMER_DRAFT_DEBOUNCE_MS = 300;
 
 function formatDuration(seconds) {
   const hours = Math.floor(seconds / 3_600);
@@ -370,6 +371,7 @@ Page({
   onLoad() {
     this.recentNewLogId = null;
     this.focusedRecentLogId = null;
+    this.timerDraftSyncId = null;
     const endedAt = Date.now();
     const startedAt = endedAt - 60 * 60 * 1000;
     const end = editableTimeFields(endedAt);
@@ -397,11 +399,13 @@ Page({
   },
 
   onHide() {
+    this.flushTimerDraftSync();
     this.stopTicker();
     if (!this.data.recentScrollEnabled) this.setData({ recentScrollEnabled: true });
   },
 
   onUnload() {
+    this.flushTimerDraftSync();
     this.stopTicker();
     this.clearRecentScrollAnimation();
   },
@@ -763,7 +767,8 @@ Page({
 
   onNoteInput(event) {
     this.markTimerFormChanged();
-    this.setData({ note: event.detail.value }, () => this.syncTimerDraft());
+    this.setData({ note: event.detail.value });
+    this.scheduleTimerDraftSync();
   },
 
   markTimerFormChanged() {
@@ -773,6 +778,7 @@ Page({
   },
 
   syncTimerDraft() {
+    this.cancelTimerDraftSync();
     if (this.data.timer.status === TIMER_STATUS.IDLE) return;
     try {
       getService().updateTimerDraft(this.selectedInput());
@@ -781,6 +787,27 @@ Page({
       this.hasUncommittedTimerForm = true;
       showError(error);
     }
+  },
+
+  scheduleTimerDraftSync() {
+    this.cancelTimerDraftSync();
+    this.timerDraftSyncId = setTimeout(() => {
+      this.timerDraftSyncId = null;
+      this.syncTimerDraft();
+    }, TIMER_DRAFT_DEBOUNCE_MS);
+  },
+
+  flushTimerDraftSync() {
+    if (this.timerDraftSyncId === null || this.timerDraftSyncId === undefined) return;
+    this.cancelTimerDraftSync();
+    this.syncTimerDraft();
+  },
+
+  cancelTimerDraftSync() {
+    if (this.timerDraftSyncId !== null && this.timerDraftSyncId !== undefined) {
+      clearTimeout(this.timerDraftSyncId);
+    }
+    this.timerDraftSyncId = null;
   },
 
   openTagInput(event) {
@@ -985,6 +1012,7 @@ Page({
     try {
       const service = getService();
       const result = service.finishTimer(this.selectedInput());
+      this.cancelTimerDraftSync();
       this.hasUncommittedTimerForm = false;
       if (result && result.state === 'draft') {
         this.refresh();

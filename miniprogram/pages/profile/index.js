@@ -36,6 +36,25 @@ function formatExportTimestamp(timestamp) {
   ].join('');
 }
 
+function formatStorageBytes(bytes) {
+  if (!Number.isFinite(bytes)) return '未知';
+  if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  return `${Math.ceil(bytes / 1024)} KB`;
+}
+
+function storageUsageViewModel(usage = {}) {
+  const percent = Number.isFinite(usage.percent)
+    ? Math.min(100, Math.max(0, usage.percent))
+    : 0;
+  return {
+    ...usage,
+    percent,
+    warning: usage.warning === true,
+    displayUsed: formatStorageBytes(usage.databaseBytes),
+    displayLimit: formatStorageBytes(usage.databaseLimitBytes)
+  };
+}
+
 function errorMessage(error) {
   return error && (error.errMsg || error.message) ? (error.errMsg || error.message) : '';
 }
@@ -559,6 +578,12 @@ Page({
   data: {
     includeCandidates: false,
     dataOperationInProgress: false,
+    storageUsage: storageUsageViewModel({
+      databaseBytes: 0,
+      databaseLimitBytes: 1024 * 1024,
+      percent: 0,
+      warning: false
+    }),
     statistics: null,
     tagStats: [],
     projectStats: [],
@@ -583,7 +608,9 @@ Page({
         rangeEnd: range.end,
         includeCandidates: this.data.includeCandidates
       });
+      const storageUsage = storageUsageViewModel(service.storageUsage());
       this.setData({
+        storageUsage,
         statistics,
         tagStats: statistics.tags.map((item) => ({
           ...item,
@@ -600,6 +627,14 @@ Page({
 
   onCandidatesChange(event) {
     this.setData({ includeCandidates: event.detail.value }, () => this.refresh());
+  },
+
+  openCloudStorage() {
+    try {
+      getApp().globalData.bootstrap.ports.sync.execute();
+    } catch (error) {
+      showError(error);
+    }
   },
 
   exportJson() {

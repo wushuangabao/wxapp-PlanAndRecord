@@ -4,8 +4,8 @@
   <view class="card wish-card">
     <view class="section-header wish-toggle" bindtap="toggleWishSection"><view class="section-title">愿望池（{{wishes.length}}）</view><view class="collapse-mark">{{isWishExpanded ? '收起' : '展开'}}</view></view>
     <view wx:if="{{isWishExpanded}}" class="wish-content">
-      <view wx:if="{{!wishes.length}}" class="wish-empty">还没有愿望，可以在下方收集一条。</view>
-      <scroll-view wx:else class="wish-list" scroll-x="{{true}}" scroll-left="{{wishScrollLeft}}" scroll-with-animation="{{wishScrollWithAnimation}}" bindscroll="onWishScroll" bindtouchstart="onWishTouchStart" bindtouchmove="onWishTouchMove" bindtouchend="onWishTouchEnd">
+      <view wx:if="{{!wishes.length}}" class="wish-empty is-one-row">还没有愿望，可以在下方创建一条。</view>
+      <scroll-view wx:else class="wish-list {{wishes.length === 1 ? 'is-one-row' : (wishes.length === 2 ? 'is-two-rows' : '')}}" scroll-x="{{true}}" scroll-left="{{wishScrollLeft}}" scroll-with-animation="{{wishScrollWithAnimation}}" bindscroll="onWishScroll" bindtouchstart="onWishTouchStart" bindtouchmove="onWishTouchMove" bindtouchend="onWishTouchEnd">
         <view class="wish-columns {{wishBoundaryIsDragging ? 'is-boundary-dragging' : ''}}" style="transform: translateX({{wishBoundaryOffset}}px);">
           <view wx:for="{{wishListColumns}}" wx:for-item="column" wx:key="id" class="wish-column">
             <view wx:for="{{column.wishes}}" wx:for-item="wish" wx:key="id" class="item wish-row">
@@ -26,15 +26,15 @@
     </view>
   </view>
 
-  <view class="card todo-card">
-    <view class="section-header"><view class="section-heading"><view class="section-title">TODO LIST（{{todoListTasks.length}}）</view></view><button class="section-add todo-add" bindtap="openStandaloneTask" aria-label="新建 TODO">+</button></view>
-    <view wx:if="{{!todoListTasks.length}}" class="todo-empty">还没有 TODO，点右上角 + 创建一条。</view>
-    <scroll-view wx:else class="todo-list" scroll-x="{{true}}" scroll-left="{{todoScrollLeft}}" scroll-with-animation="{{todoScrollWithAnimation}}" bindscroll="onTodoScroll" bindtouchstart="onTodoTouchStart" bindtouchmove="onTodoTouchMove" bindtouchend="onTodoTouchEnd">
+  <view class="card todo-card {{todoListTasks.length < 2 ? 'is-one-row' : (todoListTasks.length === 2 ? 'is-two-rows' : '')}}">
+    <view class="section-header"><view class="section-heading"><view class="section-title">TODO LIST（{{todoListTasks.length}}）</view></view><view class="todo-header-actions"><view class="todo-sort-button" role="button" aria-label="调整 TODO 排序" bindtap="openTodoSort"><view aria-hidden="true">⇅</view></view><view class="section-add todo-add" role="button" aria-label="新建 TODO" bindtap="openStandaloneTask">+</view></view></view>
+    <view wx:if="{{!todoListTasks.length}}" class="todo-empty is-one-row">还没有 TODO，点右上角 + 创建一条。</view>
+    <scroll-view wx:else class="todo-list {{todoListTasks.length === 1 ? 'is-one-row' : (todoListTasks.length === 2 ? 'is-two-rows' : '')}}" scroll-x="{{true}}" scroll-left="{{todoScrollLeft}}" scroll-with-animation="{{todoScrollWithAnimation}}" bindscroll="onTodoScroll" bindtouchstart="onTodoTouchStart" bindtouchmove="onTodoTouchMove" bindtouchend="onTodoTouchEnd">
       <view class="todo-columns {{todoBoundaryIsDragging ? 'is-boundary-dragging' : ''}}" style="transform: translateX({{todoBoundaryOffset}}px);">
         <view wx:for="{{todoListColumns}}" wx:for-item="column" wx:key="id" class="todo-column">
           <view wx:for="{{column.tasks}}" wx:for-item="task" wx:key="id" class="item todo-row {{task.status === 'completed' ? 'is-completed' : ''}}">
             <view class="todo-check" data-id="{{task.id}}" data-status="{{task.status}}" bindtap="toggleTask">{{task.status === 'completed' ? '✓' : ''}}</view>
-            <view class="todo-main"><input wx:if="{{todoTitleEditTaskId === task.id && todoTitleEditSource === 'todo'}}" class="todo-title-input" focus="{{true}}" maxlength="-1" value="{{todoTitleEditValue}}" style="font-size: {{task.todoTitleFontSize}}rpx;" aria-label="编辑 TODO 标题" catchtap="noop" bindinput="onTodoTitleInput" bindblur="saveTodoTitle" bindconfirm="saveTodoTitle" /><view wx:else class="todo-title todo-title-button" role="button" aria-label="编辑 TODO 标题" data-id="{{task.id}}" data-edit-source="todo" style="font-size: {{task.todoTitleFontSize}}rpx;" bindtap="openTodoTitleEditor">{{task.title}}</view><view wx:if="{{task.projectId}}" class="todo-project">{{task.projectNameSnapshot}}</view></view>
+            <view class="todo-main"><input wx:if="{{todoTitleEditTaskId === task.id && todoTitleEditSource === 'todo'}}" class="todo-title-input" focus="{{true}}" maxlength="-1" value="{{todoTitleEditValue}}" style="font-size: {{task.todoTitleFontSize}}rpx;" aria-label="编辑 TODO 标题" catchtap="noop" bindinput="onTodoTitleInput" bindblur="saveTodoTitle" bindconfirm="saveTodoTitle" /><view wx:else class="todo-title todo-title-button" role="button" aria-label="编辑 TODO 标题" data-id="{{task.id}}" data-edit-source="todo" style="font-size: {{task.todoTitleFontSize}}rpx;" bindtap="openTodoTitleEditor">{{task.title}}</view><view wx:if="{{task.projectDisplayName}}" class="todo-project">{{task.projectDisplayName}}</view></view>
             <view class="todo-actions">
               <view class="todo-icon-button todo-link-button" role="button" aria-label="关联项目" data-id="{{task.id}}" bindtap="chooseTaskProject"><view class="todo-link-icon"><view class="todo-folder-icon"><view class="todo-folder-tab"></view><view class="todo-folder-body"></view></view><view class="todo-link-arrow"></view></view></view>
               <view class="todo-icon-button todo-delete-button" role="button" aria-label="删除" data-id="{{task.id}}" bindtap="confirmDeleteTask"><delete-icon /></view>
@@ -50,24 +50,25 @@
     <view class="section-header"><view class="section-heading"><view class="section-title">项目（{{activeProjects.length}} / 5）</view></view><button wx:if="{{activeProjects.length < 5}}" class="section-add project-add" bindtap="openProjectCreate" aria-label="新建项目">+</button></view>
     <view wx:if="{{!activeProjects.length}}" class="empty">还没有正在进行的项目。</view>
     <view wx:for="{{projectCards}}" wx:key="id" class="item project-item">
-      <view class="project-heading"><view class="item-title">{{item.title}}</view><view class="project-manage" role="button" aria-label="管理项目" data-id="{{item.id}}" bindtap="openProjectManage">…</view></view>
-      <view class="muted">截止：{{item.deadlineText}}</view>
-      <view wx:if="{{item.hasNoTodoTasks}}" class="project-task-empty">还没有子任务</view>
-      <view wx:else class="project-task-list">
-        <view wx:for="{{item.todoTasks}}" wx:for-item="task" wx:key="id" class="project-task-row {{task.status === 'completed' ? 'is-completed' : ''}}">
-          <view class="project-task-check" role="button" aria-label="{{task.status === 'completed' ? '重新打开子任务' : '完成子任务'}}" data-id="{{task.id}}" data-status="{{task.status}}" bindtap="toggleTask"><view class="todo-check" aria-hidden="true">{{task.status === 'completed' ? '✓' : ''}}</view></view>
-          <view class="todo-main"><input wx:if="{{todoTitleEditTaskId === task.id && todoTitleEditSource === 'project'}}" class="todo-title-input" focus="{{true}}" maxlength="-1" value="{{todoTitleEditValue}}" aria-label="编辑 TODO 标题" catchtap="noop" bindinput="onTodoTitleInput" bindblur="saveTodoTitle" bindconfirm="saveTodoTitle" /><view wx:else class="todo-title todo-title-button project-task-title-button" role="button" aria-label="编辑 TODO 标题" data-id="{{task.id}}" data-edit-source="project" bindtap="openTodoTitleEditor">{{task.title}}</view></view>
+      <view class="project-heading"><view class="project-collapse" role="button" aria-label="{{item.isCollapsed ? '展开项目' : '折叠项目'}}" data-id="{{item.id}}" bindtap="toggleProjectCollapse"><view class="project-collapse-icon {{item.isCollapsed ? 'is-collapsed' : ''}}" aria-hidden="true"></view></view><view class="project-title-deadline"><view class="item-title">{{item.title}}</view><view class="project-deadline-viewport"><view wx:if="{{item.isDeadlineScrolling}}" class="project-deadline-marquee"><view class="project-deadline-copy">截止：{{item.deadlineText}}</view><view class="project-deadline-gap" aria-hidden="true"></view><view class="project-deadline-copy">截止：{{item.deadlineText}}</view></view><view wx:else class="project-deadline-text">截止：{{item.deadlineText}}</view></view><view class="project-deadline-measure" aria-hidden="true">截止：{{item.deadlineText}}</view></view><view class="project-manage" role="button" aria-label="管理项目" data-id="{{item.id}}" bindtap="openProjectManage">…</view></view>
+      <block wx:if="{{!item.isCollapsed}}">
+        <view wx:if="{{item.hasNoTodoTasks}}" class="project-task-empty">还没有子任务</view>
+        <view wx:else class="project-task-list">
+          <view wx:for="{{item.todoTasks}}" wx:for-item="task" wx:key="id" class="project-task-row {{task.status === 'completed' ? 'is-completed' : ''}}">
+            <view class="project-task-check" role="button" aria-label="{{task.status === 'completed' ? '重新打开子任务' : '完成子任务'}}" data-id="{{task.id}}" data-status="{{task.status}}" bindtap="toggleTask"><view class="todo-check" aria-hidden="true">{{task.status === 'completed' ? '✓' : ''}}</view></view>
+            <view class="todo-main"><input wx:if="{{todoTitleEditTaskId === task.id && todoTitleEditSource === 'project'}}" class="todo-title-input" focus="{{true}}" maxlength="-1" value="{{todoTitleEditValue}}" aria-label="编辑 TODO 标题" catchtap="noop" bindinput="onTodoTitleInput" bindblur="saveTodoTitle" bindconfirm="saveTodoTitle" /><view wx:else class="todo-title todo-title-button project-task-title-button" role="button" aria-label="编辑 TODO 标题" data-id="{{task.id}}" data-edit-source="project" bindtap="openTodoTitleEditor">{{task.title}}</view></view>
+          </view>
         </view>
-      </view>
-      <view wx:if="{{item.hasMoreTodoTasks}}" class="project-inline-link" role="button" data-id="{{item.id}}" bindtap="toggleProjectTodoExpansion">{{item.todoToggleText}}</view>
-      <view wx:if="{{item.completedCount}}" class="project-inline-link" role="button" data-id="{{item.id}}" bindtap="toggleProjectCompletedExpansion">{{item.completedToggleText}}</view>
-      <view wx:if="{{item.isCompletedExpanded}}" class="project-completed-list">
-        <view wx:for="{{item.completedTasks}}" wx:for-item="task" wx:key="id" class="project-task-row is-completed">
-          <view class="project-task-check" role="button" aria-label="{{task.status === 'completed' ? '重新打开子任务' : '完成子任务'}}" data-id="{{task.id}}" data-status="{{task.status}}" bindtap="toggleTask"><view class="todo-check" aria-hidden="true">✓</view></view>
-          <view class="todo-main"><input wx:if="{{todoTitleEditTaskId === task.id && todoTitleEditSource === 'project'}}" class="todo-title-input" focus="{{true}}" maxlength="-1" value="{{todoTitleEditValue}}" aria-label="编辑 TODO 标题" catchtap="noop" bindinput="onTodoTitleInput" bindblur="saveTodoTitle" bindconfirm="saveTodoTitle" /><view wx:else class="todo-title todo-title-button project-task-title-button" role="button" aria-label="编辑 TODO 标题" data-id="{{task.id}}" data-edit-source="project" bindtap="openTodoTitleEditor">{{task.title}}</view></view>
+        <view wx:if="{{item.hasMoreTodoTasks}}" class="project-inline-link" role="button" data-id="{{item.id}}" bindtap="toggleProjectTodoExpansion">{{item.todoToggleText}}</view>
+        <view wx:if="{{item.completedCount}}" class="project-inline-link" role="button" data-id="{{item.id}}" bindtap="toggleProjectCompletedExpansion">{{item.completedToggleText}}</view>
+        <view wx:if="{{item.isCompletedExpanded}}" class="project-completed-list">
+          <view wx:for="{{item.completedTasks}}" wx:for-item="task" wx:key="id" class="project-task-row is-completed">
+            <view class="project-task-check" role="button" aria-label="{{task.status === 'completed' ? '重新打开子任务' : '完成子任务'}}" data-id="{{task.id}}" data-status="{{task.status}}" bindtap="toggleTask"><view class="todo-check" aria-hidden="true">✓</view></view>
+            <view class="todo-main"><input wx:if="{{todoTitleEditTaskId === task.id && todoTitleEditSource === 'project'}}" class="todo-title-input" focus="{{true}}" maxlength="-1" value="{{todoTitleEditValue}}" aria-label="编辑 TODO 标题" catchtap="noop" bindinput="onTodoTitleInput" bindblur="saveTodoTitle" bindconfirm="saveTodoTitle" /><view wx:else class="todo-title todo-title-button project-task-title-button" role="button" aria-label="编辑 TODO 标题" data-id="{{task.id}}" data-edit-source="project" bindtap="openTodoTitleEditor">{{task.title}}</view></view>
+          </view>
         </view>
-      </view>
-      <view class="project-add-task" role="button" data-id="{{item.id}}" bindtap="openChildTask">{{item.hasNoTodoTasks ? '+ 添加第一项子任务' : '+ 添加子任务'}}</view>
+        <view class="project-add-task" role="button" data-id="{{item.id}}" bindtap="openChildTask">{{item.hasNoTasks ? '+ 添加第一项子任务' : '+ 添加子任务'}}</view>
+      </block>
     </view>
   </view>
 
@@ -79,6 +80,8 @@
       <view class="actions"><button class="text-button" data-id="{{item.id}}" bindtap="restoreProject">恢复项目</button></view>
     </view>
   </view>
+
+  <view wx:if="{{isTodoSortOpen}}" class="modal-mask" bindtap="dismissTodoSort"><view class="modal todo-sort-modal" catchtap="noop"><sheet-header title="TODO 排序" show-confirm="{{true}}" bind:confirm="saveTodoSort" bind:cancel="dismissTodoSort" /><view class="todo-sort-intro"><view>从上到下决定排序优先级</view><view class="todo-sort-reset" role="button" aria-label="重置 TODO 排序" bindtap="resetTodoSort">重置</view></view><view class="todo-sort-list"><view wx:for="{{todoSortEditorItems}}" wx:for-item="criterion" wx:key="field" class="todo-sort-row"><view class="todo-sort-priority">{{index + 1}}</view><view class="todo-sort-main"><view class="todo-sort-label">{{criterion.label}}</view><view class="todo-sort-direction">{{criterion.directionLabel}}</view></view><view class="todo-sort-actions"><view wx:if="{{criterion.field !== 'status'}}" class="todo-sort-action" role="button" aria-label="切换 {{criterion.label}} 排序方向" data-index="{{index}}" bindtap="toggleTodoSortDirection">⇅</view><view wx:if="{{criterion.canMoveUp}}" class="todo-sort-action" role="button" aria-label="提高 {{criterion.label}} 排序优先级" data-index="{{index}}" data-direction="up" bindtap="moveTodoSortCriterion">↑</view><view wx:if="{{criterion.canMoveDown}}" class="todo-sort-action" role="button" aria-label="降低 {{criterion.label}} 排序优先级" data-index="{{index}}" data-direction="down" bindtap="moveTodoSortCriterion">↓</view><view wx:if="{{criterion.canRemove}}" class="todo-sort-action todo-sort-remove" role="button" aria-label="移除 {{criterion.label}} 排序" data-index="{{index}}" bindtap="removeTodoSortCriterion">×</view></view></view></view><view wx:if="{{todoSortAvailableFields.length}}" class="todo-sort-add"><view class="todo-sort-add-title">添加排序条件</view><view class="todo-sort-options"><view wx:for="{{todoSortAvailableFields}}" wx:for-item="field" wx:key="field" class="todo-sort-option" role="button" aria-label="添加 {{field.label}} 排序" data-field="{{field.field}}" bindtap="addTodoSortCriterion">+ {{field.label}}</view></view></view></view></view>
 
   <view wx:if="{{isProjectCreateOpen}}" class="modal-mask" bindtap="closeProjectCreate"><view class="modal project-create-modal" catchtap="noop"><sheet-header title="新建项目" show-confirm="{{true}}" bind:confirm="addProject" bind:cancel="closeProjectCreate" /><input class="input" maxlength="-1" placeholder="项目名称（最多 25 字）" value="{{projectTitle}}" data-key="projectTitle" bindinput="onTitleField" /><view class="project-deadline-row"><view class="project-deadline-label">截止时间</view><picker class="project-deadline-picker project-deadline-date" mode="date" value="{{projectDate}}" data-key="projectDate" bindchange="onField"><view>{{projectDate}}</view></picker><picker class="project-deadline-picker project-deadline-time" mode="time" value="{{projectTime}}" data-key="projectTime" bindchange="onField"><view>{{projectTime}}</view></picker></view></view></view>
 

@@ -4,6 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const { createInitialDatabase } = require('../miniprogram/domain/entities');
+const { showError } = require('../miniprogram/utils/page');
 
 const profilePagePath = require.resolve('../miniprogram/pages/profile/index.js');
 const profileWxmlPath = path.join(__dirname, '../miniprogram/pages/profile/index.wxml');
@@ -53,12 +54,17 @@ function createHarness(options = {}) {
     unlink: [],
     unlinkSync: [],
     openDocument: [],
+    requests: [],
+    switchTabs: [],
     toasts: [],
     modals: [],
     infos: [],
     warnings: [],
     errors: [],
     refreshes: 0,
+    ports: {
+      sync: 0
+    },
     service: {
       exportJson: 0,
       prepareJsonImport: [],
@@ -72,6 +78,12 @@ function createHarness(options = {}) {
   const service = {
     snapshot: () => createInitialDatabase(FIXED_NOW),
     statistics: () => options.statistics || defaultStatistics(),
+    storageUsage: () => options.storageUsage || {
+      databaseBytes: 0,
+      databaseLimitBytes: 1024 * 1024,
+      percent: 0,
+      warning: false
+    },
     exportJson() {
       calls.service.exportJson += 1;
       return '{"schemaVersion":1}';
@@ -145,9 +157,17 @@ function createHarness(options = {}) {
   };
 
   Date.now = () => FIXED_NOW;
+  const ports = {
+    sync: {
+      execute() {
+        calls.ports.sync += 1;
+        throw options.syncError || new Error('当前版本暂不支持云端存储');
+      }
+    }
+  };
   global.getApp = () => ({
     globalData: {
-      bootstrap: { applicationService: service }
+      bootstrap: { applicationService: service, ports }
     }
   });
   console.info = (...args) => calls.infos.push(args);
@@ -189,6 +209,13 @@ function createHarness(options = {}) {
     openDocument(openOptions) {
       calls.openDocument.push(openOptions);
       if (openOptions.success) openOptions.success();
+    },
+    request(requestOptions) {
+      calls.requests.push(requestOptions);
+    },
+    switchTab(switchOptions) {
+      calls.switchTabs.push(switchOptions);
+      if (switchOptions.success) switchOptions.success();
     },
     showToast(toastOptions) {
       calls.toasts.push(toastOptions);
@@ -306,19 +333,112 @@ test('用户页不再读取或渲染统计重叠 warning', () => {
   }
 });
 
-test('M5：数据管理区只暴露 JSON 导出、JSON 导入和危险清空按钮', () => {
+test('M5：数据管理只暴露 JSON 导入导出、危险清空和唯一的禁用上云入口', () => {
   const wxml = fs.readFileSync(profileWxmlPath, 'utf8');
   const wxss = fs.readFileSync(profileWxssPath, 'utf8');
 
+  assert.match(wxml, /本地资料库/);
+  assert.match(wxml, /storageUsage\.displayUsed/);
+  assert.match(wxml, /storageUsage\.displayLimit/);
+  assert.match(wxml, /wx:if="\{\{storageUsage\.warning\}\}"/);
   assert.equal((wxml.match(/>导出 JSON</g) || []).length, 1);
   assert.equal((wxml.match(/>导入 JSON</g) || []).length, 1);
+  assert.equal((wxml.match(/>转为云端存储</g) || []).length, 1);
   assert.equal((wxml.match(/>清空数据</g) || []).length, 1);
   assert.match(wxml, /bindtap="importJson"/);
+  assert.match(wxml, /bindtap="openCloudStorage"/);
   assert.match(wxml, /bindtap="clearData"/);
   assert.match(wxml, /class="danger"/);
-  assert.equal((wxml.match(/disabled="\{\{dataOperationInProgress\}\}"/g) || []).length, 3);
+  assert.equal((wxml.match(/disabled="\{\{dataOperationInProgress\}\}"/g) || []).length, 4);
   assert.doesNotMatch(wxml, /CSV|exportCsv|exportInProgress|日志同步/);
   assert.match(wxss, /\.danger\s*\{[^}]*background:\s*#f2e3e1;[^}]*color:\s*#8a4945;/);
+});
+
+test('用户页把仓储容量格式化为稳定展示读模型', () => {
+  const harness = createHarness({
+    keepPageRefresh: true,
+    storageUsage: {
+      databaseBytes: 943719,
+      databaseLimitBytes: 1024 * 1024,
+      percent: 90,
+      warning: true
+    }
+  });
+  try {
+    harness.page.refresh();
+
+    assert.deepEqual(harness.page.data.storageUsage, {
+      databaseBytes: 943719,
+      databaseLimitBytes: 1024 * 1024,
+      percent: 90,
+      warning: true,
+      displayUsed: '922 KB',
+      displayLimit: '1.0 MB'
+    });
+  } finally {
+    harness.restore();
+  }
+});
+
+test('用户页上云入口只调用禁用端口并显示固定提示，不发起网络请求', () => {
+  const harness = createHarness();
+  try {
+    harness.page.openCloudStorage();
+
+    assert.equal(harness.calls.ports.sync, 1);
+    assert.equal(harness.calls.toasts.at(-1).title, '当前版本暂不支持云端存储');
+    assert.equal(harness.calls.requests.length, 0);
+  } finally {
+    harness.restore();
+  }
+});
+
+test('容量超限错误提供导出与云端两条出口，且导出只导航到用户页', () => {
+  const exportHarness = createHarness();
+  try {
+    showError({ code: 'STORAGE_CAPACITY_EXCEEDED', message: '资料库空间不足' });
+
+    assert.deepEqual(exportHarness.calls.actionSheets[0].itemList, [
+      '导出 JSON 备份',
+      '转为云端存储'
+    ]);
+    assert.deepEqual(exportHarness.calls.switchTabs, [{ url: '/pages/profile/index' }]);
+    assert.equal(exportHarness.calls.writeFile.length, 0);
+  } finally {
+    exportHarness.restore();
+  }
+
+  const cloudHarness = createHarness({
+    actionSheetResults: [
+      (callbacks) => callbacks.success({ tapIndex: 1 })
+    ]
+  });
+  try {
+    showError({ code: 'STORAGE_CAPACITY_EXCEEDED', message: '资料库空间不足' });
+
+    assert.equal(cloudHarness.calls.ports.sync, 1);
+    assert.equal(cloudHarness.calls.toasts.at(-1).title, '当前版本暂不支持云端存储');
+    assert.equal(cloudHarness.calls.requests.length, 0);
+  } finally {
+    cloudHarness.restore();
+  }
+});
+
+test('用户取消容量操作列表时静默退出', () => {
+  const harness = createHarness({
+    actionSheetResults: [
+      (callbacks) => callbacks.fail({ errMsg: 'showActionSheet:fail cancel' })
+    ]
+  });
+  try {
+    showError({ code: 'STORAGE_CAPACITY_EXCEEDED', message: '资料库空间不足' });
+
+    assert.equal(harness.calls.actionSheets.length, 1);
+    assert.deepEqual(harness.calls.toasts, []);
+    assert.deepEqual(harness.calls.switchTabs, []);
+  } finally {
+    harness.restore();
+  }
 });
 
 test('M5：JSON 导出在二次确认的用户点击回调中直接发送并清理临时文件', () => {

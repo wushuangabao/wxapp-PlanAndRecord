@@ -1,15 +1,33 @@
 const { getRecoveryService, showError } = require('../../utils/page');
 
+const RECOVERY_COPY = {
+  DATA_VERSION_UNSUPPORTED: [
+    '数据来自较新版本',
+    '当前小程序无法安全读取这份本地数据。你可以先导出原始数据，再用受支持的完整备份恢复，或明确清空后重新开始。'
+  ],
+  MIGRATION_PATH_MISSING: [
+    '缺少数据升级步骤',
+    '原始数据未被覆盖，请先导出原始数据并等待支持该版本的升级。'
+  ],
+  MIGRATION_FAILED: [
+    '数据升级未完成',
+    '升级失败后已恢复原始数据，请先导出核对再选择恢复方式。'
+  ],
+  MIGRATION_ROLLBACK_UNCERTAIN: [
+    '无法确认数据是否完整',
+    '请立即导出原始数据核对，不要继续业务写入。'
+  ]
+};
+
+const DEFAULT_RECOVERY_COPY = [
+  '本地数据损坏',
+  '当前本地数据无法安全读取。为保护原始内容，小程序已经停止业务写入。你可以先导出原始数据，再用完整备份恢复，或明确清空后重新开始。'
+];
+
 function addedCount(addedCounts) {
   return Object.values(addedCounts || {}).reduce((total, value) => (
     total + (Number.isInteger(value) ? value : 0)
   ), 0);
-}
-
-function recoveryTitle(reason) {
-  return reason === 'DATA_VERSION_UNSUPPORTED'
-    ? '数据来自较新版本'
-    : '本地数据损坏';
 }
 
 Page({
@@ -28,12 +46,10 @@ Page({
   onLoad() {
     const bootstrap = getApp().globalData.bootstrap;
     const reason = bootstrap && bootstrap.recoveryReason;
-    const isNewerVersion = reason === 'DATA_VERSION_UNSUPPORTED';
+    const [title, explanation] = RECOVERY_COPY[reason] || DEFAULT_RECOVERY_COPY;
     this.setData({
-      title: recoveryTitle(reason),
-      explanation: isNewerVersion
-        ? '当前小程序无法安全读取这份本地数据。你可以先导出原始数据，再用受支持的完整备份恢复，或明确清空后重新开始。'
-        : '当前本地数据无法安全读取。为保护原始内容，小程序已经停止业务写入。你可以先导出原始数据，再用完整备份恢复，或明确清空后重新开始。'
+      title,
+      explanation
     });
   },
 
@@ -223,11 +239,7 @@ Page({
         replacementPreview: null,
         replacementAddedCount: 0
       });
-      wx.showToast({
-        title: '恢复预览已失效，请重新选择 JSON 文件',
-        icon: 'none',
-        duration: 3000
-      });
+      showError(error);
     }
   },
 

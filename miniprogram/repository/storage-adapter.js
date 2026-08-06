@@ -1,3 +1,5 @@
+const { utf8ByteLength } = require('./storage-capacity');
+
 class MemoryStorageAdapter {
   constructor(initialValue) {
     this.values = new Map();
@@ -7,7 +9,7 @@ class MemoryStorageAdapter {
   }
 
   get(key) {
-    return this.values.get(key);
+    return this.values.has(key) ? this.values.get(key) : '';
   }
 
   has(key) {
@@ -20,6 +22,20 @@ class MemoryStorageAdapter {
 
   remove(key) {
     this.values.delete(key);
+  }
+
+  info() {
+    let totalBytes = 0;
+    for (const [key, value] of this.values.entries()) {
+      const json = JSON.stringify(value);
+      totalBytes += utf8ByteLength(key);
+      totalBytes += utf8ByteLength(json === undefined ? '' : json);
+    }
+    return {
+      keys: [...this.values.keys()],
+      currentSize: Math.ceil(totalBytes / 1024),
+      limitSize: 10240
+    };
   }
 }
 
@@ -38,6 +54,14 @@ class WxStorageAdapter {
 
   remove(key) {
     wx.removeStorageSync(key);
+  }
+
+  info() {
+    const info = wx.getStorageInfoSync();
+    return {
+      ...info,
+      keys: Array.isArray(info.keys) ? [...info.keys] : []
+    };
   }
 }
 

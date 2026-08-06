@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { createInitialDatabase, createIdleTimer } = require('../miniprogram/domain/entities');
 const { LocalRepository } = require('../miniprogram/repository/local-repository');
+const { MemoryStorageAdapter } = require('../miniprogram/repository/storage-adapter');
 const { ApplicationService } = require('../miniprogram/services/application-service');
 const { exportJson } = require('../miniprogram/services/export-service');
 const {
@@ -208,11 +209,7 @@ test('TimeLog 缺失暂停字段与显式 0 规范化后持久化内容相同', 
 });
 
 function createService(now = NOW) {
-  class MemoryStorage {
-    get(key) { return this[key]; }
-    set(key, value) { this[key] = value; }
-  }
-  const storage = new MemoryStorage();
+  const storage = new MemoryStorageAdapter();
   const clock = typeof now === 'function' ? now : () => now;
   const repository = new LocalRepository(storage, { now: clock });
   const service = new ApplicationService(repository, { now: clock });

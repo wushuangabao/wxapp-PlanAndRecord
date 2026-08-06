@@ -1,7 +1,14 @@
 const { TASK_STATUS } = require('../../domain/constants');
 const { parseLocalDateTime } = require('../../domain/time');
 const { limitTitleCodePoints } = require('../../domain/validation');
-const { defaultDateTime, formatDateTime, getService, showError, showSaved } = require('../../utils/page');
+const {
+  defaultDateTime,
+  formatDateTime,
+  getPreferenceStore,
+  getService,
+  showError,
+  showSaved
+} = require('../../utils/page');
 const { getRuntimeWindowWidth } = require('../../utils/wechat-runtime');
 
 const HORIZONTAL_COLUMN_SIZE = 3;
@@ -17,6 +24,14 @@ const TODO_TITLE_LINKED_FONT_SIZE = 28;
 const TODO_TITLE_MIN_FONT_SIZE = 18;
 const TODO_TITLE_WIDTH_PADDING = 4;
 const PROJECT_TASK_PREVIEW_LIMIT = 3;
+const TODO_SORT_FIELDS = new Set(['createdAt', 'title', 'project', 'status']);
+const TODO_SORT_FIELD_OPTIONS = Object.freeze([
+  { field: 'createdAt', label: '创建时间' },
+  { field: 'title', label: '名称' },
+  { field: 'project', label: '项目' },
+  { field: 'status', label: '完成情况' }
+]);
+const DEFAULT_TODO_SORT_CRITERIA = Object.freeze([{ field: 'createdAt', direction: 'desc' }]);
 
 const HORIZONTAL_LIST_CONFIGS = Object.freeze({
   todo: {
@@ -46,7 +61,7 @@ function estimateTextWidthUnits(text) {
 }
 
 function todoTitleBaseFontSize(task) {
-  return task.projectId ? TODO_TITLE_LINKED_FONT_SIZE : TODO_TITLE_UNLINKED_FONT_SIZE;
+  return task.projectDisplayName ? TODO_TITLE_LINKED_FONT_SIZE : TODO_TITLE_UNLINKED_FONT_SIZE;
 }
 
 function calculateTodoTitleFontSize(title, availableWidthRpx, baseFontSize) {
@@ -72,6 +87,159 @@ function buildTodoColumns(tasks) {
     'tasks',
     (task) => ({ ...task, todoTitleFontSize: todoTitleBaseFontSize(task) })
   );
+}
+
+function cloneTodoSortCriteria(criteria) {
+  return criteria.map((criterion) => ({ ...criterion }));
+}
+
+function defaultTodoSortDirection(field) {
+  return field === 'createdAt' ? 'desc' : 'asc';
+}
+
+function normalizeTodoSortCriteria(criteria) {
+  if (!Array.isArray(criteria)) return cloneTodoSortCriteria(DEFAULT_TODO_SORT_CRITERIA);
+  const usedFields = new Set();
+  const normalized = criteria.reduce((result, criterion) => {
+    if (!criterion || typeof criterion !== 'object' || !TODO_SORT_FIELDS.has(criterion.field) || usedFields.has(criterion.field)) {
+      return result;
+    }
+    usedFields.add(criterion.field);
+    result.push({
+      field: criterion.field,
+      direction: criterion.field === 'status'
+        ? 'asc'
+        : (criterion.direction === 'asc' || criterion.direction === 'desc'
+          ? criterion.direction
+          : defaultTodoSortDirection(criterion.field))
+    });
+    return result;
+  }, []);
+  return normalized.length ? normalized : cloneTodoSortCriteria(DEFAULT_TODO_SORT_CRITERIA);
+}
+
+function loadTodoSortCriteria(preferences, profileId) {
+  try {
+    return normalizeTodoSortCriteria(
+      preferences.read('TODO_SORT', profileId, DEFAULT_TODO_SORT_CRITERIA)
+    );
+  } catch (error) {
+    return cloneTodoSortCriteria(DEFAULT_TODO_SORT_CRITERIA);
+  }
+}
+
+function saveTodoSortCriteria(preferences, profileId, criteria) {
+  try {
+    return preferences.write('TODO_SORT', profileId, normalizeTodoSortCriteria(criteria));
+  } catch (error) {
+    return false;
+  }
+}
+
+function normalizeProjectCollapsedIds(ids) {
+  if (!Array.isArray(ids)) return [];
+  return Array.from(new Set(ids.filter((id) => typeof id === 'string' && id)));
+}
+
+function loadProjectCollapsedIds(preferences, profileId) {
+  try {
+    return normalizeProjectCollapsedIds(
+      preferences.read('PROJECT_COLLAPSE', profileId, [])
+    );
+  } catch (error) {
+    return [];
+  }
+}
+
+function saveProjectCollapsedIds(preferences, profileId, ids) {
+  try {
+    return preferences.write('PROJECT_COLLAPSE', profileId, normalizeProjectCollapsedIds(ids));
+  } catch (error) {
+    return false;
+  }
+}
+
+function localProfileId(snapshot) {
+  const profileId = snapshot && snapshot.localProfile && snapshot.localProfile.id;
+  return typeof profileId === 'string' && profileId ? profileId : null;
+}
+
+function todoSortFieldLabel(field) {
+  const option = TODO_SORT_FIELD_OPTIONS.find((item) => item.field === field);
+  return option ? option.label : '';
+}
+
+function todoSortDirectionLabel(criterion) {
+  if (criterion.field === 'status') return '未完成优先';
+  if (criterion.field === 'createdAt') return criterion.direction === 'asc' ? '最早在前' : '最新在前';
+  return criterion.direction === 'asc' ? '正序' : '倒序';
+}
+
+function buildTodoSortEditorItems(criteria) {
+  const normalized = normalizeTodoSortCriteria(criteria);
+  return normalized.map((criterion, index) => ({
+    ...criterion,
+    label: todoSortFieldLabel(criterion.field),
+    directionLabel: todoSortDirectionLabel(criterion),
+    canMoveUp: index > 0,
+    canMoveDown: index < normalized.length - 1,
+    canRemove: normalized.length > 1
+  }));
+}
+
+function todoSortAvailableFields(criteria) {
+  const usedFields = new Set(normalizeTodoSortCriteria(criteria).map((criterion) => criterion.field));
+  return TODO_SORT_FIELD_OPTIONS.filter((option) => !usedFields.has(option.field)).map((option) => ({ ...option }));
+}
+
+function buildTaskViewModels(tasks, projects) {
+  const projectsById = new Map(projects.map((project) => [project.id, project]));
+  return tasks.map((task) => {
+    const currentProject = task.projectId ? projectsById.get(task.projectId) : null;
+    const historicalProjectName = typeof task.projectNameSnapshot === 'string'
+      ? task.projectNameSnapshot
+      : '';
+    return {
+      ...task,
+      hasCurrentProject: Boolean(currentProject),
+      projectDisplayName: currentProject
+        ? currentProject.title
+        : (historicalProjectName ? `原项目：${historicalProjectName}` : '')
+    };
+  });
+}
+
+function sortTodoTasks(tasks, criteria) {
+  return tasks
+    .map((task, index) => ({ task, index }))
+    .sort((left, right) => {
+      for (const criterion of criteria) {
+        const direction = criterion.direction === 'asc' ? 1 : -1;
+        let result = 0;
+        if (criterion.field === 'createdAt') {
+          const leftCreatedAt = Number.isFinite(left.task.createdAt) ? left.task.createdAt : 0;
+          const rightCreatedAt = Number.isFinite(right.task.createdAt) ? right.task.createdAt : 0;
+          result = leftCreatedAt - rightCreatedAt;
+        } else if (criterion.field === 'title') {
+          result = String(left.task.title || '').localeCompare(String(right.task.title || ''), 'zh-CN');
+        } else if (criterion.field === 'project') {
+          const leftUnlinked = !left.task.hasCurrentProject;
+          const rightUnlinked = !right.task.hasCurrentProject;
+          if (leftUnlinked !== rightUnlinked) {
+            result = leftUnlinked ? 1 : -1;
+          } else if (!leftUnlinked) {
+            result = String(left.task.projectDisplayName || '').localeCompare(String(right.task.projectDisplayName || ''), 'zh-CN');
+          }
+        } else if (criterion.field === 'status') {
+          const leftStatus = left.task.status === TASK_STATUS.COMPLETED ? 1 : 0;
+          const rightStatus = right.task.status === TASK_STATUS.COMPLETED ? 1 : 0;
+          result = leftStatus - rightStatus;
+        }
+        if (result) return criterion.field === 'status' ? result : result * direction;
+      }
+      return left.index - right.index;
+    })
+    .map((item) => item.task);
 }
 
 function buildWishColumns(wishes) {
@@ -103,12 +271,17 @@ function toggleId(ids, id) {
   return hasId(ids, id) ? ids.filter((item) => item !== id) : ids.concat(id);
 }
 
-function buildProjectCards(activeProjects, tasks, expandedProjectIds, expandedCompletedProjectIds) {
+function sameIdList(left, right) {
+  return left.length === right.length && left.every((id, index) => id === right[index]);
+}
+
+function buildProjectCards(activeProjects, tasks, expandedProjectIds, expandedCompletedProjectIds, collapsedProjectIds, projectDeadlineScrollIds) {
   return activeProjects.map((project) => {
     const todoTasks = tasks.filter((task) => task.projectId === project.id && task.status !== TASK_STATUS.COMPLETED);
     const completedTasks = tasks.filter((task) => task.projectId === project.id && task.status === TASK_STATUS.COMPLETED);
     const isTodoExpanded = hasId(expandedProjectIds, project.id);
     const isCompletedExpanded = hasId(expandedCompletedProjectIds, project.id);
+    const isCollapsed = hasId(collapsedProjectIds, project.id);
     const remainingTodoCount = Math.max(0, todoTasks.length - PROJECT_TASK_PREVIEW_LIMIT);
     return {
       id: project.id,
@@ -116,6 +289,9 @@ function buildProjectCards(activeProjects, tasks, expandedProjectIds, expandedCo
       deadlineText: project.deadlineText,
       todoTasks: isTodoExpanded ? todoTasks : todoTasks.slice(0, PROJECT_TASK_PREVIEW_LIMIT),
       completedTasks: isCompletedExpanded ? completedTasks : [],
+      isCollapsed,
+      isDeadlineScrolling: hasId(projectDeadlineScrollIds, project.id),
+      hasNoTasks: todoTasks.length === 0 && completedTasks.length === 0,
       hasNoTodoTasks: todoTasks.length === 0,
       hasMoreTodoTasks: todoTasks.length > PROJECT_TASK_PREVIEW_LIMIT,
       remainingTodoCount,
@@ -148,6 +324,11 @@ Page({
     projects: [],
     wishes: [],
     tasks: [],
+    todoSortCriteria: cloneTodoSortCriteria(DEFAULT_TODO_SORT_CRITERIA),
+    todoSortEditorCriteria: [],
+    todoSortEditorItems: [],
+    todoSortAvailableFields: [],
+    isTodoSortOpen: false,
     todoListTasks: [],
     todoListColumns: [],
     todoColumnIndex: 0,
@@ -169,6 +350,8 @@ Page({
     wishTitleEditId: '',
     wishTitleEditValue: '',
     activeProjects: [],
+    collapsedProjectIds: [],
+    projectDeadlineScrollIds: [],
     expandedProjectIds: [],
     expandedCompletedProjectIds: [],
     projectCards: [],
@@ -193,7 +376,23 @@ Page({
 
   onLoad() {
     const deadline = defaultDateTime(Date.now() + 24 * 60 * 60 * 1000);
-    this.setData({ projectDate: deadline.date, projectTime: deadline.time });
+    let todoSortCriteria = cloneTodoSortCriteria(DEFAULT_TODO_SORT_CRITERIA);
+    let collapsedProjectIds = [];
+    try {
+      const profileId = localProfileId(getService().snapshot());
+      const preferences = getPreferenceStore();
+      this.preferenceProfileId = profileId;
+      todoSortCriteria = loadTodoSortCriteria(preferences, profileId);
+      collapsedProjectIds = loadProjectCollapsedIds(preferences, profileId);
+    } catch (error) {
+      this.preferenceProfileId = null;
+    }
+    this.setData({
+      projectDate: deadline.date,
+      projectTime: deadline.time,
+      todoSortCriteria,
+      collapsedProjectIds
+    });
   },
 
   onShow() {
@@ -204,23 +403,48 @@ Page({
     this.measureTodoColumn();
     if (this.data.isWishExpanded && this.data.wishListColumns.length) this.measureWishColumn();
     this.measureTodoTitleFontSizes();
+    this.measureProjectDeadlineOverflow();
   },
 
   refresh({ resetTodoColumn = false, focusLatestWish = false } = {}) {
     try {
       if (focusLatestWish) this.clearWishScrollAnimation();
       const snapshot = getService().snapshot();
+      const profileId = localProfileId(snapshot);
+      let todoSortCriteria = this.data.todoSortCriteria;
+      let storedCollapsedProjectIds = this.data.collapsedProjectIds;
+      const preferences = getPreferenceStore();
+      if (this.preferenceProfileId === undefined) {
+        this.preferenceProfileId = profileId;
+      } else if (profileId !== this.preferenceProfileId) {
+        todoSortCriteria = loadTodoSortCriteria(preferences, profileId);
+        storedCollapsedProjectIds = loadProjectCollapsedIds(preferences, profileId);
+        this.preferenceProfileId = profileId;
+      }
       const projects = snapshot.projects.map((project) => ({ ...project, deadlineText: formatDateTime(project.deadlineAt) }));
-      const tasks = snapshot.tasks.slice();
+      const tasks = buildTaskViewModels(snapshot.tasks, projects);
       const wishes = snapshot.wishes.slice();
-      const todoListTasks = tasks;
+      const todoListTasks = sortTodoTasks(tasks, todoSortCriteria);
       const todoListColumns = buildTodoColumns(todoListTasks);
       const wishListColumns = buildWishColumns(wishes);
       const activeProjects = projects.filter((project) => project.status === 'active');
       const activeProjectIds = activeProjects.map((project) => project.id);
+      const projectIds = projects.map((project) => project.id);
+      const collapsedProjectIds = storedCollapsedProjectIds.filter((id) => hasId(projectIds, id));
+      if (collapsedProjectIds.length !== storedCollapsedProjectIds.length) {
+        saveProjectCollapsedIds(preferences, profileId, collapsedProjectIds);
+      }
+      const projectDeadlineScrollIds = this.data.projectDeadlineScrollIds.filter((id) => hasId(activeProjectIds, id));
       const expandedProjectIds = this.data.expandedProjectIds.filter((id) => hasId(activeProjectIds, id));
       const expandedCompletedProjectIds = this.data.expandedCompletedProjectIds.filter((id) => hasId(activeProjectIds, id));
-      const projectCards = buildProjectCards(activeProjects, tasks, expandedProjectIds, expandedCompletedProjectIds);
+      const projectCards = buildProjectCards(
+        activeProjects,
+        tasks,
+        expandedProjectIds,
+        expandedCompletedProjectIds,
+        collapsedProjectIds,
+        projectDeadlineScrollIds
+      );
       const todoColumnIndex = resetTodoColumn ? 0 : clampColumnIndex(this.data.todoColumnIndex, todoListColumns.length);
       const shouldFocusLatestWish = focusLatestWish && wishListColumns.length > 0;
       const wishColumnIndex = shouldFocusLatestWish
@@ -230,6 +454,9 @@ Page({
       this.setData({
         projects,
         activeProjects,
+        todoSortCriteria,
+        collapsedProjectIds,
+        projectDeadlineScrollIds,
         expandedProjectIds,
         expandedCompletedProjectIds,
         projectCards,
@@ -254,11 +481,96 @@ Page({
           } : undefined);
         }
         this.measureTodoTitleFontSizes();
+        this.measureProjectDeadlineOverflow();
         if (shouldReturnToFirstColumn) this.animateTodoScrollLeft(0);
       });
     } catch (error) {
       showError(error);
     }
+  },
+
+  openTodoSort() {
+    this.setTodoSortEditor(this.data.todoSortCriteria, true);
+  },
+
+  dismissTodoSort() {
+    this.setData({
+      isTodoSortOpen: false,
+      todoSortEditorCriteria: [],
+      todoSortEditorItems: [],
+      todoSortAvailableFields: []
+    });
+  },
+
+  setTodoSortEditor(criteria, isOpen = this.data.isTodoSortOpen) {
+    const normalized = normalizeTodoSortCriteria(criteria);
+    this.setData({
+      isTodoSortOpen: isOpen,
+      todoSortEditorCriteria: normalized,
+      todoSortEditorItems: buildTodoSortEditorItems(normalized),
+      todoSortAvailableFields: todoSortAvailableFields(normalized)
+    });
+  },
+
+  addTodoSortCriterion(event) {
+    const field = event.currentTarget.dataset.field;
+    const criteria = this.data.todoSortEditorCriteria;
+    if (!TODO_SORT_FIELDS.has(field) || criteria.some((criterion) => criterion.field === field)) return;
+    this.setTodoSortEditor(criteria.concat({ field, direction: defaultTodoSortDirection(field) }));
+  },
+
+  toggleTodoSortDirection(event) {
+    const index = Number(event.currentTarget.dataset.index);
+    const criteria = this.data.todoSortEditorCriteria;
+    const criterion = criteria[index];
+    if (!criterion || criterion.field === 'status') return;
+    this.setTodoSortEditor(criteria.map((item, itemIndex) => itemIndex === index
+      ? { ...item, direction: item.direction === 'asc' ? 'desc' : 'asc' }
+      : item));
+  },
+
+  moveTodoSortCriterion(event) {
+    const index = Number(event.currentTarget.dataset.index);
+    const offset = event.currentTarget.dataset.direction === 'up' ? -1 : 1;
+    const targetIndex = index + offset;
+    const criteria = this.data.todoSortEditorCriteria;
+    if (!Number.isInteger(index) || targetIndex < 0 || targetIndex >= criteria.length) return;
+    const reordered = criteria.slice();
+    [reordered[index], reordered[targetIndex]] = [reordered[targetIndex], reordered[index]];
+    this.setTodoSortEditor(reordered);
+  },
+
+  removeTodoSortCriterion(event) {
+    const index = Number(event.currentTarget.dataset.index);
+    const criteria = this.data.todoSortEditorCriteria;
+    if (!Number.isInteger(index) || criteria.length <= 1 || index < 0 || index >= criteria.length) return;
+    this.setTodoSortEditor(criteria.filter((item, itemIndex) => itemIndex !== index));
+  },
+
+  resetTodoSort() {
+    this.setTodoSortEditor(DEFAULT_TODO_SORT_CRITERIA);
+  },
+
+  saveTodoSort() {
+    const criteria = normalizeTodoSortCriteria(this.data.todoSortEditorCriteria);
+    let persisted = false;
+    try {
+      const profileId = localProfileId(getService().snapshot());
+      this.preferenceProfileId = profileId;
+      persisted = saveTodoSortCriteria(getPreferenceStore(), profileId, criteria);
+    } catch (error) {
+      persisted = false;
+    }
+    this.setData({
+      isTodoSortOpen: false,
+      todoSortCriteria: criteria,
+      todoSortEditorCriteria: [],
+      todoSortEditorItems: [],
+      todoSortAvailableFields: []
+    });
+    this.refresh({ resetTodoColumn: true });
+    if (persisted) showSaved('TODO 排序已更新');
+    else wx.showToast({ title: '本次设置仅在当前会话生效', icon: 'none' });
   },
 
   measureHorizontalColumn(listName, options = {}) {
@@ -328,6 +640,26 @@ Page({
         if (changed) this.setData({ todoListColumns });
       })
       .exec();
+  },
+
+  measureProjectDeadlineOverflow() {
+    if (!wx.createSelectorQuery) return;
+    const query = wx.createSelectorQuery();
+    query.selectAll('.project-deadline-viewport').boundingClientRect();
+    query.selectAll('.project-deadline-measure').boundingClientRect();
+    query.exec((result) => {
+      const viewportRects = result && result[0];
+      const textRects = result && result[1];
+      if (!viewportRects || !textRects || !viewportRects.length || !textRects.length) return;
+      const projectDeadlineScrollIds = this.data.projectCards.reduce((ids, project, index) => {
+        const viewportRect = viewportRects[index];
+        const textRect = textRects[index];
+        if (viewportRect && textRect && viewportRect.width && textRect.width > viewportRect.width + 1) ids.push(project.id);
+        return ids;
+      }, []);
+      if (sameIdList(projectDeadlineScrollIds, this.data.projectDeadlineScrollIds)) return;
+      this.setData({ projectDeadlineScrollIds }, () => this.refresh());
+    });
   },
 
   clearHorizontalScrollAnimation(listName) {
@@ -681,6 +1013,34 @@ Page({
     this.setData({ expandedCompletedProjectIds: toggleId(this.data.expandedCompletedProjectIds, id) }, () => this.refresh());
   },
 
+  toggleProjectCollapse(event) {
+    const id = event.currentTarget.dataset.id;
+    const collapsedProjectIds = toggleId(this.data.collapsedProjectIds, id);
+    let persisted = false;
+    try {
+      const profileId = localProfileId(getService().snapshot());
+      this.preferenceProfileId = profileId;
+      persisted = saveProjectCollapsedIds(getPreferenceStore(), profileId, collapsedProjectIds);
+    } catch (error) {
+      persisted = false;
+    }
+    this.setData({ collapsedProjectIds }, () => this.refresh());
+    if (!persisted) wx.showToast({ title: '本次设置仅在当前会话生效', icon: 'none' });
+  },
+
+  clearProjectCollapseState(id) {
+    const collapsedProjectIds = this.data.collapsedProjectIds.filter((projectId) => projectId !== id);
+    if (collapsedProjectIds.length === this.data.collapsedProjectIds.length) return;
+    try {
+      const profileId = localProfileId(getService().snapshot());
+      this.preferenceProfileId = profileId;
+      saveProjectCollapsedIds(getPreferenceStore(), profileId, collapsedProjectIds);
+    } catch (error) {
+      // 项目操作已经成功，偏好收敛失败不能改判业务结果。
+    }
+    this.setData({ collapsedProjectIds });
+  },
+
   chooseTaskProject(event) {
     const task = this.data.tasks.find((item) => item.id === event.currentTarget.dataset.id);
     if (!task) return;
@@ -813,6 +1173,7 @@ Page({
         if (!result.confirm) return;
         try {
           getService().setProjectArchived(id, true);
+          this.clearProjectCollapseState(id);
           showSaved('项目已归档');
           this.refresh();
         } catch (error) {
@@ -841,6 +1202,7 @@ Page({
         if (!result.confirm) return;
         try {
           getService().abandonProject(id, true);
+          this.clearProjectCollapseState(id);
           showSaved('项目已放弃');
           this.refresh();
         } catch (error) {
@@ -955,6 +1317,7 @@ Page({
     this.measureTodoColumn();
     if (this.data.isWishExpanded && this.data.wishListColumns.length) this.measureWishColumn();
     this.measureTodoTitleFontSizes();
+    this.measureProjectDeadlineOverflow();
   },
 
   noop() {}

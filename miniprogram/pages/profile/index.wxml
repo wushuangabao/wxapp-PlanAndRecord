@@ -1,7 +1,7 @@
 <view class="page">
   <view class="eyebrow">LOCAL PROFILE</view>
 
-  <view class="risk">清理微信缓存、卸载微信或更换设备可能导致本地数据丢失；首版不提供云端自动备份或同步。</view>
+  <view class="risk">清理微信缓存、卸载微信或更换设备可能导致本地数据丢失；首版仍以本地存储为准，云端存储入口暂不可用。</view>
 
   <view class="card">
     <view class="section-title">本周复盘</view>
@@ -12,5 +12,16 @@
   <view class="card"><view class="section-title">标签投入</view><view class="stat-hint">一条记录有多个标签时，完整耗时会分别计入每个标签。</view><view wx:if="{{!tagStats.length}}" class="empty">本周还没有纳入统计的实际记录。</view><view wx:for="{{tagStats}}" wx:key="id" class="stat-row"><view>{{item.displayName}}</view><view>{{item.durationMinutes}} 分钟</view></view></view>
   <view class="card"><view class="section-title">项目投入</view><view wx:if="{{!projectStats.length}}" class="empty">暂无项目投入。</view><view wx:for="{{projectStats}}" wx:key="id" class="stat-row"><view>{{item.name}}</view><view>{{item.durationMinutes}} 分钟</view></view></view>
   <view class="card"><view class="section-title">计划与实际偏差</view><view wx:if="{{!variance.length}}" class="empty">本周没有计划块。</view><view wx:for="{{variance}}" wx:key="eventId" class="stat-row"><view>{{item.title}}</view><view>计划 {{item.plannedMinutes}} / 实际 {{item.actualMinutes}} / 偏差 {{item.varianceMinutes}} 分钟</view></view></view>
-  <view class="card"><view class="section-title">数据管理</view><button class="primary" disabled="{{dataOperationInProgress}}" bindtap="exportJson">导出 JSON</button><button class="secondary" disabled="{{dataOperationInProgress}}" bindtap="importJson">导入 JSON</button><button class="danger" disabled="{{dataOperationInProgress}}" bindtap="clearData">清空数据</button></view>
+  <view class="card data-management-card">
+    <view class="section-title">数据管理</view>
+    <view class="storage-summary">
+      <view class="storage-copy"><text>本地资料库</text><text class="storage-value">{{storageUsage.displayUsed}} / {{storageUsage.displayLimit}}</text></view>
+      <view class="storage-track"><view class="storage-fill {{storageUsage.warning ? 'storage-fill-warning' : ''}}" style="width: {{storageUsage.percent}}%;"></view></view>
+      <view wx:if="{{storageUsage.warning}}" class="storage-warning">本地空间已接近上限，超出后将无法保存新记录。建议先导出 JSON 备份再清空数据。</view>
+    </view>
+    <button class="primary" disabled="{{dataOperationInProgress}}" bindtap="exportJson">导出 JSON</button>
+    <button class="secondary" disabled="{{dataOperationInProgress}}" bindtap="importJson">导入 JSON</button>
+    <button class="secondary cloud-storage" disabled="{{dataOperationInProgress}}" bindtap="openCloudStorage">转为云端存储</button>
+    <button class="danger" disabled="{{dataOperationInProgress}}" bindtap="clearData">清空数据</button>
+  </view>
 </view>

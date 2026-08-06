@@ -21,28 +21,36 @@ class FaultStorage {
     this.failGetKey = null;
     this.failSet = false;
     this.failSetAfterWriteOnce = false;
+    this.failSetAfterWriteOnCall = null;
     this.failSetOnCall = null;
     this.failRemove = false;
     this.failRemoveAfterDelete = false;
+    this.failSetMessage = 'set failed';
     this.setCalls = [];
+    this.setEntries = [];
     this.removeCalls = [];
   }
 
   get(key) {
     if (this.failGetKey === key) throw new Error(`get failed: ${key}`);
     const value = this.values.get(key);
-    return value === undefined ? undefined : structuredClone(value);
+    return value === undefined ? '' : structuredClone(value);
+  }
+
+  has(key) {
+    return this.values.has(key);
   }
 
   set(key, value) {
     this.setCalls.push(key);
+    this.setEntries.push([key, structuredClone(value)]);
     if (this.failSet || this.setCalls.length === this.failSetOnCall) {
-      throw new Error('set failed');
+      throw new Error(this.failSetMessage);
     }
     this.values.set(key, structuredClone(value));
-    if (this.failSetAfterWriteOnce) {
+    if (this.failSetAfterWriteOnce || this.setCalls.length === this.failSetAfterWriteOnCall) {
       this.failSetAfterWriteOnce = false;
-      throw new Error('set failed after write');
+      throw new Error(this.failSetMessage);
     }
   }
 
@@ -92,7 +100,8 @@ test('MemoryStorageAdapter.remove 只删除指定键', () => {
   storage.remove('remove');
 
   assert.deepEqual(storage.get('keep'), { value: 1 });
-  assert.equal(storage.get('remove'), undefined);
+  assert.equal(storage.has('remove'), false);
+  assert.equal(storage.get('remove'), '');
 });
 
 test('MemoryStorageAdapter.has 区分键缺失与 falsy 原值', () => {
@@ -125,7 +134,18 @@ test('initialize 对已有 falsy 原值报损坏且全程零写入', () => {
   }
 });
 
-test('initialize 对低版本资料库报不支持且不再写迁移备份', () => {
+test('LocalRepository 要求存储适配器提供 has 而不通过 get 返回值猜测键是否存在', () => {
+  assert.throws(
+    () => new LocalRepository({
+      get() { return ''; },
+      set() {},
+      remove() {}
+    }),
+    (error) => error instanceof TypeError && /storage\.has/.test(error.message)
+  );
+});
+
+test('initialize 对缺少迁移路径的低版本资料库零写入', () => {
   const stored = createInitialDatabase(1_700_000_000_000);
   stored.schemaVersion = APP_SCHEMA_VERSION - 1;
   const storage = new MemoryStorageAdapter(stored);
@@ -137,10 +157,166 @@ test('initialize 对低版本资料库报不支持且不再写迁移备份', () 
 
   assert.throws(
     () => new LocalRepository(storage).initialize(),
-    (error) => error instanceof StorageError && error.code === 'DATA_VERSION_UNSUPPORTED'
+    (error) => error instanceof StorageError
+      && error.code === 'MIGRATION_PATH_MISSING'
+      && error.details.fromVersion === APP_SCHEMA_VERSION - 1
   );
-  assert.equal(storage.get(BACKUP_KEY), undefined);
+  assert.equal(storage.has(BACKUP_KEY), false);
   assert.deepEqual(calls, { set: 0, remove: 0 });
+});
+
+test('initialize 将不安全或负数结构版本视为损坏且零写入', () => {
+  for (const schemaVersion of [-1, Number.MIN_SAFE_INTEGER - 1]) {
+    const stored = createInitialDatabase(1_700_000_000_000);
+    stored.schemaVersion = schemaVersion;
+    const storage = new FaultStorage();
+    storage.set(STORAGE_KEY, stored);
+    storage.setCalls.length = 0;
+    storage.removeCalls.length = 0;
+
+    assert.throws(
+      () => new LocalRepository(storage).initialize(),
+      (error) => error instanceof StorageError && error.code === 'DATA_CORRUPTED'
+    );
+    assert.deepEqual(storage.setCalls, []);
+    assert.deepEqual(storage.removeCalls, []);
+    assert.deepEqual(storage.get(STORAGE_KEY), stored);
+  }
+});
+
+test('initialize 逐级迁移时先备份原值，成功后写主键并删除备份', () => {
+  const stored = createInitialDatabase(1_700_000_000_000);
+  stored.schemaVersion = 0;
+  const storage = new FaultStorage();
+  storage.set(STORAGE_KEY, stored);
+  storage.setCalls.length = 0;
+  storage.setEntries.length = 0;
+  storage.removeCalls.length = 0;
+  const repository = new LocalRepository(storage, {
+    migrations: {
+      0: (database) => ({ ...database, schemaVersion: 1 })
+    }
+  });
+
+  const migrated = repository.initialize();
+
+  assert.equal(migrated.schemaVersion, APP_SCHEMA_VERSION);
+  assert.doesNotThrow(() => validateJsonSnapshot(migrated));
+  assert.deepEqual(storage.setCalls, [BACKUP_KEY, STORAGE_KEY]);
+  assert.deepEqual(storage.removeCalls, [BACKUP_KEY]);
+  assert.deepEqual(storage.setEntries[0], [BACKUP_KEY, stored]);
+  assert.equal(storage.has(BACKUP_KEY), false);
+});
+
+test('initialize 迁移步骤失败时清理备份并保留原始主键', () => {
+  const stored = createInitialDatabase(1_700_000_000_000);
+  stored.schemaVersion = 0;
+  const storage = new FaultStorage();
+  storage.set(STORAGE_KEY, stored);
+  storage.setCalls.length = 0;
+  storage.removeCalls.length = 0;
+  const repository = new LocalRepository(storage, {
+    migrations: { 0: () => { throw new Error('private step failure'); } }
+  });
+
+  const error = captureThrown(() => repository.initialize());
+
+  assert.equal(error instanceof StorageError, true);
+  assert.equal(error.code, 'MIGRATION_FAILED');
+  assert.doesNotMatch(error.message, /private step failure/);
+  assert.deepEqual(storage.get(STORAGE_KEY), stored);
+  assert.equal(storage.has(BACKUP_KEY), false);
+  assert.equal(repository.cache, null);
+  assert.deepEqual(storage.setCalls, [BACKUP_KEY]);
+  assert.deepEqual(storage.removeCalls, [BACKUP_KEY]);
+});
+
+test('initialize 迁移结果校验失败时不会保留非法主键', () => {
+  const stored = createInitialDatabase(1_700_000_000_000);
+  stored.schemaVersion = 0;
+  const storage = new FaultStorage();
+  storage.set(STORAGE_KEY, stored);
+  storage.setCalls.length = 0;
+  storage.removeCalls.length = 0;
+  const repository = new LocalRepository(storage, {
+    migrations: {
+      0: (database) => {
+        const invalid = { ...database, schemaVersion: 1 };
+        delete invalid.localProfile;
+        return invalid;
+      }
+    }
+  });
+
+  const error = captureThrown(() => repository.initialize());
+
+  assert.equal(error.code, 'MIGRATION_FAILED');
+  assert.deepEqual(storage.get(STORAGE_KEY), stored);
+  assert.equal(storage.has(BACKUP_KEY), false);
+  assert.equal(repository.cache, null);
+});
+
+test('initialize 迁移主键写后失败且补偿失败时报告状态不确定', () => {
+  const stored = createInitialDatabase(1_700_000_000_000);
+  stored.schemaVersion = 0;
+  stored.wishes.push({
+    id: 'wish_migration_private',
+    title: 'PRIVATE_MIGRATION_TITLE',
+    createdAt: stored.createdAt,
+    updatedAt: stored.updatedAt
+  });
+  const storage = new FaultStorage();
+  storage.set(STORAGE_KEY, stored);
+  storage.setCalls.length = 0;
+  storage.removeCalls.length = 0;
+  storage.failSetAfterWriteOnCall = 2;
+  storage.failSetOnCall = 3;
+  const repository = new LocalRepository(storage, {
+    migrations: { 0: (database) => ({ ...database, schemaVersion: 1 }) }
+  });
+
+  const error = captureThrown(() => repository.initialize());
+
+  assert.equal(error.code, 'MIGRATION_ROLLBACK_UNCERTAIN');
+  assert.doesNotMatch(error.message, /PRIVATE_MIGRATION_TITLE/);
+  assert.equal(repository.cache, null);
+  assert.deepEqual(storage.setCalls, [BACKUP_KEY, STORAGE_KEY, STORAGE_KEY, BACKUP_KEY]);
+  assert.equal(storage.has(BACKUP_KEY), true);
+  assert.deepEqual(storage.get(BACKUP_KEY), stored);
+
+  storage.failSetAfterWriteOnCall = null;
+  storage.failSetOnCall = null;
+  storage.setCalls.length = 0;
+  const restartedRepository = new LocalRepository(storage, {
+    migrations: { 0: (database) => ({ ...database, schemaVersion: 1 }) }
+  });
+  const recovered = restartedRepository.initialize();
+
+  assert.equal(recovered.schemaVersion, APP_SCHEMA_VERSION);
+  assert.equal(storage.has(BACKUP_KEY), false);
+  assert.equal(recovered.wishes.some((item) => item.id === 'wish_migration_private'), true);
+});
+
+test('initialize 先恢复遗留备份，再从原始版本重新执行迁移', () => {
+  const original = createInitialDatabase(1_700_000_000_000);
+  original.schemaVersion = 0;
+  const halfMigrated = { schemaVersion: 1, interrupted: true };
+  const storage = new FaultStorage();
+  storage.set(STORAGE_KEY, halfMigrated);
+  storage.set(BACKUP_KEY, original);
+  storage.setCalls.length = 0;
+  storage.removeCalls.length = 0;
+  const repository = new LocalRepository(storage, {
+    migrations: { 0: (database) => ({ ...database, schemaVersion: 1 }) }
+  });
+
+  const migrated = repository.initialize();
+
+  assert.doesNotThrow(() => validateJsonSnapshot(migrated));
+  assert.deepEqual(storage.setCalls, [STORAGE_KEY, BACKUP_KEY, STORAGE_KEY]);
+  assert.deepEqual(storage.removeCalls, [BACKUP_KEY, BACKUP_KEY]);
+  assert.equal(storage.has(BACKUP_KEY), false);
+  assert.deepEqual(storage.get(STORAGE_KEY), migrated);
 });
 
 test('initialize 在键枚举或主值读取失败时停止启动且零写入', () => {
@@ -155,7 +331,7 @@ test('initialize 在键枚举或主值读取失败时停止启动且零写入', 
     {
       label: '读取失败',
       storage: {
-        has() { return true; },
+        has(key) { return key === STORAGE_KEY; },
         get() { throw new Error('read failed'); }
       }
     }
@@ -214,7 +390,7 @@ test('initialize 对同版本缺失暂停字段的日志只规范化内存且零
   assert.equal(loaded.timeLogs[0].durationMinutes, 2);
   assert.equal(Object.hasOwn(storage.get(STORAGE_KEY).timeLogs[0], 'pausedDurationSeconds'), false);
   assert.equal(storage.get(STORAGE_KEY).timeLogs[0].durationMinutes, 1);
-  assert.equal(storage.get(BACKUP_KEY), undefined);
+  assert.equal(storage.has(BACKUP_KEY), false);
   assert.deepEqual(storage.setCalls, []);
   assert.deepEqual(storage.removeCalls, []);
 });
@@ -300,7 +476,7 @@ test('transaction 原主快照不存在时写后失败会删除主键并恢复�
       && /已保留/.test(error.message)
   );
 
-  assert.equal(storage.get(STORAGE_KEY), undefined);
+  assert.equal(storage.has(STORAGE_KEY), false);
   assert.deepEqual(repository.cache, oldSnapshot);
   assert.deepEqual(repository.read(), oldSnapshot);
   assert.deepEqual(storage.setCalls, [STORAGE_KEY]);
@@ -358,6 +534,19 @@ test('transaction 显式 updatedAt 会持久化且不调用 repository.now', () 
   assert.equal(database.updatedAt, updatedAt);
   assert.equal(storage.get(STORAGE_KEY).updatedAt, updatedAt);
   assert.equal(storage.get(STORAGE_KEY).localProfile.updatedAt, updatedAt);
+  assert.deepEqual(storage.setCalls, [STORAGE_KEY]);
+});
+
+test('transaction 使用缓存快照补偿且不重复读取整库主键', () => {
+  const storage = new FaultStorage();
+  const { repository } = createRepository(storage);
+  storage.setCalls.length = 0;
+  storage.failGetKey = STORAGE_KEY;
+
+  assert.doesNotThrow(() => repository.transaction((database) => {
+    database.localProfile.updatedAt += 1;
+  }));
+
   assert.deepEqual(storage.setCalls, [STORAGE_KEY]);
 });
 
@@ -677,7 +866,7 @@ test('initialize 拒绝高版本快照且不校验或覆盖未来数据', () => 
   assert.doesNotMatch(error.message, new RegExp(sentinel));
   assert.equal(repository.cache, null);
   assert.deepEqual(storage.get(STORAGE_KEY), stored);
-  assert.equal(storage.get(BACKUP_KEY), undefined);
+  assert.equal(storage.has(BACKUP_KEY), false);
   assert.deepEqual(storage.setCalls, []);
   assert.deepEqual(storage.removeCalls, []);
 });
@@ -752,7 +941,7 @@ test('replace 仅在有效候选快照写入成功后清理迁移备份', () => 
 
   repository.replace(changedSnapshot(oldSnapshot), { clearMigrationBackup: true });
 
-  assert.equal(storage.get(BACKUP_KEY), undefined);
+  assert.equal(storage.has(BACKUP_KEY), false);
   assert.deepEqual(storage.setCalls, [STORAGE_KEY]);
   assert.deepEqual(storage.removeCalls, [BACKUP_KEY]);
 });
@@ -791,7 +980,7 @@ test('replace 清理不存在的旧备份失败时精确恢复为不存在', () 
   );
 
   assert.deepEqual(storage.get(STORAGE_KEY), oldSnapshot);
-  assert.equal(storage.get(BACKUP_KEY), undefined);
+  assert.equal(storage.has(BACKUP_KEY), false);
   assert.deepEqual(repository.cache, oldSnapshot);
   assert.deepEqual(storage.setCalls, [STORAGE_KEY, STORAGE_KEY]);
   assert.deepEqual(storage.removeCalls, [BACKUP_KEY, BACKUP_KEY]);
@@ -878,6 +1067,134 @@ test('增量 replace 不删除迁移备份', () => {
   assert.deepEqual(storage.removeCalls, []);
 });
 
+test('replace 对超过 1MB 的候选零写入并返回安全用量信息', () => {
+  const storage = new FaultStorage();
+  const { repository } = createRepository(storage);
+  const oldSnapshot = repository.read();
+  const oversized = clone(oldSnapshot);
+  oversized.recoveryDraft = {
+    reason: 'x'.repeat(1024 * 1024),
+    timer: clone(oversized.timer),
+    createdAt: oldSnapshot.updatedAt
+  };
+  storage.setCalls.length = 0;
+
+  const error = captureThrown(() => repository.replace(oversized));
+
+  assert.equal(error instanceof StorageError, true);
+  assert.equal(error.code, 'STORAGE_CAPACITY_EXCEEDED');
+  assert.equal(error.details.usage.exceeded, true);
+  assert.equal(error.details.usage.databaseLimitBytes, 1024 * 1024);
+  assert.deepEqual(storage.setCalls, []);
+  assert.deepEqual(storage.get(STORAGE_KEY), oldSnapshot);
+  assert.deepEqual(repository.cache, oldSnapshot);
+});
+
+test('replace 对 90% 至 1MB 的候选只预警而不阻断', () => {
+  const storage = new FaultStorage();
+  const { repository } = createRepository(storage);
+  const candidate = repository.read();
+  candidate.recoveryDraft = {
+    reason: 'x'.repeat(Math.ceil(1024 * 1024 * 0.9)),
+    timer: clone(candidate.timer),
+    createdAt: candidate.updatedAt
+  };
+  storage.setCalls.length = 0;
+
+  const usage = repository.getStorageUsage(candidate);
+  const saved = repository.replace(candidate);
+
+  assert.equal(usage.warning, true);
+  assert.equal(usage.exceeded, false);
+  assert.deepEqual(storage.setCalls, [STORAGE_KEY]);
+  assert.deepEqual(saved, candidate);
+});
+
+test('无参数容量读模型按主键实际持久化原值计量而非规范化缓存', () => {
+  const stored = createInitialDatabase(1_700_000_000_000);
+  const raw = JSON.stringify({
+    ...stored,
+    unknownPadding: 'x'.repeat(Math.ceil(1024 * 1024 * 0.9))
+  }, null, 2);
+  const storage = new FaultStorage();
+  storage.set(STORAGE_KEY, raw);
+  storage.setCalls.length = 0;
+  const repository = new LocalRepository(storage);
+  const normalized = repository.initialize();
+
+  const persistedUsage = repository.getStorageUsage();
+  const candidateUsage = repository.getStorageUsage(normalized);
+
+  assert.equal(persistedUsage.warning, true);
+  assert.equal(persistedUsage.databaseBytes, Buffer.byteLength(raw, 'utf8'));
+  assert.equal(candidateUsage.warning, false);
+  assert.deepEqual(storage.setCalls, []);
+});
+
+test('90% 候选清理迁移备份失败仍归类为写入错误而非容量错误', () => {
+  const storage = new FaultStorage();
+  const { repository } = createRepository(storage);
+  const oldSnapshot = repository.read();
+  const candidate = clone(oldSnapshot);
+  candidate.recoveryDraft = {
+    reason: 'x'.repeat(Math.ceil(1024 * 1024 * 0.9)),
+    timer: clone(candidate.timer),
+    createdAt: candidate.updatedAt
+  };
+  storage.set(BACKUP_KEY, { schemaVersion: 0, sentinel: 'migration-backup' });
+  storage.setCalls.length = 0;
+  storage.failRemove = true;
+
+  const error = captureThrown(
+    () => repository.replace(candidate, { clearMigrationBackup: true })
+  );
+
+  assert.equal(error.code, 'WRITE_FAILED');
+  assert.match(error.message, /已保留当前数据/);
+  assert.deepEqual(storage.get(STORAGE_KEY), oldSnapshot);
+  assert.deepEqual(repository.cache, oldSnapshot);
+});
+
+test('平台报告 quota 写入失败时恢复旧值并映射容量错误', () => {
+  const storage = new FaultStorage();
+  const { repository } = createRepository(storage);
+  const oldSnapshot = repository.read();
+  storage.setCalls.length = 0;
+  storage.failSetMessage = 'storage quota exceeded';
+  storage.failSetAfterWriteOnce = true;
+
+  const error = captureThrown(() => repository.transaction((database) => {
+    database.localProfile.updatedAt += 1;
+  }));
+
+  assert.equal(error instanceof StorageError, true);
+  assert.equal(error.code, 'STORAGE_CAPACITY_EXCEEDED');
+  assert.equal(error.details.usage.exceeded, false);
+  assert.deepEqual(storage.get(STORAGE_KEY), oldSnapshot);
+  assert.deepEqual(repository.cache, oldSnapshot);
+  assert.deepEqual(storage.setCalls, [STORAGE_KEY, STORAGE_KEY]);
+});
+
+test('quota 写后失败且补偿失败时优先报告数据状态不确定', () => {
+  const storage = new FaultStorage();
+  const { repository } = createRepository(storage);
+  const oldSnapshot = repository.read();
+  storage.setCalls.length = 0;
+  storage.failSetMessage = 'storage quota exceeded';
+  storage.failSetAfterWriteOnce = true;
+  storage.failSetOnCall = 2;
+
+  const error = captureThrown(() => repository.transaction((database) => {
+    database.localProfile.updatedAt += 1;
+  }));
+
+  assert.equal(error.code, 'WRITE_FAILED');
+  assert.match(error.message, /无法确认原数据是否完整保留/);
+  assert.equal(error.details, null);
+  assert.notDeepEqual(storage.get(STORAGE_KEY), oldSnapshot);
+  assert.deepEqual(repository.cache, oldSnapshot);
+});
+
 test('reset 原子建立不含分类聚合的新资料库和空运行态', () => {
   const storage = new FaultStorage();
   const { repository, setNow } = createRepository(storage);
@@ -896,7 +1213,7 @@ test('reset 原子建立不含分类聚合的新资料库和空运行态', () =>
   }
   assert.deepEqual(reset.timer, { status: 'idle', startedAt: null, pausedAt: null, pauses: [], draft: {} });
   assert.equal(reset.recoveryDraft, null);
-  assert.equal(storage.get(BACKUP_KEY), undefined);
+  assert.equal(storage.has(BACKUP_KEY), false);
   assert.deepEqual(storage.setCalls, [STORAGE_KEY]);
   assert.deepEqual(storage.removeCalls, [BACKUP_KEY]);
 });
@@ -1008,4 +1325,42 @@ test('WxStorageAdapter.has 只通过同步键列表判断键是否存在', () =>
   }
 
   assert.deepEqual(calls, ['getStorageInfoSync', 'getStorageInfoSync']);
+});
+
+test('MemoryStorageAdapter.info 使用 KB 单位并返回独立键列表', () => {
+  const storage = new MemoryStorageAdapter();
+  storage.set('a', 'x');
+
+  const first = storage.info();
+  first.keys.push('mutated');
+  const second = storage.info();
+
+  assert.equal(first.currentSize, 1);
+  assert.equal(first.limitSize, 10240);
+  assert.deepEqual(second.keys, ['a']);
+});
+
+test('WxStorageAdapter.info 保留平台容量字段并克隆键列表', () => {
+  const previousWx = global.wx;
+  const platformInfo = {
+    keys: ['plan-and-record.database'],
+    currentSize: 128,
+    limitSize: 10240,
+    extra: 'kept'
+  };
+  global.wx = {
+    getStorageInfoSync() { return platformInfo; }
+  };
+
+  try {
+    const info = new WxStorageAdapter().info();
+    info.keys.push('mutated');
+
+    assert.equal(info.currentSize, 128);
+    assert.equal(info.limitSize, 10240);
+    assert.equal(info.extra, 'kept');
+    assert.deepEqual(platformInfo.keys, ['plan-and-record.database']);
+  } finally {
+    if (previousWx === undefined) delete global.wx; else global.wx = previousWx;
+  }
 });

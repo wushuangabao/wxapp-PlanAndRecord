@@ -43,6 +43,63 @@
   font-weight: 700;
 }
 
+.data-management-card {
+  padding-bottom: calc(30rpx + constant(safe-area-inset-bottom));
+  padding-bottom: calc(30rpx + env(safe-area-inset-bottom));
+}
+
+.storage-summary {
+  min-width: 0;
+  margin-bottom: 30rpx;
+}
+
+.storage-copy {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16rpx;
+  min-width: 0;
+  color: #59635d;
+  font-size: 25rpx;
+  line-height: 1.5;
+}
+
+.storage-value {
+  min-width: 0;
+  color: #486455;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+  text-align: right;
+}
+
+.storage-track {
+  height: 10rpx;
+  margin: 14rpx 0;
+  overflow: hidden;
+  border-radius: 999rpx;
+  background: #e6ece7;
+}
+
+.storage-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: #78947f;
+}
+
+.storage-fill-warning {
+  background: #a88a59;
+}
+
+.storage-warning {
+  margin-top: 14rpx;
+  padding: 16rpx 18rpx;
+  border-radius: 14rpx;
+  background: #f5f0e6;
+  color: #795d32;
+  font-size: 24rpx;
+  line-height: 1.55;
+}
+
 .review-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -102,6 +159,11 @@
 .secondary {
   background: #d8e1da;
   color: #486455;
+}
+
+.cloud-storage {
+  background: #e3e8e3;
+  color: #596b60;
 }
 
 .danger {

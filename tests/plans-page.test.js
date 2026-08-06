@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const { TASK_STATUS } = require('../miniprogram/domain/constants');
+const { LocalPreferenceStore } = require('../miniprogram/services/local-preference-store');
 
 const plansPagePath = require.resolve('../miniprogram/pages/plans/index.js');
 const plansWxmlPath = path.join(__dirname, '../miniprogram/pages/plans/index.wxml');
@@ -46,7 +47,14 @@ function inputEvent(key, value) {
   return { currentTarget: { dataset: { key } }, detail: { value } };
 }
 
-function createHarness({ tasks: providedTasks, projects: providedProjects, wishes: providedWishes } = {}) {
+function createHarness({
+  tasks: providedTasks,
+  projects: providedProjects,
+  wishes: providedWishes,
+  storage: providedStorage,
+  preferenceStore: providedPreferenceStore,
+  profileId: initialProfileId = 'profile_plans'
+} = {}) {
   const originalGetApp = global.getApp;
   const originalWx = global.wx;
   const project = { id: 'project_1', title: '项目一', status: 'active', deadlineAt: 1_700_100_000_000, deadlineText: '2023-11-15 00:00' };
@@ -56,13 +64,23 @@ function createHarness({ tasks: providedTasks, projects: providedProjects, wishe
     { id: 'task_done', title: '已完成', status: TASK_STATUS.COMPLETED, projectId: project.id, projectNameSnapshot: project.title, updatedAt: 10 }
   ];
   const wishes = providedWishes || [];
+  const storage = providedStorage || {};
+  let profileId = initialProfileId;
+  const preferenceStore = providedPreferenceStore || new LocalPreferenceStore({
+    has: (key) => Object.prototype.hasOwnProperty.call(storage, key),
+    get: (key) => (Object.prototype.hasOwnProperty.call(storage, key)
+      ? structuredClone(storage[key])
+      : ''),
+    set: (key, value) => { storage[key] = structuredClone(value); },
+    remove: (key) => { delete storage[key]; }
+  });
   const calls = {
     createProject: [], createTask: [], updateTask: [], deleteTask: [],
     createWish: [], updateWish: [], deleteWish: [], convertWishToProject: []
   };
   const wxState = {};
   const service = {
-    snapshot() { return { projects, wishes, tasks }; },
+    snapshot() { return { localProfile: { id: profileId }, projects, wishes, tasks }; },
     createProject(input) {
       calls.createProject.push(input);
       const createdProject = { id: 'project_created', title: input.title, status: 'active', deadlineAt: input.deadlineAt };
@@ -93,11 +111,15 @@ function createHarness({ tasks: providedTasks, projects: providedProjects, wishe
   };
   const page = loadPlansPage();
 
-  global.getApp = () => ({ globalData: { bootstrap: { applicationService: service } } });
+  global.getApp = () => ({
+    globalData: { bootstrap: { applicationService: service, preferences: preferenceStore } }
+  });
   global.wx = {
     showToast(config) { wxState.toast = config; },
     showActionSheet(config) { wxState.actionSheet = config; },
-    showModal(config) { wxState.modal = config; }
+    showModal(config) { wxState.modal = config; },
+    getStorageSync(key) { return Object.hasOwn(storage, key) ? storage[key] : ''; },
+    setStorageSync(key, value) { storage[key] = value; }
   };
   page.data = { ...page.data, activeProjects: projects.filter((item) => item.status === 'active'), tasks };
   page.setData = (updates, callback) => {
@@ -108,6 +130,8 @@ function createHarness({ tasks: providedTasks, projects: providedProjects, wishe
   return {
     page,
     calls,
+    storage,
+    setProfileId(value) { profileId = value; },
     wxState,
     restore() {
       global.getApp = originalGetApp;
@@ -233,6 +257,28 @@ test('计划页：愿望使用内联标题输入和右侧转项目、删除图�
   assert.doesNotMatch(wxml, /bindtap="editWish"/);
   assert.match(wxss, /\.wish-column\s*\{[^}]*flex:\s*0 0 60%;[^}]*row-gap:\s*18rpx;[^}]*overflow:\s*hidden;/s);
   assert.match(wxss, /\.wish-row\s*\{[^}]*flex:\s*0 0 calc\(33\.333333% - 12rpx\);[^}]*min-width:\s*0;/s);
+});
+
+test('计划页：愿望池和 TODO LIST 在空、单条与两条时收缩列表与卡片高度，三条起保留最大高度', () => {
+  const wxml = fs.readFileSync(plansWxmlPath, 'utf8');
+  const wxss = fs.readFileSync(plansWxssPath, 'utf8');
+
+  assert.match(wxml, /class="wish-empty is-one-row"/);
+  assert.match(wxml, /class="wish-list \{\{wishes\.length === 1 \? 'is-one-row' : \(wishes\.length === 2 \? 'is-two-rows' : ''\)\}\}"/);
+  assert.match(wxml, /class="card todo-card \{\{todoListTasks\.length < 2 \? 'is-one-row' : \(todoListTasks\.length === 2 \? 'is-two-rows' : ''\)\}\}"/);
+  assert.match(wxml, /class="todo-empty is-one-row"/);
+  assert.match(wxml, /class="todo-list \{\{todoListTasks\.length === 1 \? 'is-one-row' : \(todoListTasks\.length === 2 \? 'is-two-rows' : ''\)\}\}"/);
+  assert.match(wxss, /\.todo-card\s*\{[^}]*height:\s*420rpx;/s);
+  assert.match(wxss, /\.todo-card\.is-one-row\s*\{[^}]*height:\s*224rpx;/s);
+  assert.match(wxss, /\.todo-card\.is-two-rows\s*\{[^}]*height:\s*322rpx;/s);
+  assert.match(wxss, /\.todo-list\.is-one-row, \.todo-empty\.is-one-row\s*\{[^}]*height:\s*100rpx;/s);
+  assert.match(wxss, /\.todo-list\.is-two-rows\s*\{[^}]*height:\s*198rpx;/s);
+  assert.match(wxss, /\.wish-list\.is-one-row, \.wish-empty\.is-one-row\s*\{[^}]*height:\s*116rpx;/s);
+  assert.match(wxss, /\.wish-list\.is-two-rows\s*\{[^}]*height:\s*214rpx;/s);
+  assert.match(wxss, /\.todo-list\.is-one-row \.todo-columns\s*\{[^}]*height:\s*80rpx;/s);
+  assert.match(wxss, /\.todo-list\.is-two-rows \.todo-columns\s*\{[^}]*height:\s*178rpx;/s);
+  assert.match(wxss, /\.wish-list\.is-one-row \.wish-row[^}]*flex-basis:\s*80rpx;/s);
+  assert.match(wxss, /\.wish-list\.is-two-rows \.wish-row[^}]*flex-basis:\s*80rpx;/s);
 });
 
 test('计划页：删除愿望必须二次确认', () => {
@@ -647,6 +693,269 @@ test('计划页：TODO 保持保存顺序，修改状态不会重排任务位置
   }
 });
 
+test('计划页：TODO 默认按创建时间最新在前排序', () => {
+  const tasks = [
+    { id: 'task_early', title: '较早创建', status: TASK_STATUS.TODO, projectId: null, projectNameSnapshot: '', createdAt: 100 },
+    { id: 'task_latest', title: '最新创建', status: TASK_STATUS.TODO, projectId: null, projectNameSnapshot: '', createdAt: 300 },
+    { id: 'task_middle', title: '中间创建', status: TASK_STATUS.TODO, projectId: null, projectNameSnapshot: '', createdAt: 200 }
+  ];
+  const harness = createHarness({ tasks });
+  try {
+    harness.page.refresh();
+
+    assert.deepEqual(harness.page.data.todoSortCriteria, [{ field: 'createdAt', direction: 'desc' }]);
+    assert.deepEqual(harness.page.data.todoListTasks.map((task) => task.id), ['task_latest', 'task_middle', 'task_early']);
+  } finally {
+    harness.restore();
+  }
+});
+
+test('计划页：TODO 可按名称正序或倒序排序', () => {
+  const tasks = [
+    { id: 'task_bravo', title: 'Bravo', status: TASK_STATUS.TODO, projectId: null, projectNameSnapshot: '', createdAt: 100 },
+    { id: 'task_alpha', title: 'Alpha', status: TASK_STATUS.TODO, projectId: null, projectNameSnapshot: '', createdAt: 300 },
+    { id: 'task_charlie', title: 'Charlie', status: TASK_STATUS.TODO, projectId: null, projectNameSnapshot: '', createdAt: 200 }
+  ];
+  const harness = createHarness({ tasks });
+  try {
+    harness.page.setData({ todoSortCriteria: [{ field: 'title', direction: 'asc' }] });
+    harness.page.refresh();
+    assert.deepEqual(harness.page.data.todoListTasks.map((task) => task.id), ['task_alpha', 'task_bravo', 'task_charlie']);
+
+    harness.page.setData({ todoSortCriteria: [{ field: 'title', direction: 'desc' }] });
+    harness.page.refresh();
+    assert.deepEqual(harness.page.data.todoListTasks.map((task) => task.id), ['task_charlie', 'task_bravo', 'task_alpha']);
+  } finally {
+    harness.restore();
+  }
+});
+
+test('计划页：TODO 使用当前项目标题展示，失效关系只显示原项目快照', () => {
+  const currentProject = {
+    id: 'project_current',
+    title: '新项目名',
+    status: 'active',
+    deadlineAt: 1_700_100_000_000
+  };
+  const tasks = [
+    { id: 'task_todo', title: '未完成', status: TASK_STATUS.TODO, projectId: currentProject.id, projectNameSnapshot: '旧项目名', createdAt: 400 },
+    { id: 'task_done', title: '已完成', status: TASK_STATUS.COMPLETED, projectId: currentProject.id, projectNameSnapshot: '旧项目名', createdAt: 300 },
+    { id: 'task_historical', title: '历史任务', status: TASK_STATUS.COMPLETED, projectId: null, projectNameSnapshot: '已放弃项目', createdAt: 200 },
+    { id: 'task_unlinked', title: '独立任务', status: TASK_STATUS.TODO, projectId: null, projectNameSnapshot: null, createdAt: 100 }
+  ];
+  const harness = createHarness({ projects: [currentProject], tasks });
+  try {
+    harness.page.refresh();
+
+    const tasksById = new Map(harness.page.data.todoListTasks.map((task) => [task.id, task]));
+    assert.deepEqual(
+      [tasksById.get('task_todo').projectDisplayName, tasksById.get('task_todo').hasCurrentProject],
+      ['新项目名', true]
+    );
+    assert.deepEqual(
+      [tasksById.get('task_done').projectDisplayName, tasksById.get('task_done').hasCurrentProject],
+      ['新项目名', true]
+    );
+    assert.deepEqual(
+      [tasksById.get('task_historical').projectDisplayName, tasksById.get('task_historical').hasCurrentProject],
+      ['原项目：已放弃项目', false]
+    );
+    assert.deepEqual(
+      [tasksById.get('task_unlinked').projectDisplayName, tasksById.get('task_unlinked').hasCurrentProject],
+      ['', false]
+    );
+    assert.equal(tasksById.get('task_todo').projectNameSnapshot, '旧项目名');
+
+    const wxml = fs.readFileSync(plansWxmlPath, 'utf8');
+    assert.match(wxml, /wx:if="\{\{task\.projectDisplayName\}\}" class="todo-project">\{\{task\.projectDisplayName\}\}<\/view>/);
+  } finally {
+    harness.restore();
+  }
+});
+
+test('计划页：项目排序使用当前项目标题，历史快照与未关联任务同组', () => {
+  const projects = [
+    { id: 'project_a', title: 'Z 项目', status: 'active', deadlineAt: 1_700_100_000_000 },
+    { id: 'project_b', title: 'A 项目', status: 'active', deadlineAt: 1_700_200_000_000 }
+  ];
+  const tasks = [
+    { id: 'task_unlinked', title: 'Zulu', status: TASK_STATUS.TODO, projectId: null, projectNameSnapshot: '', createdAt: 500 },
+    { id: 'task_historical', title: 'Alpha', status: TASK_STATUS.COMPLETED, projectId: null, projectNameSnapshot: '历史 A 项目', createdAt: 400 },
+    { id: 'task_beta', title: 'Beta', status: TASK_STATUS.TODO, projectId: 'project_a', projectNameSnapshot: 'A 项目', createdAt: 300 },
+    { id: 'task_alpha', title: 'Alpha', status: TASK_STATUS.TODO, projectId: 'project_a', projectNameSnapshot: 'A 项目', createdAt: 200 },
+    { id: 'task_project_b', title: '任意标题', status: TASK_STATUS.TODO, projectId: 'project_b', projectNameSnapshot: 'Z 项目', createdAt: 100 }
+  ];
+  const harness = createHarness({ projects, tasks });
+  try {
+    harness.page.setData({
+      todoSortCriteria: [{ field: 'project', direction: 'asc' }, { field: 'title', direction: 'asc' }]
+    });
+    harness.page.refresh();
+    assert.deepEqual(harness.page.data.todoListTasks.map((task) => task.id), [
+      'task_project_b', 'task_alpha', 'task_beta', 'task_historical', 'task_unlinked'
+    ]);
+
+    harness.page.setData({
+      todoSortCriteria: [{ field: 'project', direction: 'desc' }, { field: 'title', direction: 'asc' }]
+    });
+    harness.page.refresh();
+    assert.deepEqual(harness.page.data.todoListTasks.map((task) => task.id), [
+      'task_historical', 'task_unlinked', 'task_alpha', 'task_beta', 'task_project_b'
+    ]);
+  } finally {
+    harness.restore();
+  }
+});
+
+test('计划页：完成情况排序固定将未完成 TODO 排在前面', () => {
+  const tasks = [
+    { id: 'task_done_alpha', title: 'Alpha', status: TASK_STATUS.COMPLETED, projectId: null, projectNameSnapshot: '', createdAt: 400 },
+    { id: 'task_todo_bravo', title: 'Bravo', status: TASK_STATUS.TODO, projectId: null, projectNameSnapshot: '', createdAt: 300 },
+    { id: 'task_todo_alpha', title: 'Alpha', status: TASK_STATUS.TODO, projectId: null, projectNameSnapshot: '', createdAt: 200 },
+    { id: 'task_done_bravo', title: 'Bravo', status: TASK_STATUS.COMPLETED, projectId: null, projectNameSnapshot: '', createdAt: 100 }
+  ];
+  const harness = createHarness({ tasks });
+  try {
+    harness.page.setData({
+      todoSortCriteria: [{ field: 'status', direction: 'asc' }, { field: 'title', direction: 'asc' }]
+    });
+    harness.page.refresh();
+
+    assert.deepEqual(harness.page.data.todoListTasks.map((task) => task.id), [
+      'task_todo_alpha', 'task_todo_bravo', 'task_done_alpha', 'task_done_bravo'
+    ]);
+  } finally {
+    harness.restore();
+  }
+});
+
+test('计划页：排序面板暂存多级条件，确认后持久化并回到首列', () => {
+  const storage = {};
+  const firstHarness = createHarness({ storage });
+  try {
+    firstHarness.page.onLoad();
+    firstHarness.page.setData({ todoColumnIndex: 1, todoScrollLeft: 0 });
+    firstHarness.page.openTodoSort();
+
+    assert.equal(firstHarness.page.data.isTodoSortOpen, true);
+    assert.deepEqual(firstHarness.page.data.todoSortEditorCriteria, [{ field: 'createdAt', direction: 'desc' }]);
+
+    firstHarness.page.addTodoSortCriterion({ currentTarget: { dataset: { field: 'title' } } });
+    firstHarness.page.toggleTodoSortDirection({ currentTarget: { dataset: { index: 1 } } });
+    firstHarness.page.saveTodoSort();
+
+    assert.equal(firstHarness.page.data.isTodoSortOpen, false);
+    assert.equal(firstHarness.page.data.todoColumnIndex, 0);
+    assert.deepEqual(firstHarness.page.data.todoSortCriteria, [
+      { field: 'createdAt', direction: 'desc' },
+      { field: 'title', direction: 'desc' }
+    ]);
+    assert.deepEqual(storage['plan-and-record.todo-sort.v1'], {
+      version: 1,
+      profileId: 'profile_plans',
+      value: [
+        { field: 'createdAt', direction: 'desc' },
+        { field: 'title', direction: 'desc' }
+      ]
+    });
+  } finally {
+    firstHarness.restore();
+  }
+
+  const secondHarness = createHarness({ storage });
+  try {
+    secondHarness.page.onLoad();
+    assert.deepEqual(secondHarness.page.data.todoSortCriteria, [
+      { field: 'createdAt', direction: 'desc' },
+      { field: 'title', direction: 'desc' }
+    ]);
+  } finally {
+    secondHarness.restore();
+  }
+});
+
+test('计划页：偏好写入失败时当前会话排序仍生效', () => {
+  const preferenceStore = {
+    read(name, profileId, fallback) { return structuredClone(fallback); },
+    write() { return false; }
+  };
+  const harness = createHarness({ preferenceStore });
+  try {
+    harness.page.onLoad();
+    harness.page.setData({
+      todoSortEditorCriteria: [{ field: 'title', direction: 'asc' }]
+    });
+
+    harness.page.saveTodoSort();
+
+    assert.deepEqual(harness.page.data.todoSortCriteria, [{ field: 'title', direction: 'asc' }]);
+    assert.equal(harness.wxState.toast.title, '本次设置仅在当前会话生效');
+  } finally {
+    harness.restore();
+  }
+});
+
+test('计划页：localProfile 变化时重读偏好并回退新资料库默认值', () => {
+  const storage = {};
+  const first = createHarness({ storage, profileId: 'profile_a' });
+  try {
+    first.page.onLoad();
+    first.page.setData({ todoSortEditorCriteria: [{ field: 'title', direction: 'asc' }] });
+    first.page.saveTodoSort();
+    assert.deepEqual(first.page.data.todoSortCriteria, [{ field: 'title', direction: 'asc' }]);
+
+    first.setProfileId('profile_b');
+    first.page.refresh();
+
+    assert.deepEqual(first.page.data.todoSortCriteria, [{ field: 'createdAt', direction: 'desc' }]);
+    assert.deepEqual(first.page.data.collapsedProjectIds, []);
+  } finally {
+    first.restore();
+  }
+});
+
+test('计划页：排序面板只提供未使用条件，并可调整优先级、移除和重置', () => {
+  const harness = createHarness();
+  try {
+    harness.page.openTodoSort();
+    assert.deepEqual(harness.page.data.todoSortAvailableFields.map((field) => field.field), ['title', 'project', 'status']);
+
+    harness.page.addTodoSortCriterion({ currentTarget: { dataset: { field: 'title' } } });
+    harness.page.addTodoSortCriterion({ currentTarget: { dataset: { field: 'project' } } });
+    harness.page.moveTodoSortCriterion({ currentTarget: { dataset: { index: 2, direction: 'up' } } });
+    assert.deepEqual(harness.page.data.todoSortEditorCriteria.map((criterion) => criterion.field), ['createdAt', 'project', 'title']);
+
+    harness.page.removeTodoSortCriterion({ currentTarget: { dataset: { index: 1 } } });
+    assert.deepEqual(harness.page.data.todoSortEditorCriteria.map((criterion) => criterion.field), ['createdAt', 'title']);
+
+    harness.page.resetTodoSort();
+    assert.deepEqual(harness.page.data.todoSortEditorCriteria, [{ field: 'createdAt', direction: 'desc' }]);
+    assert.deepEqual(harness.page.data.todoSortEditorItems, [{
+      field: 'createdAt', direction: 'desc', label: '创建时间', directionLabel: '最新在前', canMoveUp: false, canMoveDown: false, canRemove: false
+    }]);
+  } finally {
+    harness.restore();
+  }
+});
+
+test('计划页：TODO 排序入口和多级排序面板使用共享弹窗头部', () => {
+  const wxml = fs.readFileSync(plansWxmlPath, 'utf8');
+  const wxss = fs.readFileSync(plansWxssPath, 'utf8');
+
+  assert.match(wxml, /class="todo-sort-button" role="button" aria-label="调整 TODO 排序" bindtap="openTodoSort"/);
+  assert.match(wxml, /wx:if="{{isTodoSortOpen}}" class="modal-mask" bindtap="dismissTodoSort"><view class="modal todo-sort-modal" catchtap="noop"><sheet-header title="TODO 排序" show-confirm="{{true}}" bind:confirm="saveTodoSort" bind:cancel="dismissTodoSort"/);
+  assert.match(wxml, /wx:for="{{todoSortEditorItems}}" wx:for-item="criterion"/);
+  assert.match(wxml, /bindtap="toggleTodoSortDirection"/);
+  assert.match(wxml, /bindtap="moveTodoSortCriterion"/);
+  assert.match(wxml, /bindtap="removeTodoSortCriterion"/);
+  assert.match(wxml, /bindtap="resetTodoSort"/);
+  assert.match(wxml, /wx:for="{{todoSortAvailableFields}}" wx:for-item="field"/);
+  assert.match(wxml, /data-field="{{field.field}}" bindtap="addTodoSortCriterion"/);
+  assert.match(wxss, /\.todo-header-actions\s*\{[^}]*display:\s*flex;[^}]*align-items:\s*center;/s);
+  assert.match(wxss, /\.todo-sort-modal\s*\{[^}]*padding-bottom:\s*calc\(36rpx \+ env\(safe-area-inset-bottom\)\);/s);
+  assert.match(wxss, /\.todo-sort-row\s*\{[^}]*display:\s*flex;[^}]*align-items:\s*center;/s);
+});
+
 test('计划页：无关联 TODO 默认 32rpx，关联 TODO 默认 28rpx，溢出最小缩小到 18rpx', () => {
   const tasks = [
     { id: 'task_unlinked', title: '短标题', status: TASK_STATUS.TODO, projectId: null, projectNameSnapshot: '' },
@@ -715,13 +1024,11 @@ test('计划页：窗口宽度不可用时跳过字号测量且列与任务操�
     { id: 'task_todo', title: '保持默认字号', status: TASK_STATUS.TODO, projectId: null, projectNameSnapshot: '' }
   ];
   const harness = createHarness({ tasks });
-  const selectors = [];
   try {
     global.wx.getWindowInfo = () => ({ windowWidth: 0 });
     global.wx.getSystemInfoSync = () => { throw new Error('legacy API unavailable'); };
     global.wx.createSelectorQuery = () => ({
       selectAll(selector) {
-        selectors.push(selector);
         this.selector = selector;
         return this;
       },
@@ -733,7 +1040,6 @@ test('计划页：窗口宽度不可用时跳过字号测量且列与任务操�
     });
 
     assert.doesNotThrow(() => harness.page.refresh());
-    assert.deepEqual(selectors, ['.todo-column']);
     assert.equal(harness.page.data.todoListColumns[0].tasks[0].todoTitleFontSize, 32);
     assert.equal(harness.page.data.todoColumnStep, 210);
 

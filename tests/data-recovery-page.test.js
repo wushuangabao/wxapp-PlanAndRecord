@@ -2,6 +2,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const { StorageError } = require('../miniprogram/domain/errors');
 const { getService, getRecoveryService } = require('../miniprogram/utils/page');
 
 const pagePath = require.resolve('../miniprogram/pages/data-recovery/index.js');
@@ -31,6 +32,8 @@ function createHarness(options = {}) {
     shareFileMessage: [],
     chooseMessageFile: [],
     readFile: [],
+    actionSheets: [],
+    switchTabs: [],
     modals: [],
     reLaunch: [],
     toasts: [],
@@ -127,8 +130,13 @@ function createHarness(options = {}) {
       const result = (options.modalResults || [true, true])[index];
       callbacks.success({ confirm: result === true, cancel: result !== true });
     },
+    showActionSheet(callbacks) {
+      calls.actionSheets.push(callbacks);
+      (options.actionSheetResult || ((value) => value.success({ tapIndex: 0 })))(callbacks);
+    },
     showToast(callbacks) { calls.toasts.push(callbacks); },
-    reLaunch(callbacks) { calls.reLaunch.push(callbacks); }
+    reLaunch(callbacks) { calls.reLaunch.push(callbacks); },
+    switchTab(callbacks) { calls.switchTabs.push(callbacks); }
   };
 
   const page = loadPage();
@@ -146,15 +154,21 @@ function createHarness(options = {}) {
 }
 
 test('恢复页按故障原因展示不同标题且不依赖应用服务', () => {
-  const corrupted = createHarness();
-  try {
-    assert.equal(corrupted.page.data.title, '本地数据损坏');
-  } finally { corrupted.restore(); }
+  const cases = [
+    ['DATA_CORRUPTED', '本地数据损坏', '当前本地数据无法安全读取'],
+    ['DATA_VERSION_UNSUPPORTED', '数据来自较新版本', '当前小程序无法安全读取这份本地数据。'],
+    ['MIGRATION_PATH_MISSING', '缺少数据升级步骤', '原始数据未被覆盖，请先导出原始数据并等待支持该版本的升级。'],
+    ['MIGRATION_FAILED', '数据升级未完成', '升级失败后已恢复原始数据，请先导出核对再选择恢复方式。'],
+    ['MIGRATION_ROLLBACK_UNCERTAIN', '无法确认数据是否完整', '请立即导出原始数据核对，不要继续业务写入。']
+  ];
 
-  const unsupported = createHarness({ reason: 'DATA_VERSION_UNSUPPORTED' });
-  try {
-    assert.equal(unsupported.page.data.title, '数据来自较新版本');
-  } finally { unsupported.restore(); }
+  for (const [reason, title, explanation] of cases) {
+    const harness = createHarness({ reason });
+    try {
+      assert.equal(harness.page.data.title, title, reason);
+      assert.match(harness.page.data.explanation, new RegExp(explanation), reason);
+    } finally { harness.restore(); }
+  }
 });
 
 test('页面服务访问器严格隔离 ready 与 data-recovery 模式', () => {
@@ -319,10 +333,48 @@ test('覆盖提交失败后完整清除失效预览并要求重新选择文件',
     assert.equal(harness.calls.reLaunch.length, 0);
     assert.equal(
       harness.calls.toasts.some((toast) => (
-        toast.title === '恢复预览已失效，请重新选择 JSON 文件' && toast.icon === 'none'
+        toast.title === 'write failed' && toast.icon === 'none'
       )),
       true
     );
+  } finally { harness.restore(); }
+});
+
+test('恢复覆盖超过容量时保留安全结论并把导出出口留在恢复页', () => {
+  const harness = createHarness({
+    commitError: new StorageError(
+      'STORAGE_CAPACITY_EXCEEDED',
+      '本地资料库已达到容量上限，请先导出备份'
+    )
+  });
+  try {
+    harness.page.chooseReplacementFile();
+    harness.page.confirmReplacement();
+
+    assert.deepEqual(harness.calls.actionSheets[0].itemList, [
+      '前往恢复页导出原始数据',
+      '转为云端存储'
+    ]);
+    assert.deepEqual(harness.calls.reLaunch, [{ url: '/pages/data-recovery/index' }]);
+    assert.deepEqual(harness.calls.switchTabs, []);
+    assert.equal(
+      harness.calls.toasts.some((toast) => toast.title === '恢复预览已失效，请重新选择 JSON 文件'),
+      false
+    );
+  } finally { harness.restore(); }
+});
+
+test('恢复模式容量出口的云端选项始终显示固定禁用文案', () => {
+  const harness = createHarness({
+    commitError: new StorageError('STORAGE_CAPACITY_EXCEEDED', '容量不足'),
+    actionSheetResult: (callbacks) => callbacks.success({ tapIndex: 1 })
+  });
+  try {
+    harness.page.chooseReplacementFile();
+    harness.page.confirmReplacement();
+
+    assert.equal(harness.calls.toasts.at(-1).title, '当前版本暂不支持云端存储');
+    assert.deepEqual(harness.calls.switchTabs, []);
   } finally { harness.restore(); }
 });
 

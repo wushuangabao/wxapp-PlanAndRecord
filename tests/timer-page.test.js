@@ -4,6 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const { TIMER_STATUS } = require('../miniprogram/domain/constants');
+const { LocalPreferenceStore } = require('../miniprogram/services/local-preference-store');
 
 const timerPagePath = require.resolve('../miniprogram/pages/timer/index.js');
 const timerWxmlPath = path.join(__dirname, '../miniprogram/pages/timer/index.wxml');
@@ -12,6 +13,15 @@ const timerJsonPath = path.join(__dirname, '../miniprogram/pages/timer/index.jso
 const editIconWxmlPath = path.join(__dirname, '../miniprogram/components/edit-icon/index.wxml');
 const editIconWxssPath = path.join(__dirname, '../miniprogram/components/edit-icon/index.wxss');
 const NOW = 1_700_000_000_000;
+
+function preferenceStoreForMap(values) {
+  return new LocalPreferenceStore({
+    has: (key) => values.has(key),
+    get: (key) => (values.has(key) ? structuredClone(values.get(key)) : ''),
+    set: (key, value) => values.set(key, structuredClone(value)),
+    remove: (key) => values.delete(key)
+  });
+}
 
 function loadTimerPage() {
   const originalPage = global.Page;
@@ -787,6 +797,7 @@ test('新生成的最近记录置顶、标记为 new 并自动回到第一页，
   const originalGetApp = global.getApp;
   const originalWx = global.wx;
   const localStorage = new Map();
+  const preferences = preferenceStoreForMap(localStorage);
   const snapshot = {
     localProfile: { id: 'profile_recent', createdAt: NOW, updatedAt: NOW },
     projects: [],
@@ -802,6 +813,7 @@ test('新生成的最近记录置顶、标记为 new 并自动回到第一页，
   global.getApp = () => ({
     globalData: {
       bootstrap: {
+        preferences,
         applicationService: {
           snapshot() { return snapshot; },
           planAssociationCandidates() { return []; }
@@ -811,7 +823,7 @@ test('新生成的最近记录置顶、标记为 new 并自动回到第一页，
   });
   global.wx = {
     showToast() {},
-    getStorageSync(key) { return localStorage.get(key); },
+    getStorageSync(key) { return localStorage.has(key) ? localStorage.get(key) : ''; },
     setStorageSync(key, value) { localStorage.set(key, value); }
   };
   try {
@@ -840,8 +852,9 @@ test('新生成的最近记录置顶、标记为 new 并自动回到第一页，
     assert.equal(page.data.recentBoundaryOffset, 0);
     assert.equal(page.data.recentBoundaryIsDragging, false);
     assert.deepEqual(localStorage.get('plan-and-record.recent-log-highlight'), {
+      version: 1,
       profileId: 'profile_recent',
-      logId: 'log_new'
+      value: { logId: 'log_new' }
     });
 
     page.setData({ recentColumnIndex: 1, recentScrollLeft: 240 });
@@ -877,8 +890,9 @@ test('新生成的最近记录置顶、标记为 new 并自动回到第一页，
     assert.equal(coldStartPage.data.recentColumnIndex, 0);
     assert.equal(coldStartPage.data.recentScrollLeft, 0);
     assert.deepEqual(localStorage.get('plan-and-record.recent-log-highlight'), {
+      version: 1,
       profileId: 'profile_recent',
-      logId: 'log_newer'
+      value: { logId: 'log_newer' }
     });
   } finally {
     global.getApp = originalGetApp;
@@ -1196,6 +1210,192 @@ test('计时期间修改本次字段会同步写入计时草稿，暂停刷新�
   } finally {
     global.getApp = originalGetApp;
     global.wx = originalWx;
+  }
+});
+
+test('连续备注输入只安排一次草稿写入，隐藏页面时立即提交最新值', () => {
+  const originalGetApp = global.getApp;
+  const originalWx = global.wx;
+  const originalSetTimeout = global.setTimeout;
+  const originalClearTimeout = global.clearTimeout;
+  const updateTimerDraft = [];
+  const timers = new Map();
+  const delays = [];
+  let nextTimerId = 1;
+  global.setTimeout = (callback, delay) => {
+    const id = nextTimerId;
+    nextTimerId += 1;
+    timers.set(id, callback);
+    delays.push(delay);
+    return id;
+  };
+  global.clearTimeout = (id) => timers.delete(id);
+  global.getApp = () => ({
+    globalData: {
+      bootstrap: {
+        applicationService: {
+          updateTimerDraft(input) { updateTimerDraft.push(input); }
+        }
+      }
+    }
+  });
+  global.wx = { showToast() {} };
+
+  try {
+    const page = loadTimerPage();
+    page.setData = (updates, callback) => {
+      Object.assign(page.data, updates);
+      if (callback) callback();
+    };
+    Object.assign(page.data, {
+      timer: { status: TIMER_STATUS.RUNNING },
+      events: [{ id: '', associationType: 'none', title: '计划外' }],
+      eventIndex: 0,
+      note: '',
+      tags: []
+    });
+
+    page.onNoteInput({ detail: { value: '第' } });
+    page.onNoteInput({ detail: { value: '第二' } });
+    page.onNoteInput({ detail: { value: '第二版' } });
+
+    assert.deepEqual(updateTimerDraft, []);
+    assert.deepEqual(delays, [300, 300, 300]);
+    assert.equal(timers.size, 1);
+
+    page.onHide();
+
+    assert.equal(timers.size, 0);
+    assert.equal(updateTimerDraft.length, 1);
+    assert.equal(updateTimerDraft[0].note, '第二版');
+  } finally {
+    global.getApp = originalGetApp;
+    global.wx = originalWx;
+    global.setTimeout = originalSetTimeout;
+    global.clearTimeout = originalClearTimeout;
+  }
+});
+
+test('备注 setData 渲染回调晚于 onHide 时仍立即保存且不留下迟到定时器', () => {
+  const originalGetApp = global.getApp;
+  const originalWx = global.wx;
+  const originalSetTimeout = global.setTimeout;
+  const originalClearTimeout = global.clearTimeout;
+  const updateTimerDraft = [];
+  const timers = new Map();
+  const renderCallbacks = [];
+  let nextTimerId = 1;
+  global.setTimeout = (callback) => {
+    const id = nextTimerId;
+    nextTimerId += 1;
+    timers.set(id, callback);
+    return id;
+  };
+  global.clearTimeout = (id) => timers.delete(id);
+  global.getApp = () => ({
+    globalData: {
+      bootstrap: {
+        applicationService: {
+          updateTimerDraft(input) { updateTimerDraft.push(input); }
+        }
+      }
+    }
+  });
+  global.wx = { showToast() {} };
+
+  try {
+    const page = loadTimerPage();
+    page.setData = (updates, callback) => {
+      Object.assign(page.data, updates);
+      if (callback) renderCallbacks.push(callback);
+    };
+    Object.assign(page.data, {
+      timer: { status: TIMER_STATUS.RUNNING },
+      events: [{ id: '', associationType: 'none', title: '计划外' }],
+      eventIndex: 0,
+      note: '',
+      tags: []
+    });
+
+    page.onNoteInput({ detail: { value: '切后台前的最新备注' } });
+    assert.equal(timers.size, 1);
+
+    page.onHide();
+    assert.equal(timers.size, 0);
+    assert.deepEqual(updateTimerDraft, [{
+      calendarEventId: null,
+      note: '切后台前的最新备注',
+      tags: []
+    }]);
+
+    renderCallbacks.forEach((callback) => callback());
+    assert.equal(timers.size, 0);
+    assert.equal(updateTimerDraft.length, 1);
+  } finally {
+    global.getApp = originalGetApp;
+    global.wx = originalWx;
+    global.setTimeout = originalSetTimeout;
+    global.clearTimeout = originalClearTimeout;
+  }
+});
+
+test('结束计时使用最新备注并取消尚未触发的防抖写入', () => {
+  const originalGetApp = global.getApp;
+  const originalWx = global.wx;
+  const originalSetTimeout = global.setTimeout;
+  const originalClearTimeout = global.clearTimeout;
+  const timers = new Map();
+  const finishCalls = [];
+  let nextTimerId = 1;
+  global.setTimeout = (callback) => {
+    const id = nextTimerId;
+    nextTimerId += 1;
+    timers.set(id, callback);
+    return id;
+  };
+  global.clearTimeout = (id) => timers.delete(id);
+  global.getApp = () => ({
+    globalData: {
+      bootstrap: {
+        applicationService: {
+          finishTimer(input) {
+            finishCalls.push(input);
+            return { log: { id: 'log_finished' } };
+          }
+        }
+      }
+    }
+  });
+  global.wx = { showToast() {} };
+
+  try {
+    const page = loadTimerPage();
+    page.setData = (updates, callback) => {
+      Object.assign(page.data, updates);
+      if (callback) callback();
+    };
+    page.refresh = () => {};
+    Object.assign(page.data, {
+      timer: { status: TIMER_STATUS.RUNNING },
+      events: [{ id: '', associationType: 'none', title: '计划外' }],
+      eventIndex: 0,
+      note: '',
+      tags: []
+    });
+
+    page.onNoteInput({ detail: { value: '最终备注' } });
+    assert.equal(timers.size, 1);
+
+    page.onFinishTimer();
+
+    assert.equal(timers.size, 0);
+    assert.equal(finishCalls.length, 1);
+    assert.equal(finishCalls[0].note, '最终备注');
+  } finally {
+    global.getApp = originalGetApp;
+    global.wx = originalWx;
+    global.setTimeout = originalSetTimeout;
+    global.clearTimeout = originalClearTimeout;
   }
 });
 

@@ -15,6 +15,10 @@ const {
 } = require('../miniprogram/repository/local-repository');
 const { MemoryStorageAdapter } = require('../miniprogram/repository/storage-adapter');
 const { ApplicationService } = require('../miniprogram/services/application-service');
+const {
+  LocalPreferenceStore,
+  PREFERENCES
+} = require('../miniprogram/services/local-preference-store');
 const { DomainError, StorageError } = require('../miniprogram/domain/errors');
 
 class TrackingStorage extends MemoryStorageAdapter {
@@ -29,7 +33,7 @@ class TrackingStorage extends MemoryStorageAdapter {
     this.setCalls.push(key);
     if (this.failNextSet) {
       this.failNextSet = false;
-      throw new Error('disk full');
+      throw new Error('write failed');
     }
     super.set(key, value);
   }
@@ -566,6 +570,17 @@ test('M1：首次资料库生成匿名资料库且不再包含分类实体', () 
   assert.equal(service.archiveCategory, undefined);
 });
 
+test('应用服务只读暴露仓储容量且不触发写入', () => {
+  const { service, storage } = createHarness();
+  storage.resetCalls();
+
+  const usage = service.storageUsage();
+
+  assert.equal(usage.databaseLimitBytes, 1024 * 1024);
+  assert.equal(typeof usage.databaseBytes, 'number');
+  assert.deepEqual(storage.setCalls, []);
+});
+
 test('新建记录和计时草稿统一规范化标签并执行 10/5 中英文折算上限', () => {
   const { service, now } = createHarness();
   const manual = service.createManualLog({
@@ -710,6 +725,24 @@ test('M1/M3：活动项目不能超过五个', () => {
     service.createProject({ title: `项目${index}`, deadlineAt: now() + 86_400_000 });
   }
   assert.throws(() => service.createProject({ title: '第六个项目', deadlineAt: now() + 86_400_000 }), (error) => error.code === 'ACTIVE_PROJECT_LIMIT');
+});
+
+test('项目改名只更新项目，关联 TODO 的名称快照与更新时间保持不变', () => {
+  const { service, setNow, now } = createHarness();
+  const project = service.createProject({ title: '旧项目名', deadlineAt: now() + 86_400_000 });
+  const linkedTodo = service.createTask({ title: '关联 TODO', projectId: project.id });
+  const unlinkedTodo = service.createTask({ title: '独立 TODO' });
+  const beforeTasks = clone(service.snapshot().tasks);
+  const renamedAt = now() + 1_000;
+  setNow(renamedAt);
+
+  service.updateProject(project.id, { title: '新项目名' });
+
+  const snapshot = service.snapshot();
+  assert.equal(snapshot.projects.find((item) => item.id === project.id).updatedAt, renamedAt);
+  assert.deepEqual(snapshot.tasks, beforeTasks);
+  assert.equal(snapshot.tasks.find((task) => task.id === linkedTodo.id).projectNameSnapshot, '旧项目名');
+  assert.equal(snapshot.tasks.find((task) => task.id === unlinkedTodo.id).projectNameSnapshot, null);
 });
 
 test('M3：新建任务插入开头，后续修改不重排保存顺序', () => {
@@ -1138,6 +1171,32 @@ test('M2：冷启动恢复只捕获一次当前时刻', () => {
 
   assert.equal(nowCalls(), 1);
   assert.equal(recovered.state, 'resumed');
+});
+
+test('活动计时在恢复窗口内且关联未变化时不写主库或推进 updatedAt', () => {
+  const { service, storage, now } = createHarness();
+  service.startTimer({ note: '保持不变' });
+  const before = service.snapshot();
+  storage.resetCalls();
+
+  const result = service.recoverTimer();
+
+  assert.equal(result.state, 'resumed');
+  assert.deepEqual(storage.setCalls, []);
+  assert.equal(service.snapshot().updatedAt, before.updatedAt);
+  assert.equal(now() - service.snapshot().timer.startedAt <= MAX_TIMER_SPAN_MS, true);
+});
+
+test('导入预览期间无变化恢复不会制造假 stale', () => {
+  const { service, storage } = createHarness();
+  service.startTimer({ note: '保持预览基线' });
+  const prepared = service.prepareJsonImport(service.exportJson());
+  service.previewJsonImport(prepared.token, { mode: IMPORT_MODE.INCREMENTAL });
+  storage.resetCalls();
+
+  assert.equal(service.recoverTimer().state, 'resumed');
+  assert.deepEqual(storage.setCalls, []);
+  assert.doesNotThrow(() => service.commitJsonImport(prepared.token));
 });
 
 test('M4：重复实例按需投影，确认后不会再次投影', () => {
@@ -2758,7 +2817,7 @@ test('覆盖导入在提交时重建资料库时间，只写一次主快照并�
   assert.equal(snapshot.createdAt, commitNow);
   assert.equal(snapshot.updatedAt, commitNow);
   assert.equal(snapshot.wishes[0].id, 'wish_replace');
-  assert.equal(storage.get(BACKUP_KEY), undefined);
+  assert.equal(storage.has(BACKUP_KEY), false);
   assert.deepEqual(storage.setCalls, [STORAGE_KEY]);
   assert.deepEqual(storage.removeCalls, [BACKUP_KEY]);
 });
@@ -2804,7 +2863,7 @@ test('清空必须确认，成功后重建空资料库、清除运行态和待�
   assert.deepEqual(snapshot.wishes, []);
   assert.equal(snapshot.timer.status, TIMER_STATUS.IDLE);
   assert.equal(snapshot.recoveryDraft, null);
-  assert.equal(storage.get(BACKUP_KEY), undefined);
+  assert.equal(storage.has(BACKUP_KEY), false);
   assert.throws(
     () => service.previewJsonImport(prepared.token, { mode: IMPORT_MODE.INCREMENTAL }),
     (error) => error.code === 'IMPORT_PREVIEW_NOT_FOUND'
@@ -2827,6 +2886,79 @@ test('清空写入失败时保留旧资料库', () => {
   assert.doesNotThrow(
     () => service.previewJsonImport(prepared.token, { mode: IMPORT_MODE.INCREMENTAL })
   );
+});
+
+test('清空成功同步删除三个资料库身份偏好', () => {
+  const storage = new TrackingStorage();
+  const preferenceStore = new LocalPreferenceStore(storage);
+  const { service } = createHarness(1_700_000_000_000, storage, { preferenceStore });
+  const profileId = service.snapshot().localProfile.id;
+  preferenceStore.write('TODO_SORT', profileId, [{ field: 'title' }]);
+  preferenceStore.write('PROJECT_COLLAPSE', profileId, ['project_1']);
+  preferenceStore.write('RECENT_LOG_HIGHLIGHT', profileId, { logId: 'log_1' });
+
+  service.clearAllData(true);
+
+  for (const preference of Object.values(PREFERENCES)) {
+    assert.equal(storage.has(preference.key), false, preference.key);
+  }
+});
+
+test('清空主资料库失败时恢复已删除的界面偏好', () => {
+  const storage = new TrackingStorage();
+  const preferenceStore = new LocalPreferenceStore(storage);
+  const { service } = createHarness(1_700_000_000_000, storage, { preferenceStore });
+  const profileId = service.snapshot().localProfile.id;
+  preferenceStore.write('TODO_SORT', profileId, [{ field: 'title' }]);
+  storage.failNextSet = true;
+
+  assert.throws(
+    () => service.clearAllData(true),
+    (error) => error instanceof StorageError && error.code === 'WRITE_FAILED'
+  );
+  assert.deepEqual(
+    preferenceStore.read('TODO_SORT', profileId, null),
+    [{ field: 'title' }]
+  );
+});
+
+test('主库清空与偏好恢复都失败时保留主库错误结论', () => {
+  const storage = new TrackingStorage();
+  const preferenceStore = {
+    clearAllStrict() { return { captured: true }; },
+    restoreAllBestEffort() { return false; }
+  };
+  const { service } = createHarness(1_700_000_000_000, storage, { preferenceStore });
+  storage.failNextSet = true;
+
+  const error = (() => {
+    try {
+      service.clearAllData(true);
+    } catch (caught) {
+      return caught;
+    }
+    assert.fail('预期清空失败');
+  })();
+
+  assert.equal(error instanceof StorageError, true);
+  assert.equal(error.code, 'WRITE_FAILED');
+  assert.match(error.message, /已保留当前数据/);
+  assert.match(error.message, /界面设置可能已重置/);
+});
+
+test('覆盖导入成功后尽力删除旧 profile 的界面偏好', () => {
+  const storage = new TrackingStorage();
+  const preferenceStore = new LocalPreferenceStore(storage);
+  const { service } = createHarness(1_700_000_000_000, storage, { preferenceStore });
+  const oldProfileId = service.snapshot().localProfile.id;
+  preferenceStore.write('TODO_SORT', oldProfileId, [{ field: 'title' }]);
+  const imported = createInitialDatabase(1_800_000_000_000);
+  const prepared = service.prepareJsonImport(JSON.stringify(imported));
+  service.previewJsonImport(prepared.token, { mode: IMPORT_MODE.REPLACE });
+
+  service.commitJsonImport(prepared.token);
+
+  assert.equal(storage.has(PREFERENCES.TODO_SORT.key), false);
 });
 
 test('严格清理临时导出文件失败时不重置资料库，也不清除待处理导入', () => {
@@ -2927,10 +3059,12 @@ test('删除计划块会在同一事务中清空全部日志引用并保留计�
 });
 
 test('M1：写入失败不会替换内存快照', () => {
-  class FailingStorage {
-    constructor() { this.value = undefined; this.fail = false; }
-    get() { return this.value; }
-    set(key, value) { if (this.fail) throw new Error('disk full'); this.value = value; }
+  class FailingStorage extends MemoryStorageAdapter {
+    constructor() { super(); this.fail = false; }
+    set(key, value) {
+      if (this.fail) throw new Error('write failed');
+      super.set(key, value);
+    }
   }
   const storage = new FailingStorage();
   const repository = new LocalRepository(storage, { now: () => 1_700_000_000_000 });

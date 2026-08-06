@@ -53,6 +53,7 @@ class ApplicationService {
     this.repository = repository;
     this.now = options.now || Date.now;
     this.exportTempFileStore = options.exportTempFileStore || null;
+    this.preferenceStore = options.preferenceStore || null;
     this.recoveryTimerSpanMs = Number.isFinite(options.recoveryTimerSpanMs) && options.recoveryTimerSpanMs > 0
       ? options.recoveryTimerSpanMs
       : MAX_TIMER_SPAN_MS;
@@ -66,6 +67,10 @@ class ApplicationService {
 
   snapshot() {
     return this.repository.read();
+  }
+
+  storageUsage() {
+    return clone(this.repository.getStorageUsage());
   }
 
   requirePendingJsonImport(token) {
@@ -150,6 +155,11 @@ class ApplicationService {
     this.repository.replace(resolved.database, {
       clearMigrationBackup: mode === IMPORT_MODE.REPLACE
     });
+    if (mode === IMPORT_MODE.REPLACE
+      && this.preferenceStore
+      && typeof this.preferenceStore.clearAllBestEffort === 'function') {
+      this.preferenceStore.clearAllBestEffort();
+    }
     this.pendingJsonImport = null;
     return clone(resolved.summary);
   }
@@ -181,7 +191,29 @@ class ApplicationService {
         '无法确认临时导出文件已清理，数据未清空，请重试'
       );
     }
-    const database = this.repository.reset();
+    const capturedPreferences = this.preferenceStore
+      && typeof this.preferenceStore.clearAllStrict === 'function'
+      ? this.preferenceStore.clearAllStrict()
+      : null;
+    let database;
+    try {
+      database = this.repository.reset();
+    } catch (error) {
+      const preferencesRestored = !capturedPreferences
+        || (typeof this.preferenceStore.restoreAllBestEffort === 'function'
+          && this.preferenceStore.restoreAllBestEffort(capturedPreferences));
+      if (!preferencesRestored) {
+        if (error && typeof error.code === 'string' && typeof error.message === 'string') {
+          error.message = `${error.message}；界面设置可能已重置，请重新进入核对`;
+          throw error;
+        }
+        throw new DomainError(
+          'CLEAR_PREFERENCE_RESTORE_UNCERTAIN',
+          '业务资料库清空未完成，界面设置可能已重置，请重新进入核对并尽快导出'
+        );
+      }
+      throw error;
+    }
     this.pendingJsonImport = null;
     return {
       cleared: true,
@@ -1666,9 +1698,21 @@ class ApplicationService {
 
   recoverTimer() {
     const capturedNow = this.now();
-    const currentTimer = this.snapshot().timer;
+    const current = this.snapshot();
+    const currentTimer = current.timer;
     if (!currentTimer || currentTimer.status === TIMER_STATUS.IDLE) {
       return { state: 'unchanged', timer: currentTimer };
+    }
+    const currentInspection = inspectTimerAt(currentTimer, capturedNow);
+    if (currentInspection.valid
+      && capturedNow - currentTimer.startedAt <= this.recoveryTimerSpanMs) {
+      const resolvedDraft = {
+        ...currentTimer.draft,
+        ...this.resolveRecordUpdateAssociations(current, currentTimer.draft, {})
+      };
+      if (persistedValueEquals(resolvedDraft, currentTimer.draft)) {
+        return { state: 'resumed', timer: currentTimer };
+      }
     }
     return this.repository.transaction((database) => {
       const timer = database.timer;

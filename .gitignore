@@ -13,3 +13,6 @@
 
 # 本地 Superpowers 工作产物
 /docs/superpowers/
+
+# 测试用本地 JSON 数据
+/json-for-test/

@@ -2,8 +2,8 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const { createInitialDatabase } = require('../miniprogram/domain/entities');
-const { DomainError } = require('../miniprogram/domain/errors');
-const { STORAGE_KEY } = require('../miniprogram/repository/local-repository');
+const { DomainError, StorageError } = require('../miniprogram/domain/errors');
+const { BACKUP_KEY, STORAGE_KEY } = require('../miniprogram/repository/local-repository');
 const { DataRecoveryService } = require('../miniprogram/services/data-recovery-service');
 
 function importedSnapshot(now = 1_700_000_000_000) {
@@ -28,15 +28,24 @@ function createHarness(options = {}) {
   const rawValue = Object.prototype.hasOwnProperty.call(options, 'rawValue')
     ? options.rawValue
     : '{"private":"raw"}';
-  const calls = { get: [], replace: [], removeAllStrict: 0 };
+  const hasRawBackup = Object.prototype.hasOwnProperty.call(options, 'rawBackupValue');
+  const calls = {
+    get: [], replace: [], removeAllStrict: 0,
+    preferenceClear: 0, preferenceRestore: 0, preferenceBestEffort: 0,
+    order: []
+  };
   const storage = {
+    has(key) {
+      return key === BACKUP_KEY ? hasRawBackup : key === STORAGE_KEY;
+    },
     get(key) {
       calls.get.push(key);
-      return rawValue;
+      return key === BACKUP_KEY ? options.rawBackupValue : rawValue;
     }
   };
   const repository = {
     replace(database, replaceOptions) {
+      calls.order.push('replace');
       calls.replace.push({ database: structuredClone(database), options: replaceOptions });
       if (options.replaceError) throw options.replaceError;
       return structuredClone(database);
@@ -53,16 +62,38 @@ function createHarness(options = {}) {
   };
   const exportTempFileStore = {
     removeAllStrict() {
+      calls.order.push('files');
       calls.removeAllStrict += 1;
       if (options.cleanupError) throw options.cleanupError;
       return { removedCount: 1 };
     }
   };
+  const preferenceStore = options.preferenceStore || {
+    clearAllStrict() {
+      calls.order.push('preferences');
+      calls.preferenceClear += 1;
+      if (options.preferenceClearError) throw options.preferenceClearError;
+      return { captured: true };
+    },
+    restoreAllBestEffort(captured) {
+      calls.preferenceRestore += 1;
+      assert.deepEqual(captured, { captured: true });
+      return options.preferenceRestoreResult !== false;
+    },
+    clearAllBestEffort() {
+      calls.preferenceBestEffort += 1;
+      return true;
+    }
+  };
   const service = new DataRecoveryService({
     repository,
     storage,
+    preferenceStore,
     exportTempFileStore,
-    now: () => options.now || 1_800_000_000_000
+    now: () => {
+      if (options.nowError) throw options.nowError;
+      return options.now || 1_800_000_000_000;
+    }
   });
   return { service, calls };
 }
@@ -82,6 +113,17 @@ test('原始导出直接保留字符串，非字符串只做 JSON 文本化', ()
   const cyclic = {};
   cyclic.self = cyclic;
   assert.equal(createHarness({ rawValue: cyclic }).service.exportRawData(), '[object Object]');
+});
+
+test('未完成迁移仍有升级前备份时优先导出真正原始值', () => {
+  const original = '{"schemaVersion":0,"private":"original"}';
+  const harness = createHarness({
+    rawValue: '{"schemaVersion":1,"partial":true}',
+    rawBackupValue: original
+  });
+
+  assert.equal(harness.service.exportRawData(), original);
+  assert.deepEqual(harness.calls.get, [BACKUP_KEY]);
 });
 
 test('完整 JSON 只按覆盖模式分析，并重建 profile 与空闲运行态', () => {
@@ -110,6 +152,7 @@ test('完整 JSON 只按覆盖模式分析，并重建 profile 与空闲运行�
     status: 'idle', startedAt: null, pausedAt: null, pauses: [], draft: {}
   });
   assert.equal(replacement.database.recoveryDraft, null);
+  assert.equal(harness.calls.preferenceBestEffort, 1);
 });
 
 test('非法 JSON 不产生可提交 token 且不会写入，token 提交后立即失效', () => {
@@ -164,6 +207,7 @@ test('清空必须明确确认，先严格清理文件再替换为空资料库',
   assert.equal(result.cleared, true);
   assert.equal(harness.calls.removeAllStrict, 1);
   assert.equal(harness.calls.replace.length, 1);
+  assert.deepEqual(harness.calls.order, ['files', 'preferences', 'replace']);
   assert.deepEqual(harness.calls.replace[0].database.wishes, []);
   assert.equal(harness.calls.replace[0].database.localProfile.createdAt, 1_900_000_000_000);
 });
@@ -177,4 +221,43 @@ test('临时文件清理或仓储替换失败时绝不误报清空成功', () =>
   assert.throws(() => writeFailed.service.clearAllData(true), /write failed/);
   assert.equal(writeFailed.calls.removeAllStrict, 1);
   assert.equal(writeFailed.calls.replace.length, 1);
+  assert.equal(writeFailed.calls.preferenceRestore, 1);
+});
+
+test('偏好严格清理失败时不替换业务资料库', () => {
+  const harness = createHarness({ preferenceClearError: new Error('preference clear failed') });
+
+  assert.throws(() => harness.service.clearAllData(true), /preference clear failed/);
+  assert.equal(harness.calls.replace.length, 0);
+  assert.deepEqual(harness.calls.order, ['files', 'preferences']);
+});
+
+test('创建空资料库失败时不会提前删除偏好', () => {
+  const harness = createHarness({ nowError: new Error('clock failed') });
+
+  assert.throws(() => harness.service.clearAllData(true), /clock failed/);
+  assert.equal(harness.calls.preferenceClear, 0);
+  assert.equal(harness.calls.replace.length, 0);
+  assert.deepEqual(harness.calls.order, ['files']);
+});
+
+test('主库替换与偏好恢复都失败时保留主库错误结论', () => {
+  const harness = createHarness({
+    replaceError: new StorageError('WRITE_FAILED', '主业务资料库已保留'),
+    preferenceRestoreResult: false
+  });
+
+  const error = (() => {
+    try {
+      harness.service.clearAllData(true);
+    } catch (caught) {
+      return caught;
+    }
+    assert.fail('预期清空失败');
+  })();
+
+  assert.equal(error instanceof StorageError, true);
+  assert.equal(error.code, 'WRITE_FAILED');
+  assert.match(error.message, /主业务资料库已保留/);
+  assert.match(error.message, /界面设置可能已重置/);
 });

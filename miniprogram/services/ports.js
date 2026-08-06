@@ -23,7 +23,7 @@ class DisabledPort {
 function createDisabledPorts(repository) {
   return {
     identity: new AnonymousIdentity(repository),
-    sync: new DisabledPort('云端同步'),
+    sync: new DisabledPort('云端存储'),
     import: new DisabledPort('智能导入'),
     entitlement: new DisabledPort('会员与支付'),
     reminder: new DisabledPort('云端提醒')

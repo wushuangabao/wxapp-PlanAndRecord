@@ -3,11 +3,19 @@ const { WxStorageAdapter } = require('../repository/storage-adapter');
 const { ApplicationService } = require('./application-service');
 const { DataRecoveryService } = require('./data-recovery-service');
 const { WxExportTempFileStore } = require('./export-temp-file-store');
+const { LocalPreferenceStore } = require('./local-preference-store');
 const { createDisabledPorts } = require('./ports');
 const { MAX_TIMER_SPAN_MS } = require('../domain/constants');
 const { StorageError } = require('../domain/errors');
 
 const DEVELOPMENT_RECOVERY_TIMER_SPAN_MS = 8 * 1000;
+const RECOVERY_ERROR_CODES = new Set([
+  'DATA_CORRUPTED',
+  'DATA_VERSION_UNSUPPORTED',
+  'MIGRATION_PATH_MISSING',
+  'MIGRATION_FAILED',
+  'MIGRATION_ROLLBACK_UNCERTAIN'
+]);
 
 function createRecoveryTimerOptions(accountInfo) {
   const envVersion = accountInfo && accountInfo.miniProgram && accountInfo.miniProgram.envVersion;
@@ -32,6 +40,7 @@ function createBootstrapState(options = {}) {
   const now = options.now || Date.now;
   const storage = options.storage || new WxStorageAdapter();
   const repository = options.repository || new LocalRepository(storage, { now });
+  const preferenceStore = options.preferenceStore || new LocalPreferenceStore(storage);
   const exportTempFileStore = options.exportTempFileStore || new WxExportTempFileStore();
   const ApplicationServiceClass = options.ApplicationServiceClass || ApplicationService;
   const DataRecoveryServiceClass = options.DataRecoveryServiceClass || DataRecoveryService;
@@ -40,7 +49,7 @@ function createBootstrapState(options = {}) {
     repository.initialize();
   } catch (error) {
     if (!(error instanceof StorageError)
-      || !['DATA_CORRUPTED', 'DATA_VERSION_UNSUPPORTED'].includes(error.code)) {
+      || !RECOVERY_ERROR_CODES.has(error.code)) {
       throw error;
     }
     return {
@@ -48,9 +57,11 @@ function createBootstrapState(options = {}) {
       mode: 'data-recovery',
       initializedAt: now(),
       recoveryReason: error.code,
+      preferences: preferenceStore,
       recoveryService: new DataRecoveryServiceClass({
         repository,
         storage,
+        preferenceStore,
         exportTempFileStore,
         now
       })
@@ -60,16 +71,26 @@ function createBootstrapState(options = {}) {
   const applicationService = new ApplicationServiceClass(repository, {
     now,
     exportTempFileStore,
+    preferenceStore,
     ...createRecoveryTimerOptions(getRuntimeAccountInfo())
   });
-  const recovery = applicationService.initialize();
+  let recovery = null;
+  let recoveryError = null;
+  try {
+    recovery = applicationService.initialize();
+  } catch (error) {
+    if (!error || error.code !== 'STORAGE_CAPACITY_EXCEEDED') throw error;
+    recoveryError = error;
+  }
   return {
     phase: 'M1',
     mode: 'ready',
     initializedAt: now(),
     applicationService,
+    preferences: preferenceStore,
     ports: createDisabledPorts(repository),
-    recovery
+    recovery,
+    recoveryError
   };
 }
 

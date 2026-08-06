@@ -7,10 +7,11 @@ class DomainError extends Error {
 }
 
 class StorageError extends Error {
-  constructor(code, message) {
+  constructor(code, message, details = null) {
     super(message);
     this.name = 'StorageError';
     this.code = code;
+    this.details = details;
   }
 }
 

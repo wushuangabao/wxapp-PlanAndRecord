@@ -26,7 +26,7 @@ test('日历日视图显示单个日期，范围标签始终单行显示', () =>
 });
 
 test('所有自定义底部弹窗复用共享头部组件', () => {
-  const expectedModalCounts = { plans: 4, calendar: 3 };
+  const expectedModalCounts = { plans: 5, calendar: 3 };
 
   for (const page of ['timer', ...Object.keys(expectedModalCounts)]) {
     const pageDirectory = path.join(pagesRoot, page);
@@ -67,4 +67,19 @@ test('所有页面和共享控件使用莫兰迪绿色主色板', () => {
   assert.match(source, /#e6ece7/);
   assert.match(source, /#9a5550/);
 
+});
+
+test('用户页容量状态遵循安全百分比、灰琥珀预警和安全区布局', () => {
+  const wxml = fs.readFileSync(path.join(pagesRoot, 'profile/index.wxml'), 'utf8');
+  const wxss = fs.readFileSync(path.join(pagesRoot, 'profile/index.wxss'), 'utf8');
+  const cloudButton = wxml.match(/<button[^>]*bindtap="openCloudStorage"[^>]*>/);
+
+  assert.match(wxml, /style="width: \{\{storageUsage\.percent\}\}%;"/);
+  assert.match(wxss, /\.storage-warning\s*\{[^}]*background:\s*#f5f0e6;[^}]*color:\s*#795d32;/s);
+  assert.ok(cloudButton);
+  assert.match(cloudButton[0], /class="[^"]*cloud-storage[^"]*"/);
+  assert.doesNotMatch(cloudButton[0], /class="[^"]*\b(?:primary|danger)\b[^"]*"/);
+  assert.match(wxss, /\.data-management-card\s*\{[^}]*safe-area-inset-bottom/s);
+  assert.match(wxss, /\.storage-summary\s*\{[^}]*min-width:\s*0;/s);
+  assert.match(wxss, /\.storage-value\s*\{[^}]*overflow-wrap:\s*anywhere;/s);
 });

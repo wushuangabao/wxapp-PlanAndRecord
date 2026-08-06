@@ -3,6 +3,8 @@ const path = require('node:path');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
+const { LocalPreferenceStore } = require('../miniprogram/services/local-preference-store');
+
 const calendarWxmlPath = path.join(__dirname, '../miniprogram/pages/calendar/index.wxml');
 const calendarWxssPath = path.join(__dirname, '../miniprogram/pages/calendar/index.wxss');
 const calendarScriptPath = path.join(__dirname, '../miniprogram/pages/calendar/index.js');
@@ -67,7 +69,7 @@ test('计划页：TODO 使用三行横向列和图标操作', () => {
 test('M3：TODO 和项目的右上角新建入口为无底色深灰加号，页面不再显示悬浮按钮', () => {
   const wxml = fs.readFileSync(plansWxmlPath, 'utf8');
   const wxss = fs.readFileSync(plansWxssPath, 'utf8');
-  assert.match(wxml, /class="section-add todo-add" bindtap="openStandaloneTask"/);
+  assert.match(wxml, /class="section-add todo-add"[^>]*bindtap="openStandaloneTask"/);
   assert.match(wxml, /class="section-add project-add" bindtap="openProjectCreate"/);
   assert.match(wxml, /section-heading"><view class="section-title">项目（/);
   assert.doesNotMatch(wxml, /todo-fab|右下角 \+/);
@@ -479,6 +481,12 @@ test('日历确认虚拟实例或候选日志后会更新最近记录的 new 标
   const originalGetApp = global.getApp;
   const originalWx = global.wx;
   const stored = new Map();
+  const preferences = new LocalPreferenceStore({
+    has: (key) => stored.has(key),
+    get: (key) => (stored.has(key) ? structuredClone(stored.get(key)) : ''),
+    set: (key, value) => stored.set(key, structuredClone(value)),
+    remove: (key) => stored.delete(key)
+  });
   const calls = [];
   const snapshot = { localProfile: { id: 'profile_calendar' } };
   const service = {
@@ -491,7 +499,7 @@ test('日历确认虚拟实例或候选日志后会更新最近记录的 new 标
       return { id: 'confirmed_candidate' };
     }
   };
-  global.getApp = () => ({ globalData: { bootstrap: { applicationService: service } } });
+  global.getApp = () => ({ globalData: { bootstrap: { applicationService: service, preferences } } });
   global.wx = {
     showToast() {},
     setStorageSync(key, value) { stored.set(key, value); }
@@ -507,15 +515,17 @@ test('日历确认虚拟实例或候选日志后会更新最近记录的 new 标
       originOccurrenceId: 'rule_repeat:1:123'
     } } } });
     assert.deepEqual(stored.get('plan-and-record.recent-log-highlight'), {
+      version: 1,
       profileId: 'profile_calendar',
-      logId: 'confirmed_virtual'
+      value: { logId: 'confirmed_virtual' }
     });
 
     page.confirmItem({ currentTarget: { dataset: { item: { id: 'candidate_log', virtual: false } } } });
     assert.deepEqual(calls.map(([type]) => type), ['virtual', 'candidate']);
     assert.deepEqual(stored.get('plan-and-record.recent-log-highlight'), {
+      version: 1,
       profileId: 'profile_calendar',
-      logId: 'confirmed_candidate'
+      value: { logId: 'confirmed_candidate' }
     });
   } finally {
     global.getApp = originalGetApp;
