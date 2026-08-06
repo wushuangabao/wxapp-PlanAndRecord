@@ -31,13 +31,16 @@ test('M3：已归档项目可在页面中恢复', () => {
   assert.match(wxml, /restoreProject/);
 });
 
-test('M3：计划页以 TODO LIST 和项目上下文入口替代任务收集表单', () => {
+test('M3：计划页以 TODO LIST 和项目内联子任务总览替代任务收集表单', () => {
   const wxml = fs.readFileSync(plansWxmlPath, 'utf8');
   assert.ok(wxml.indexOf('TODO LIST') < wxml.indexOf('项目（'));
   assert.match(wxml, /openStandaloneTask/);
   assert.match(wxml, /openChildTask/);
-  assert.match(wxml, /openProjectTasks/);
-  assert.match(wxml, /openKeyResult/);
+  assert.match(wxml, /wx:for="\{\{projectCards\}\}"/);
+  assert.match(wxml, /bindtap="toggleProjectTodoExpansion"/);
+  assert.match(wxml, /bindtap="toggleProjectCompletedExpansion"/);
+  assert.doesNotMatch(wxml, /projectTaskPanel|openProjectTasks|switchProjectTaskTab/);
+  assert.doesNotMatch(wxml, /OKR|关键结果|openKeyResult|okrEditor/);
   assert.match(wxml, /wx:if="{{isProjectCreateOpen}}"/);
   assert.doesNotMatch(wxml, /任务 \/ 备忘录/);
   assert.doesNotMatch(wxml, /加入收集箱/);

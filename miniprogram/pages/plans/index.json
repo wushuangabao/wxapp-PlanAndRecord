@@ -1,5 +1,5 @@
 {
-  "navigationBarTitleText": "愿望与项目",
+  "navigationBarTitleText": "计划",
   "usingComponents": {
     "delete-icon": "/components/delete-icon/index",
     "sheet-header": "/components/sheet-header/index"

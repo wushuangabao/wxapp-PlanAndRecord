@@ -40,16 +40,7 @@ function normalizeSnapshotTitles(database) {
   if (!normalized || typeof normalized !== 'object' || Array.isArray(normalized)) return normalized;
 
   if (Array.isArray(normalized.wishes)) normalized.wishes.forEach(trimProvidedTitle);
-  if (Array.isArray(normalized.projects)) {
-    normalized.projects.forEach((project) => {
-      trimProvidedTitle(project);
-      if (!project || !Array.isArray(project.objectives)) return;
-      project.objectives.forEach((objective) => {
-        trimProvidedTitle(objective);
-        if (objective && Array.isArray(objective.keyResults)) objective.keyResults.forEach(trimProvidedTitle);
-      });
-    });
-  }
+  if (Array.isArray(normalized.projects)) normalized.projects.forEach(trimProvidedTitle);
   if (Array.isArray(normalized.tasks)) normalized.tasks.forEach(trimProvidedTitle);
   if (Array.isArray(normalized.calendarEvents)) normalized.calendarEvents.forEach(trimProvidedTitle);
   if (Array.isArray(normalized.repeatRules)) normalized.repeatRules.forEach(trimProvidedTitle);
@@ -61,14 +52,6 @@ function normalizeSnapshotTitles(database) {
     });
   }
   return normalized;
-}
-
-function validPercentage(value, label) {
-  const number = Number(value);
-  if (!Number.isInteger(number) || number < 0 || number > 100) {
-    throw new DomainError('PERCENTAGE_INVALID', `${label}必须是 0 到 100 的整数`);
-  }
-  return number;
 }
 
 function validPriority(value) {
@@ -105,7 +88,7 @@ function validLogTiming(startedAt, endedAt, pausedDurationSeconds = 0) {
     || !Number.isInteger(pausedDurationSeconds)
     || pausedDurationSeconds < 0
     || timing.intervalTotalSeconds <= pausedDurationSeconds) {
-    throw new DomainError('LOG_TIMING_INVALID', '记录区间必须大于暂停时长且至少包含 1 秒有效时间');
+    throw new DomainError('LOG_TIMING_INVALID', '至少要包含 1 秒有效时间~');
   }
   return timing;
 }
@@ -162,7 +145,6 @@ module.exports = {
   requiredTitle,
   limitTitleCodePoints,
   normalizeSnapshotTitles,
-  validPercentage,
   validPriority,
   validInterval,
   validTimeRange,

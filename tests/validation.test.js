@@ -34,8 +34,7 @@ test('normalizeSnapshotTitles 深拷贝并只 trim 已提供的真实标题', ()
   const input = {
     wishes: [{ title: '  愿望  ', untouched: { value: 1 } }],
     projects: [{
-      title: '  项目  ',
-      objectives: [{ title: '  目标  ', keyResults: [{ title: '  结果  ' }] }]
+      title: '  项目  '
     }],
     tasks: [{ title: '  任务  ' }],
     calendarEvents: [{ title: '  计划  ' }],
@@ -53,8 +52,6 @@ test('normalizeSnapshotTitles 深拷贝并只 trim 已提供的真实标题', ()
   assert.notEqual(normalized.wishes[0], input.wishes[0]);
   assert.equal(normalized.wishes[0].title, '愿望');
   assert.equal(normalized.projects[0].title, '项目');
-  assert.equal(normalized.projects[0].objectives[0].title, '目标');
-  assert.equal(normalized.projects[0].objectives[0].keyResults[0].title, '结果');
   assert.equal(normalized.tasks[0].title, '任务');
   assert.equal(normalized.calendarEvents[0].title, '计划');
   assert.equal(normalized.repeatRules[0].title, '重复');

@@ -1,5 +1,5 @@
 {
-  "navigationBarTitleText": "快速记录",
+  "navigationBarTitleText": "记录",
   "usingComponents": {
     "delete-icon": "/components/delete-icon/index",
     "edit-icon": "/components/edit-icon/index",

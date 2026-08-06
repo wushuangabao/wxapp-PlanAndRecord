@@ -4,7 +4,7 @@ const { limitTitleCodePoints } = require('../../domain/validation');
 const { defaultDateTime, formatDateTime, getService, showError, showSaved } = require('../../utils/page');
 const { getRuntimeWindowWidth } = require('../../utils/wechat-runtime');
 
-const TODO_COLUMN_SIZE = 3;
+const HORIZONTAL_COLUMN_SIZE = 3;
 const TODO_SWIPE_DISTANCE_RATIO = 0.15;
 const TODO_SWIPE_DISTANCE_FALLBACK = 36;
 const TODO_RETURN_ANIMATION_DURATION = 600;
@@ -16,6 +16,30 @@ const TODO_TITLE_UNLINKED_FONT_SIZE = 32;
 const TODO_TITLE_LINKED_FONT_SIZE = 28;
 const TODO_TITLE_MIN_FONT_SIZE = 18;
 const TODO_TITLE_WIDTH_PADDING = 4;
+const PROJECT_TASK_PREVIEW_LIMIT = 3;
+
+const HORIZONTAL_LIST_CONFIGS = Object.freeze({
+  todo: {
+    columnsKey: 'todoListColumns',
+    columnIndexKey: 'todoColumnIndex',
+    columnStepKey: 'todoColumnStep',
+    scrollLeftKey: 'todoScrollLeft',
+    scrollWithAnimationKey: 'todoScrollWithAnimation',
+    boundaryOffsetKey: 'todoBoundaryOffset',
+    boundaryDraggingKey: 'todoBoundaryIsDragging',
+    columnSelector: '.todo-column'
+  },
+  wish: {
+    columnsKey: 'wishListColumns',
+    columnIndexKey: 'wishColumnIndex',
+    columnStepKey: 'wishColumnStep',
+    scrollLeftKey: 'wishScrollLeft',
+    scrollWithAnimationKey: 'wishScrollWithAnimation',
+    boundaryOffsetKey: 'wishBoundaryOffset',
+    boundaryDraggingKey: 'wishBoundaryIsDragging',
+    columnSelector: '.wish-column'
+  }
+});
 
 function estimateTextWidthUnits(text) {
   return Array.from(text || '').reduce((total, character) => total + (character.charCodeAt(0) <= 0x7f ? 0.56 : 1), 0);
@@ -32,18 +56,35 @@ function calculateTodoTitleFontSize(title, availableWidthRpx, baseFontSize) {
   return Math.max(TODO_TITLE_MIN_FONT_SIZE, Math.min(baseFontSize, fittedFontSize));
 }
 
-function buildTodoColumns(tasks) {
-  return tasks.reduce((columns, task, index) => {
-    const columnIndex = Math.floor(index / TODO_COLUMN_SIZE);
-    if (!columns[columnIndex]) columns.push({ id: `todo_column_${columnIndex}`, tasks: [] });
-    columns[columnIndex].tasks.push({ ...task, todoTitleFontSize: todoTitleBaseFontSize(task) });
+function buildHorizontalColumns(items, columnPrefix, itemsKey, mapItem = (item) => item) {
+  return items.reduce((columns, item, index) => {
+    const columnIndex = Math.floor(index / HORIZONTAL_COLUMN_SIZE);
+    if (!columns[columnIndex]) columns.push({ id: `${columnPrefix}_column_${columnIndex}`, [itemsKey]: [] });
+    columns[columnIndex][itemsKey].push(mapItem(item));
     return columns;
   }, []);
 }
 
-function clampTodoColumnIndex(index, columnCount) {
+function buildTodoColumns(tasks) {
+  return buildHorizontalColumns(
+    tasks,
+    'todo',
+    'tasks',
+    (task) => ({ ...task, todoTitleFontSize: todoTitleBaseFontSize(task) })
+  );
+}
+
+function buildWishColumns(wishes) {
+  return buildHorizontalColumns(wishes, 'wish', 'wishes');
+}
+
+function clampColumnIndex(index, columnCount) {
   if (columnCount <= 0) return 0;
   return Math.max(0, Math.min(index, columnCount - 1));
+}
+
+function horizontalRuntimeKey(listName, suffix) {
+  return `${listName}${suffix}`;
 }
 
 function todoSwipeDistance(columnStep) {
@@ -54,32 +95,47 @@ function easeOutCubic(progress) {
   return 1 - Math.pow(1 - progress, 3);
 }
 
-function easeOutBack(progress) {
-  const overshoot = 1.3;
-  const shifted = progress - 1;
-  return 1 + (overshoot + 1) * Math.pow(shifted, 3) + overshoot * Math.pow(shifted, 2);
+function hasId(ids, id) {
+  return ids.includes(id);
 }
 
-function buildProjectTaskPanel(project, tasks, tab = 'active') {
-  const projectTasks = tasks.filter((task) => task.projectId === project.id);
-  return {
-    projectId: project.id,
-    projectTitle: project.title,
-    activeTasks: projectTasks.filter((task) => task.status !== TASK_STATUS.COMPLETED),
-    completedTasks: projectTasks.filter((task) => task.status === TASK_STATUS.COMPLETED),
-    tab
-  };
+function toggleId(ids, id) {
+  return hasId(ids, id) ? ids.filter((item) => item !== id) : ids.concat(id);
 }
 
-function buildTaskEditor(activeProjects, task = null, defaultProjectId = null) {
+function buildProjectCards(activeProjects, tasks, expandedProjectIds, expandedCompletedProjectIds) {
+  return activeProjects.map((project) => {
+    const todoTasks = tasks.filter((task) => task.projectId === project.id && task.status !== TASK_STATUS.COMPLETED);
+    const completedTasks = tasks.filter((task) => task.projectId === project.id && task.status === TASK_STATUS.COMPLETED);
+    const isTodoExpanded = hasId(expandedProjectIds, project.id);
+    const isCompletedExpanded = hasId(expandedCompletedProjectIds, project.id);
+    const remainingTodoCount = Math.max(0, todoTasks.length - PROJECT_TASK_PREVIEW_LIMIT);
+    return {
+      id: project.id,
+      title: project.title,
+      deadlineText: project.deadlineText,
+      todoTasks: isTodoExpanded ? todoTasks : todoTasks.slice(0, PROJECT_TASK_PREVIEW_LIMIT),
+      completedTasks: isCompletedExpanded ? completedTasks : [],
+      hasNoTodoTasks: todoTasks.length === 0,
+      hasMoreTodoTasks: todoTasks.length > PROJECT_TASK_PREVIEW_LIMIT,
+      remainingTodoCount,
+      isTodoExpanded,
+      todoToggleText: isTodoExpanded ? '收起' : `查看全部 ${remainingTodoCount} 项`,
+      completedCount: completedTasks.length,
+      isCompletedExpanded,
+      completedToggleText: isCompletedExpanded ? '收起已完成项' : `已完成 ${completedTasks.length} 项`
+    };
+  });
+}
+
+function buildTaskEditor(activeProjects, defaultProjectId = null) {
   const projectOptions = [{ id: null, title: '不关联项目' }].concat(
     activeProjects.map((project) => ({ id: project.id, title: project.title }))
   );
-  const selectedProjectId = task ? task.projectId : defaultProjectId;
-  const projectIndex = Math.max(0, projectOptions.findIndex((project) => project.id === selectedProjectId));
+  const projectIndex = Math.max(0, projectOptions.findIndex((project) => project.id === defaultProjectId));
   return {
-    mode: task ? 'edit' : 'create',
-    taskId: task ? task.id : '',
+    mode: 'create',
+    taskId: '',
     projectOptions,
     projectIndex,
     projectTitle: projectOptions[projectIndex].title,
@@ -100,31 +156,35 @@ Page({
     todoScrollWithAnimation: true,
     todoBoundaryOffset: 0,
     todoBoundaryIsDragging: false,
+    todoTitleEditTaskId: '',
+    todoTitleEditValue: '',
+    todoTitleEditSource: '',
+    wishListColumns: [],
+    wishColumnIndex: 0,
+    wishColumnStep: 0,
+    wishScrollLeft: 0,
+    wishScrollWithAnimation: true,
+    wishBoundaryOffset: 0,
+    wishBoundaryIsDragging: false,
+    wishTitleEditId: '',
+    wishTitleEditValue: '',
     activeProjects: [],
+    expandedProjectIds: [],
+    expandedCompletedProjectIds: [],
+    projectCards: [],
     archivedProjects: [],
     projectTitle: '',
     projectDate: '',
     projectTime: '',
-    projectObjective: '',
-    projectKeyResult: '',
-    projectCurrent: '',
     wishTitle: '',
     taskTitle: '',
-    objectiveTitle: '',
-    keyResultTitle: '',
-    currentValue: '',
-    editWishId: '',
-    editWishTitle: '',
     isWishExpanded: false,
     isProjectCreateOpen: false,
     isTaskEditorOpen: false,
-    isOkrEditorOpen: false,
     isProjectEditorOpen: false,
     pendingTaskProjectLinkId: '',
     taskEditor: null,
     taskProjectPicker: null,
-    okrEditor: null,
-    projectTaskPanel: null,
     projectEditor: null,
     projectEditorTitle: '',
     projectEditorDate: '',
@@ -142,33 +202,57 @@ Page({
 
   onReady() {
     this.measureTodoColumn();
+    if (this.data.isWishExpanded && this.data.wishListColumns.length) this.measureWishColumn();
     this.measureTodoTitleFontSizes();
   },
 
-  refresh({ resetTodoColumn = false } = {}) {
+  refresh({ resetTodoColumn = false, focusLatestWish = false } = {}) {
     try {
+      if (focusLatestWish) this.clearWishScrollAnimation();
       const snapshot = getService().snapshot();
       const projects = snapshot.projects.map((project) => ({ ...project, deadlineText: formatDateTime(project.deadlineAt) }));
       const tasks = snapshot.tasks.slice();
+      const wishes = snapshot.wishes.slice();
       const todoListTasks = tasks;
       const todoListColumns = buildTodoColumns(todoListTasks);
-      const todoColumnIndex = resetTodoColumn ? 0 : clampTodoColumnIndex(this.data.todoColumnIndex, todoListColumns.length);
+      const wishListColumns = buildWishColumns(wishes);
+      const activeProjects = projects.filter((project) => project.status === 'active');
+      const activeProjectIds = activeProjects.map((project) => project.id);
+      const expandedProjectIds = this.data.expandedProjectIds.filter((id) => hasId(activeProjectIds, id));
+      const expandedCompletedProjectIds = this.data.expandedCompletedProjectIds.filter((id) => hasId(activeProjectIds, id));
+      const projectCards = buildProjectCards(activeProjects, tasks, expandedProjectIds, expandedCompletedProjectIds);
+      const todoColumnIndex = resetTodoColumn ? 0 : clampColumnIndex(this.data.todoColumnIndex, todoListColumns.length);
+      const shouldFocusLatestWish = focusLatestWish && wishListColumns.length > 0;
+      const wishColumnIndex = shouldFocusLatestWish
+        ? wishListColumns.length - 1
+        : clampColumnIndex(this.data.wishColumnIndex, wishListColumns.length);
       const shouldReturnToFirstColumn = resetTodoColumn && this.data.todoScrollLeft > 0;
-      const currentPanel = this.data.projectTaskPanel;
-      const panelProject = currentPanel && projects.find((project) => project.id === currentPanel.projectId);
       this.setData({
         projects,
-        activeProjects: projects.filter((project) => project.status === 'active'),
+        activeProjects,
+        expandedProjectIds,
+        expandedCompletedProjectIds,
+        projectCards,
         archivedProjects: projects.filter((project) => project.status === 'archived'),
-        wishes: snapshot.wishes,
+        wishes,
         tasks,
         todoListTasks,
         todoListColumns,
         todoColumnIndex,
         todoScrollLeft: shouldReturnToFirstColumn ? this.data.todoScrollLeft : (this.data.todoColumnStep ? todoColumnIndex * this.data.todoColumnStep : 0),
-        projectTaskPanel: panelProject ? buildProjectTaskPanel(panelProject, tasks, currentPanel.tab) : null
+        wishListColumns,
+        wishColumnIndex,
+        wishScrollLeft: shouldFocusLatestWish || (this.wishScrollAnimationId !== null && this.wishScrollAnimationId !== undefined)
+          ? this.data.wishScrollLeft
+          : (this.data.wishColumnStep ? wishColumnIndex * this.data.wishColumnStep : 0)
       }, () => {
         this.measureTodoColumn();
+        if (this.data.isWishExpanded && this.data.wishListColumns.length) {
+          this.measureWishColumn(shouldFocusLatestWish ? {
+            preserveScrollLeft: true,
+            onMeasured: ({ index, step }) => this.animateWishScrollLeft(index * step)
+          } : undefined);
+        }
         this.measureTodoTitleFontSizes();
         if (shouldReturnToFirstColumn) this.animateTodoScrollLeft(0);
       });
@@ -177,23 +261,43 @@ Page({
     }
   },
 
-  measureTodoColumn() {
-    if (!wx.createSelectorQuery) return;
+  measureHorizontalColumn(listName, options = {}) {
+    const config = HORIZONTAL_LIST_CONFIGS[listName];
+    const notifyMeasured = (index, step) => {
+      if (typeof options.onMeasured === 'function') options.onMeasured({ index, step });
+    };
+    if (!wx.createSelectorQuery) {
+      const index = clampColumnIndex(this.data[config.columnIndexKey], this.data[config.columnsKey].length);
+      const step = this.data[config.columnStepKey];
+      if (step) notifyMeasured(index, step);
+      return;
+    }
     wx.createSelectorQuery()
-      .selectAll('.todo-column')
+      .selectAll(config.columnSelector)
       .boundingClientRect((rects) => {
         const first = rects && rects[0];
         if (!first || !first.width) return;
         const second = rects[1];
         const step = second ? second.left - first.left : first.width;
-        const index = clampTodoColumnIndex(this.data.todoColumnIndex, this.data.todoListColumns.length);
+        const index = clampColumnIndex(this.data[config.columnIndexKey], this.data[config.columnsKey].length);
+        const animationIdKey = horizontalRuntimeKey(listName, 'ScrollAnimationId');
         this.setData({
-          todoColumnStep: step,
-          todoColumnIndex: index,
-          todoScrollLeft: this.todoScrollAnimationId !== null && this.todoScrollAnimationId !== undefined ? this.data.todoScrollLeft : index * step
-        });
+          [config.columnStepKey]: step,
+          [config.columnIndexKey]: index,
+          [config.scrollLeftKey]: options.preserveScrollLeft || (this[animationIdKey] !== null && this[animationIdKey] !== undefined)
+            ? this.data[config.scrollLeftKey]
+            : index * step
+        }, () => notifyMeasured(index, step));
       })
       .exec();
+  },
+
+  measureTodoColumn() {
+    this.measureHorizontalColumn('todo');
+  },
+
+  measureWishColumn(options) {
+    this.measureHorizontalColumn('wish', options);
   },
 
   measureTodoTitleFontSizes() {
@@ -226,109 +330,197 @@ Page({
       .exec();
   },
 
-  clearTodoScrollAnimation() {
-    if (this.todoScrollAnimationId !== null && this.todoScrollAnimationId !== undefined) clearTimeout(this.todoScrollAnimationId);
-    this.todoScrollAnimationId = null;
+  clearHorizontalScrollAnimation(listName) {
+    const animationIdKey = horizontalRuntimeKey(listName, 'ScrollAnimationId');
+    if (this[animationIdKey] !== null && this[animationIdKey] !== undefined) clearTimeout(this[animationIdKey]);
+    this[animationIdKey] = null;
   },
 
-  animateTodoScrollLeft(targetScrollLeft, options = {}) {
-    this.clearTodoScrollAnimation();
-    const startScrollLeft = Number.isFinite(options.startScrollLeft) ? options.startScrollLeft : this.data.todoScrollLeft;
+  clearTodoScrollAnimation() {
+    this.clearHorizontalScrollAnimation('todo');
+  },
+
+  clearWishScrollAnimation() {
+    this.clearHorizontalScrollAnimation('wish');
+  },
+
+  animateHorizontalScrollLeft(listName, targetScrollLeft, options = {}) {
+    const config = HORIZONTAL_LIST_CONFIGS[listName];
+    const animationIdKey = horizontalRuntimeKey(listName, 'ScrollAnimationId');
+    this.clearHorizontalScrollAnimation(listName);
+    const startScrollLeft = Number.isFinite(options.startScrollLeft)
+      ? options.startScrollLeft
+      : this.data[config.scrollLeftKey];
     const duration = options.duration || TODO_RETURN_ANIMATION_DURATION;
     const easing = options.easing || easeOutCubic;
     if (startScrollLeft === targetScrollLeft) {
-      this.setData({ todoScrollLeft: targetScrollLeft, todoScrollWithAnimation: false });
+      this.setData({
+        [config.scrollLeftKey]: targetScrollLeft,
+        [config.scrollWithAnimationKey]: false
+      });
       return;
     }
 
     const startedAt = Date.now();
-    this.setData({ todoScrollLeft: startScrollLeft, todoScrollWithAnimation: false });
+    this.setData({
+      [config.scrollLeftKey]: startScrollLeft,
+      [config.scrollWithAnimationKey]: false
+    });
     const step = () => {
       const progress = Math.min(1, (Date.now() - startedAt) / duration);
       const scrollLeft = progress === 0
         ? startScrollLeft
         : startScrollLeft + (targetScrollLeft - startScrollLeft) * easing(progress);
-      this.setData({ todoScrollLeft: scrollLeft });
+      this.setData({ [config.scrollLeftKey]: scrollLeft });
       if (progress < 1) {
-        this.todoScrollAnimationId = setTimeout(step, TODO_RETURN_ANIMATION_FRAME);
+        this[animationIdKey] = setTimeout(step, TODO_RETURN_ANIMATION_FRAME);
         return;
       }
-      this.todoScrollAnimationId = null;
-      this.setData({ todoScrollLeft: targetScrollLeft, todoScrollWithAnimation: false });
+      this[animationIdKey] = null;
+      this.setData({
+        [config.scrollLeftKey]: targetScrollLeft,
+        [config.scrollWithAnimationKey]: false
+      });
     };
     step();
   },
 
-  snapTodoColumn(index, currentScrollLeft) {
-    this.clearTodoScrollAnimation();
-    const currentIndex = clampTodoColumnIndex(this.data.todoColumnIndex, this.data.todoListColumns.length);
-    const nextIndex = clampTodoColumnIndex(index, this.data.todoListColumns.length);
-    const targetScrollLeft = this.data.todoColumnStep ? nextIndex * this.data.todoColumnStep : 0;
-    this.setData({ todoColumnIndex: nextIndex });
+  animateTodoScrollLeft(targetScrollLeft, options = {}) {
+    this.animateHorizontalScrollLeft('todo', targetScrollLeft, options);
+  },
+
+  animateWishScrollLeft(targetScrollLeft, options = {}) {
+    this.animateHorizontalScrollLeft('wish', targetScrollLeft, options);
+  },
+
+  snapHorizontalColumn(listName, index, currentScrollLeft) {
+    const config = HORIZONTAL_LIST_CONFIGS[listName];
+    this.clearHorizontalScrollAnimation(listName);
+    const nextIndex = clampColumnIndex(index, this.data[config.columnsKey].length);
+    const targetScrollLeft = this.data[config.columnStepKey] ? nextIndex * this.data[config.columnStepKey] : 0;
+    this.setData({ [config.columnIndexKey]: nextIndex });
     if (!Number.isFinite(currentScrollLeft)) {
-      this.setData({ todoScrollLeft: targetScrollLeft, todoScrollWithAnimation: true });
+      this.setData({
+        [config.scrollLeftKey]: targetScrollLeft,
+        [config.scrollWithAnimationKey]: false
+      });
       return;
     }
-    this.animateTodoScrollLeft(targetScrollLeft, {
-      startScrollLeft: currentScrollLeft,
+    this.animateHorizontalScrollLeft(listName, targetScrollLeft, {
+      startScrollLeft: Math.max(0, currentScrollLeft),
       duration: TODO_SNAP_ANIMATION_DURATION,
-      easing: nextIndex === currentIndex ? easeOutCubic : easeOutBack
+      easing: easeOutCubic
     });
   },
 
-  onTodoTouchStart(event) {
-    this.clearTodoScrollAnimation();
-    if (this.data.todoBoundaryOffset || this.data.todoBoundaryIsDragging) {
-      this.setData({ todoBoundaryOffset: 0, todoBoundaryIsDragging: false });
-    }
-    const touch = event.touches && event.touches[0];
-    this.todoTouchStartX = touch ? touch.pageX : null;
-    this.todoTouchStartScrollLeft = this.data.todoScrollLeft;
-    this.todoScrollLeft = this.data.todoScrollLeft;
+  snapTodoColumn(index, currentScrollLeft) {
+    this.snapHorizontalColumn('todo', index, currentScrollLeft);
   },
 
-  onTodoTouchMove(event) {
+  snapWishColumn(index, currentScrollLeft) {
+    this.snapHorizontalColumn('wish', index, currentScrollLeft);
+  },
+
+  onHorizontalTouchStart(listName, event) {
+    const config = HORIZONTAL_LIST_CONFIGS[listName];
+    this.clearHorizontalScrollAnimation(listName);
+    if (this.data[config.boundaryOffsetKey] || this.data[config.boundaryDraggingKey]) {
+      this.setData({
+        [config.boundaryOffsetKey]: 0,
+        [config.boundaryDraggingKey]: false
+      });
+    }
     const touch = event.touches && event.touches[0];
-    if (!touch || this.todoTouchStartX === null || this.todoTouchStartX === undefined) return;
-    const dragDistance = touch.pageX - this.todoTouchStartX;
-    if (this.data.todoColumnIndex !== 0 || dragDistance <= 0) {
-      if (this.data.todoBoundaryOffset || this.data.todoBoundaryIsDragging) {
-        this.setData({ todoBoundaryOffset: 0, todoBoundaryIsDragging: false });
+    this[horizontalRuntimeKey(listName, 'TouchStartX')] = touch ? touch.pageX : null;
+    this[horizontalRuntimeKey(listName, 'TouchStartScrollLeft')] = this.data[config.scrollLeftKey];
+    this[horizontalRuntimeKey(listName, 'ScrollLeft')] = this.data[config.scrollLeftKey];
+  },
+
+  onHorizontalTouchMove(listName, event) {
+    const config = HORIZONTAL_LIST_CONFIGS[listName];
+    const touchStartXKey = horizontalRuntimeKey(listName, 'TouchStartX');
+    const touch = event.touches && event.touches[0];
+    if (!touch || this[touchStartXKey] === null || this[touchStartXKey] === undefined) return;
+    const dragDistance = touch.pageX - this[touchStartXKey];
+    if (this.data[config.columnIndexKey] !== 0 || dragDistance <= 0) {
+      if (this.data[config.boundaryOffsetKey] || this.data[config.boundaryDraggingKey]) {
+        this.setData({
+          [config.boundaryOffsetKey]: 0,
+          [config.boundaryDraggingKey]: false
+        });
       }
       return;
     }
     this.setData({
-      todoBoundaryOffset: Math.min(TODO_BOUNDARY_MAX_OFFSET, dragDistance * TODO_BOUNDARY_PULL_RESISTANCE),
-      todoBoundaryIsDragging: true
+      [config.boundaryOffsetKey]: Math.min(TODO_BOUNDARY_MAX_OFFSET, dragDistance * TODO_BOUNDARY_PULL_RESISTANCE),
+      [config.boundaryDraggingKey]: true
     });
   },
 
+  onHorizontalScroll(listName, event) {
+    this[horizontalRuntimeKey(listName, 'ScrollLeft')] = event.detail.scrollLeft;
+  },
+
+  onHorizontalTouchEnd(listName, event) {
+    const config = HORIZONTAL_LIST_CONFIGS[listName];
+    const touchStartXKey = horizontalRuntimeKey(listName, 'TouchStartX');
+    const touchStartScrollLeftKey = horizontalRuntimeKey(listName, 'TouchStartScrollLeft');
+    const touch = event.changedTouches && event.changedTouches[0];
+    const endX = touch ? touch.pageX : null;
+    const deltaX = this[touchStartXKey] === null || endX === null ? 0 : this[touchStartXKey] - endX;
+    const touchStartScrollLeft = Number.isFinite(this[touchStartScrollLeftKey])
+      ? this[touchStartScrollLeftKey]
+      : this.data[config.scrollLeftKey];
+    const currentLeft = Math.max(0, touchStartScrollLeft + deltaX);
+    const swipeDirection = deltaX > 0 ? 1 : -1;
+    const requestedIndex = this.data[config.columnIndexKey] + swipeDirection;
+    const isFirstColumnPull = this.data[config.columnIndexKey] === 0 && this.data[config.boundaryDraggingKey];
+    this[touchStartXKey] = null;
+    this[touchStartScrollLeftKey] = null;
+    if (isFirstColumnPull) {
+      this.setData({
+        [config.boundaryOffsetKey]: 0,
+        [config.boundaryDraggingKey]: false
+      });
+      this.snapHorizontalColumn(listName, this.data[config.columnIndexKey]);
+      return;
+    }
+    const nextIndex = Math.abs(deltaX) >= todoSwipeDistance(this.data[config.columnStepKey])
+      ? requestedIndex
+      : this.data[config.columnIndexKey];
+    this.snapHorizontalColumn(listName, nextIndex, currentLeft);
+  },
+
+  onTodoTouchStart(event) {
+    this.onHorizontalTouchStart('todo', event);
+  },
+
+  onTodoTouchMove(event) {
+    this.onHorizontalTouchMove('todo', event);
+  },
+
   onTodoScroll(event) {
-    this.todoScrollLeft = event.detail.scrollLeft;
+    this.onHorizontalScroll('todo', event);
   },
 
   onTodoTouchEnd(event) {
-    const touch = event.changedTouches && event.changedTouches[0];
-    const endX = touch ? touch.pageX : null;
-    const deltaX = this.todoTouchStartX === null || endX === null ? 0 : this.todoTouchStartX - endX;
-    const touchStartScrollLeft = Number.isFinite(this.todoTouchStartScrollLeft)
-      ? this.todoTouchStartScrollLeft
-      : this.data.todoScrollLeft;
-    const currentLeft = Math.max(0, touchStartScrollLeft + deltaX);
-    const swipeDirection = deltaX > 0 ? 1 : -1;
-    const requestedIndex = this.data.todoColumnIndex + swipeDirection;
-    const isFirstColumnPull = this.data.todoColumnIndex === 0 && this.data.todoBoundaryIsDragging;
-    this.todoTouchStartX = null;
-    this.todoTouchStartScrollLeft = null;
-    if (isFirstColumnPull) {
-      this.setData({ todoBoundaryOffset: 0, todoBoundaryIsDragging: false });
-      this.snapTodoColumn(this.data.todoColumnIndex);
-      return;
-    }
-    const nextIndex = Math.abs(deltaX) >= todoSwipeDistance(this.data.todoColumnStep)
-      ? requestedIndex
-      : this.data.todoColumnIndex;
-    this.snapTodoColumn(nextIndex, currentLeft);
+    this.onHorizontalTouchEnd('todo', event);
+  },
+
+  onWishTouchStart(event) {
+    this.onHorizontalTouchStart('wish', event);
+  },
+
+  onWishTouchMove(event) {
+    this.onHorizontalTouchMove('wish', event);
+  },
+
+  onWishScroll(event) {
+    this.onHorizontalScroll('wish', event);
+  },
+
+  onWishTouchEnd(event) {
+    this.onHorizontalTouchEnd('wish', event);
   },
 
   onField(event) {
@@ -351,34 +543,18 @@ Page({
     try {
       const deadlineAt = parseLocalDateTime(this.data.projectDate, this.data.projectTime);
       const pendingTaskProjectLinkId = this.data.pendingTaskProjectLinkId;
-      const objectiveTitle = this.data.projectObjective.trim();
-      const keyResultTitle = this.data.projectKeyResult.trim();
       if (pendingTaskProjectLinkId && !getService().snapshot().tasks.some((task) => task.id === pendingTaskProjectLinkId)) {
         throw new Error('要关联的 TODO 已不存在，请重新选择');
       }
-      if (keyResultTitle && !objectiveTitle) {
-        throw new Error('填写关键结果前请先填写目标名称');
-      }
-      const objectives = objectiveTitle ? [{
-        title: objectiveTitle,
-        keyResults: keyResultTitle ? [{
-          title: keyResultTitle,
-          currentValue: this.data.projectCurrent === '' ? 0 : Number(this.data.projectCurrent)
-        }] : []
-      }] : [];
       const project = getService().createProject({
         title: this.data.projectTitle,
-        deadlineAt,
-        objectives
+        deadlineAt
       });
       if (pendingTaskProjectLinkId) getService().updateTask(pendingTaskProjectLinkId, { projectId: project.id });
       this.setData({
         isProjectCreateOpen: false,
         pendingTaskProjectLinkId: '',
-        projectTitle: '',
-        projectObjective: '',
-        projectKeyResult: '',
-        projectCurrent: ''
+        projectTitle: ''
       });
       showSaved(pendingTaskProjectLinkId ? '项目已创建并关联 TODO' : '项目已创建');
       this.refresh();
@@ -405,18 +581,44 @@ Page({
       this.setData({ isTaskEditorOpen: true });
       return;
     }
-    this.setData({ taskEditor: buildTaskEditor(this.data.activeProjects, null, project.id), taskTitle: '', isTaskEditorOpen: true });
+    this.setData({ taskEditor: buildTaskEditor(this.data.activeProjects, project.id), taskTitle: '', isTaskEditorOpen: true });
   },
 
-  openTaskEditor(event) {
+  openTodoTitleEditor(event) {
     const task = this.data.tasks.find((item) => item.id === event.currentTarget.dataset.id);
     if (!task) return;
-    const editor = this.data.taskEditor;
-    if (editor && !this.data.isTaskEditorOpen && editor.mode === 'edit' && editor.taskId === task.id) {
-      this.setData({ isTaskEditorOpen: true });
+    this.setData({
+      todoTitleEditTaskId: task.id,
+      todoTitleEditValue: task.title,
+      todoTitleEditSource: event.currentTarget.dataset.editSource || 'todo'
+    });
+  },
+
+  onTodoTitleInput(event) {
+    this.setData({ todoTitleEditValue: limitTitleCodePoints(event.detail.value) });
+  },
+
+  saveTodoTitle(event) {
+    const taskId = this.data.todoTitleEditTaskId;
+    if (!taskId) return;
+    const task = this.data.tasks.find((item) => item.id === taskId);
+    if (!task) {
+      this.setData({ todoTitleEditTaskId: '', todoTitleEditValue: '', todoTitleEditSource: '' });
       return;
     }
-    this.setData({ taskEditor: buildTaskEditor(this.data.activeProjects, task), taskTitle: task.title, isTaskEditorOpen: true });
+    const title = limitTitleCodePoints(event && event.detail ? event.detail.value : this.data.todoTitleEditValue);
+    if (title === task.title) {
+      this.setData({ todoTitleEditTaskId: '', todoTitleEditValue: '', todoTitleEditSource: '' });
+      return;
+    }
+    try {
+      getService().updateTask(taskId, { title });
+      this.setData({ todoTitleEditTaskId: '', todoTitleEditValue: '', todoTitleEditSource: '' });
+      showSaved('TODO 已更新');
+      this.refresh();
+    } catch (error) {
+      showError(error);
+    }
   },
 
   closeTaskEditor() {
@@ -449,16 +651,10 @@ Page({
       const selectedProject = editor.projectOptions[editor.projectIndex];
       if (!selectedProject) throw new Error('请选择关联项目');
       const projectId = selectedProject.id;
-      if (editor.mode === 'edit') {
-        const input = { title: this.data.taskTitle };
-        if (editor.projectSelectionTouched) input.projectId = projectId;
-        getService().updateTask(editor.taskId, input);
-      } else {
-        getService().createTask({ title: this.data.taskTitle, projectId });
-      }
+      getService().createTask({ title: this.data.taskTitle, projectId });
       this.closeTaskEditor();
-      showSaved(editor.mode === 'edit' ? 'TODO 已更新' : 'TODO 已创建');
-      this.refresh({ resetTodoColumn: editor.mode !== 'edit' });
+      showSaved('TODO 已创建');
+      this.refresh({ resetTodoColumn: true });
     } catch (error) {
       showError(error);
     }
@@ -473,6 +669,16 @@ Page({
     } catch (error) {
       showError(error);
     }
+  },
+
+  toggleProjectTodoExpansion(event) {
+    const id = event.currentTarget.dataset.id;
+    this.setData({ expandedProjectIds: toggleId(this.data.expandedProjectIds, id) }, () => this.refresh());
+  },
+
+  toggleProjectCompletedExpansion(event) {
+    const id = event.currentTarget.dataset.id;
+    this.setData({ expandedCompletedProjectIds: toggleId(this.data.expandedCompletedProjectIds, id) }, () => this.refresh());
   },
 
   chooseTaskProject(event) {
@@ -545,63 +751,6 @@ Page({
         }
       }
     });
-  },
-
-  openProjectTasks(event) {
-    const project = this.data.activeProjects.find((item) => item.id === event.currentTarget.dataset.id);
-    if (!project) return;
-    this.setData({ projectTaskPanel: buildProjectTaskPanel(project, this.data.tasks) });
-  },
-
-  switchProjectTaskTab(event) {
-    const panel = this.data.projectTaskPanel;
-    if (!panel) return;
-    this.setData({ projectTaskPanel: { ...panel, tab: event.currentTarget.dataset.tab } });
-  },
-
-  closeProjectTasks() {
-    this.setData({ projectTaskPanel: null });
-  },
-
-  openKeyResult(event) {
-    const project = this.data.activeProjects.find((item) => item.id === event.currentTarget.dataset.id);
-    if (!project) return;
-    const editor = this.data.okrEditor;
-    if (editor && !this.data.isOkrEditorOpen && editor.id === project.id) {
-      this.setData({ isOkrEditorOpen: true });
-      return;
-    }
-    this.setData({ okrEditor: project, objectiveTitle: '', keyResultTitle: '', currentValue: '', isOkrEditorOpen: true });
-  },
-
-  closeKeyResult() {
-    this.setData({ okrEditor: null, objectiveTitle: '', keyResultTitle: '', currentValue: '', isOkrEditorOpen: false });
-  },
-
-  dismissKeyResult() {
-    if (!this.data.okrEditor) return;
-    this.setData({ isOkrEditorOpen: false });
-  },
-
-  saveKeyResult() {
-    try {
-      const editor = this.data.okrEditor;
-      if (!editor) throw new Error('请先选择项目');
-      const project = getService().snapshot().projects.find((item) => item.id === editor.id);
-      if (!project) throw new Error('项目不存在或已被删除');
-      const objectives = project.objectives.map((objective) => ({ ...objective, keyResults: objective.keyResults.slice() }));
-      const objectiveTitle = this.data.objectiveTitle.trim();
-      const existing = objectives.find((item) => item.title === objectiveTitle);
-      const keyResult = { title: this.data.keyResultTitle, currentValue: Number(this.data.currentValue) };
-      if (existing) existing.keyResults.push(keyResult);
-      else objectives.push({ title: objectiveTitle, keyResults: [keyResult] });
-      getService().updateProject(project.id, { objectives });
-      this.closeKeyResult();
-      showSaved('关键结果已保存');
-      this.refresh();
-    } catch (error) {
-      showError(error);
-    }
   },
 
   openProjectManage(event) {
@@ -702,7 +851,10 @@ Page({
   },
 
   toggleWishSection() {
-    this.setData({ isWishExpanded: !this.data.isWishExpanded });
+    const isWishExpanded = !this.data.isWishExpanded;
+    this.setData({ isWishExpanded }, () => {
+      if (isWishExpanded && this.data.wishListColumns.length) this.measureWishColumn();
+    });
   },
 
   addWish() {
@@ -710,31 +862,64 @@ Page({
       getService().createWish(this.data.wishTitle);
       this.setData({ wishTitle: '' });
       showSaved('愿望已添加');
-      this.refresh();
+      this.refresh({ focusLatestWish: true });
     } catch (error) {
       showError(error);
     }
   },
 
   convertWish(event) {
+    const id = event.currentTarget.dataset.id;
+    const service = getService();
     try {
-      getService().convertWishToProject(event.currentTarget.dataset.id);
-      showSaved('愿望已转为项目');
-      this.refresh();
+      service.validateWishToProject(id);
     } catch (error) {
       showError(error);
+      return;
     }
+    wx.showModal({
+      title: '转为项目',
+      content: '转换后将创建同名项目，并从愿望池移除该愿望。',
+      confirmText: '转为项目',
+      success: (result) => {
+        if (!result.confirm) return;
+        try {
+          service.convertWishToProject(id);
+          showSaved('愿望已转为项目');
+          this.refresh();
+        } catch (error) {
+          showError(error);
+        }
+      }
+    });
   },
 
-  editWish(event) {
-    const wish = event.currentTarget.dataset.item;
-    this.setData({ editWishId: wish.id, editWishTitle: wish.title });
+  openWishTitleEditor(event) {
+    const wish = this.data.wishes.find((item) => item.id === event.currentTarget.dataset.id);
+    if (!wish) return;
+    this.setData({ wishTitleEditId: wish.id, wishTitleEditValue: wish.title });
   },
 
-  saveWish() {
+  onWishTitleInput(event) {
+    this.setData({ wishTitleEditValue: limitTitleCodePoints(event.detail.value) });
+  },
+
+  saveWishTitle(event) {
+    const wishId = this.data.wishTitleEditId;
+    if (!wishId) return;
+    const wish = this.data.wishes.find((item) => item.id === wishId);
+    if (!wish) {
+      this.setData({ wishTitleEditId: '', wishTitleEditValue: '' });
+      return;
+    }
+    const title = limitTitleCodePoints(event && event.detail ? event.detail.value : this.data.wishTitleEditValue);
+    if (title === wish.title) {
+      this.setData({ wishTitleEditId: '', wishTitleEditValue: '' });
+      return;
+    }
     try {
-      getService().updateWish(this.data.editWishId, this.data.editWishTitle);
-      this.setData({ editWishId: '', editWishTitle: '' });
+      getService().updateWish(wishId, title);
+      this.setData({ wishTitleEditId: '', wishTitleEditValue: '' });
       showSaved('愿望已更新');
       this.refresh();
     } catch (error) {
@@ -742,12 +927,33 @@ Page({
     }
   },
 
+  confirmDeleteWish(event) {
+    const id = event.currentTarget.dataset.id;
+    wx.showModal({
+      title: '删除愿望',
+      content: '删除后无法恢复。',
+      confirmColor: '#9a5550',
+      success: (result) => {
+        if (!result.confirm) return;
+        try {
+          getService().deleteWish(id, true);
+          showSaved('愿望已删除');
+          this.refresh();
+        } catch (error) {
+          showError(error);
+        }
+      }
+    });
+  },
+
   onUnload() {
     this.clearTodoScrollAnimation();
+    this.clearWishScrollAnimation();
   },
 
   onResize() {
     this.measureTodoColumn();
+    if (this.data.isWishExpanded && this.data.wishListColumns.length) this.measureWishColumn();
     this.measureTodoTitleFontSizes();
   },
 

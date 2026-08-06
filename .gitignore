@@ -10,3 +10,6 @@
 
 # 本地隔离工作树
 .worktrees/
+
+# 本地 Superpowers 工作产物
+/docs/superpowers/

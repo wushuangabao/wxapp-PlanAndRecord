@@ -687,10 +687,14 @@ test('计时页删除最近记录前要求二次确认', () => {
   const originalWx = global.wx;
   const deleteCalls = [];
   const refreshCalls = [];
+  const modals = [];
   global.getApp = () => ({ globalData: { bootstrap: { applicationService: {
     deleteLog(id, confirmed) { deleteCalls.push({ id, confirmed }); }
   } } } });
-  global.wx = { showToast() {} };
+  global.wx = {
+    showToast() {},
+    showModal(config) { modals.push(config); }
+  };
   try {
     const page = loadTimerPage();
     page.setData = (updates, callback) => {
@@ -699,22 +703,22 @@ test('计时页删除最近记录前要求二次确认', () => {
     };
     page.setData({ recentLogs: [{ id: 'confirmed_log', isCandidate: false }] });
     page.confirmDeleteRecentLog({ currentTarget: { dataset: { id: 'confirmed_log' } } });
-    assert.deepEqual(page.data.pendingDeleteLog, {
-      id: 'confirmed_log',
-      title: '删除时间记录？',
-      copy: '删除后这条已确认的历史记录将无法恢复。'
-    });
+    assert.equal(modals.length, 1);
+    assert.equal(modals[0].title, '删除时间记录');
+    assert.equal(modals[0].content, '删除后这条记录将无法恢复。');
+    assert.equal(modals[0].confirmColor, '#9a5550');
+
+    modals[0].success({ confirm: false });
+    assert.deepEqual(deleteCalls, []);
 
     page.refresh = (options) => { refreshCalls.push(options); };
-    page.deleteRecentLog();
+    modals[0].success({ confirm: true });
 
     assert.deepEqual(deleteCalls, [{ id: 'confirmed_log', confirmed: true }]);
-    assert.equal(page.data.pendingDeleteLog, null);
     assert.deepEqual(refreshCalls, [undefined]);
 
     const wxml = fs.readFileSync(timerWxmlPath, 'utf8');
-    assert.match(wxml, /wx:if="\{\{pendingDeleteLog\}\}" class="modal-mask" bindtap="cancelDeleteRecentLog"/);
-    assert.match(wxml, /bind:confirm="deleteRecentLog" bind:cancel="cancelDeleteRecentLog"/);
+    assert.doesNotMatch(wxml, /pendingDeleteLog|deleteRecentLog|cancelDeleteRecentLog/);
   } finally {
     global.getApp = originalGetApp;
     global.wx = originalWx;
@@ -958,7 +962,7 @@ test('计时页最近记录按整列吸附，首列右拖后回弹', () => {
   page.clearRecentScrollAnimation();
 });
 
-test('计时页最近记录轻拖回弹，快速横划只进入相邻列', () => {
+test('计时页最近记录轻拖或快速横划时以固定时长单调吸附目标列', () => {
   const page = loadTimerPage();
   const originalDateNow = Date.now;
   const originalSetTimeout = global.setTimeout;
@@ -991,7 +995,6 @@ test('计时页最近记录轻拖回弹，快速横划只进入相邻列', () =>
       { index: 0, left: 20, nativeAnimation: false }
     );
     assert.deepEqual(scheduled.map((item) => item.delay), [16]);
-
     now += 300;
     scheduled.shift().callback();
     assert.ok(page.data.recentScrollLeft >= 0 && page.data.recentScrollLeft < 20);
@@ -1007,9 +1010,10 @@ test('计时页最近记录轻拖回弹，快速横划只进入相邻列', () =>
       { index: page.data.recentColumnIndex, left: page.data.recentScrollLeft, nativeAnimation: page.data.recentScrollWithAnimation },
       { index: 1, left: 160, nativeAnimation: false }
     );
+    assert.deepEqual(scheduled.map((item) => item.delay), [16]);
     now += 300;
     scheduled.shift().callback();
-    assert.ok(page.data.recentScrollLeft > 240);
+    assert.ok(page.data.recentScrollLeft > 160 && page.data.recentScrollLeft < 240);
     now += 120;
     scheduled.shift().callback();
     assert.equal(page.data.recentScrollLeft, 240);
@@ -1020,7 +1024,7 @@ test('计时页最近记录轻拖回弹，快速横划只进入相邻列', () =>
   }
 });
 
-test('计时页最近记录松手早于 scroll 事件时仍从手势位移平滑回弹', () => {
+test('计时页最近记录松手早于 scroll 事件时仍以固定时长单调回到原列', () => {
   const page = loadTimerPage();
   const originalDateNow = Date.now;
   const originalSetTimeout = global.setTimeout;

@@ -136,22 +136,8 @@ function normalizeWish(wish) {
   return pickKnownFields(wish, ['id', 'title', 'createdAt', 'updatedAt']);
 }
 
-function normalizeObjective(objective) {
-  const normalized = pickKnownFields(objective, ['id', 'title', 'keyResults']);
-  if (isPlainObject(normalized) && hasOwn(normalized, 'keyResults')) {
-    normalized.keyResults = normalizeCollection(normalized.keyResults, (keyResult) => (
-      pickKnownFields(keyResult, ['id', 'title', 'currentValue'])
-    ));
-  }
-  return normalized;
-}
-
 function normalizeProject(project) {
-  const normalized = pickKnownFields(project, ['id', 'title', 'deadlineAt', 'status', 'objectives', 'createdAt', 'updatedAt']);
-  if (isPlainObject(normalized) && hasOwn(normalized, 'objectives')) {
-    normalized.objectives = normalizeCollection(normalized.objectives, normalizeObjective);
-  }
-  return normalized;
+  return pickKnownFields(project, ['id', 'title', 'deadlineAt', 'status', 'createdAt', 'updatedAt']);
 }
 
 function normalizeTask(task) {
@@ -447,24 +433,11 @@ function validateWish(wish, ids) {
   collectId(ids, wish.id);
 }
 
-function validateObjective(objective, ids) {
-  if (!requireFields(objective, ['id', 'title', 'keyResults'])
-    || !requiredString(objective.id) || !validTitle(objective.title) || !Array.isArray(objective.keyResults)) invalidSchema();
-  collectId(ids, objective.id);
-  objective.keyResults.forEach((keyResult) => {
-    if (!requireFields(keyResult, ['id', 'title', 'currentValue'])
-      || !requiredString(keyResult.id) || !validTitle(keyResult.title)
-      || !Number.isInteger(keyResult.currentValue) || keyResult.currentValue < 0 || keyResult.currentValue > 100) invalidSchema();
-    collectId(ids, keyResult.id);
-  });
-}
-
 function validateProject(project, ids) {
-  if (!requireFields(project, ['id', 'title', 'deadlineAt', 'status', 'objectives', 'createdAt', 'updatedAt'])
+  if (!requireFields(project, ['id', 'title', 'deadlineAt', 'status', 'createdAt', 'updatedAt'])
     || !requiredString(project.id) || !validTitle(project.title) || !isFiniteTimestamp(project.deadlineAt)
-    || !validEnum(project.status, PROJECT_STATUS) || !Array.isArray(project.objectives) || !validateTimestamps(project)) invalidSchema();
+    || !validEnum(project.status, PROJECT_STATUS) || !validateTimestamps(project)) invalidSchema();
   collectId(ids, project.id);
-  project.objectives.forEach((objective) => validateObjective(objective, ids));
 }
 
 function validateTask(task, ids) {

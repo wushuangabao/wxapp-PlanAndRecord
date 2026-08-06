@@ -110,10 +110,6 @@ test('开发验收的超时恢复只创建一份待审核候选预览', () => {
   assert.equal(service.snapshot().timeLogs.length, 0);
 });
 
-function requiredObjectives() {
-  return [{ title: '完成目标', keyResults: [{ title: '整体进度', currentValue: 0 }] }];
-}
-
 function createCalendarEventForTask(service, input) {
   const taskId = input.taskId || service.createTask({ title: `${input.title}任务` }).id;
   return service.createCalendarEvent({ ...input, taskId });
@@ -124,13 +120,30 @@ function createRecurringPlanForTask(service, input) {
   return service.createRecurringPlan({ ...input, taskId });
 }
 
+test('删除愿望需要二次确认并只移除目标愿望', () => {
+  const { service } = createHarness();
+  const deletedWish = service.createWish('准备删除的愿望');
+  const keptWish = service.createWish('继续保留的愿望');
+
+  assert.throws(
+    () => service.deleteWish(deletedWish.id, false),
+    (error) => error.code === 'WISH_DELETE_CONFIRMATION_REQUIRED'
+  );
+  assert.deepEqual(service.snapshot().wishes.map((wish) => wish.id), [deletedWish.id, keptWish.id]);
+
+  assert.deepEqual(
+    service.deleteWish(deletedWish.id, true),
+    { id: deletedWish.id, title: deletedWish.title }
+  );
+  assert.deepEqual(service.snapshot().wishes.map((wish) => wish.id), [keptWish.id]);
+});
+
 test('重复规则投影返回 virtual plan 而不是候选日志', () => {
   const { service, now } = createHarness();
   const task = service.createTask({ title: '重复任务' });
   const project = service.createProject({
     title: '重复项目',
-    deadlineAt: now() + 86_400_000,
-    objectives: requiredObjectives()
+    deadlineAt: now() + 86_400_000
   });
   service.updateTask(task.id, { projectId: project.id });
   const startedAt = now() + 60 * 60 * 1000;
@@ -512,7 +525,6 @@ function importedProject(id, title, now) {
     title,
     deadlineAt: now + 86_400_000,
     status: 'active',
-    objectives: [],
     createdAt: now,
     updatedAt: now
   };
@@ -678,43 +690,26 @@ test('导入的超限计时草稿在不改标签时可生成记录或从恢复�
   assert.deepEqual(recovered.tags, importedTags);
 });
 
-test('M1/M3：关键结果只能记录百分比，活动项目不能超过五个', () => {
+test('新建项目丢弃传入的 OKR 字段', () => {
   const { service, now } = createHarness();
   const project = service.createProject({
     title: '学习项目',
     deadlineAt: now() + 86_400_000,
-    objectives: [{ title: '完成', keyResults: [{ title: '进度', currentValue: 20 }] }]
+    objectives: [{ title: '过时目标', keyResults: [{ title: '过时结果', currentValue: 20 }] }]
   });
-  assert.deepEqual(Object.keys(project.objectives[0].keyResults[0]).sort(), ['currentValue', 'id', 'title']);
-  assert.throws(() => service.updateProject(project.id, {
-    objectives: [{ title: '错误', keyResults: [{ title: '超范围', currentValue: 101 }] }]
-  }), (error) => error instanceof DomainError && error.code === 'PERCENTAGE_INVALID');
 
-  for (let index = 1; index < 5; index += 1) {
-    service.createProject({ title: `项目${index}`, deadlineAt: now() + 86_400_000, objectives: requiredObjectives() });
-  }
-  assert.throws(() => service.createProject({ title: '第六个项目', deadlineAt: now() + 86_400_000, objectives: requiredObjectives() }), (error) => error.code === 'ACTIVE_PROJECT_LIMIT');
+  assert.equal(Object.hasOwn(project, 'objectives'), false);
+  assert.equal(Object.hasOwn(service.snapshot().projects[0], 'objectives'), false);
 });
 
-test('新建项目允许暂不添加 OKR，已填写的目标和关键结果仍须合法', () => {
+test('M1/M3：活动项目不能超过五个', () => {
   const { service, now } = createHarness();
-  const projectWithoutOkr = service.createProject({
-    title: '先立项',
-    deadlineAt: now() + 86_400_000
-  });
-  const projectWithObjectiveOnly = service.createProject({
-    title: '先定目标',
-    deadlineAt: now() + 86_400_000,
-    objectives: [{ title: '明确范围', keyResults: [] }]
-  });
+  service.createProject({ title: '学习项目', deadlineAt: now() + 86_400_000 });
 
-  assert.deepEqual(projectWithoutOkr.objectives, []);
-  assert.deepEqual(projectWithObjectiveOnly.objectives[0].keyResults, []);
-  assert.throws(() => service.createProject({
-    title: '错误目标',
-    deadlineAt: now() + 86_400_000,
-    objectives: [{ title: '', keyResults: [] }]
-  }), (error) => error instanceof DomainError && error.code === 'TITLE_REQUIRED');
+  for (let index = 1; index < 5; index += 1) {
+    service.createProject({ title: `项目${index}`, deadlineAt: now() + 86_400_000 });
+  }
+  assert.throws(() => service.createProject({ title: '第六个项目', deadlineAt: now() + 86_400_000 }), (error) => error.code === 'ACTIVE_PROJECT_LIMIT');
 });
 
 test('M3：新建任务插入开头，后续修改不重排保存顺序', () => {
@@ -1360,7 +1355,7 @@ test('重叠只作为范围内持久化日志的 timeline 元数据，保存结�
 
 test('M3：放弃项目删除未来对象但保留已确认历史和快照', () => {
   const { service, now } = createHarness();
-  const project = service.createProject({ title: '待放弃项目', deadlineAt: now() + 86_400_000, objectives: requiredObjectives() });
+  const project = service.createProject({ title: '待放弃项目', deadlineAt: now() + 86_400_000 });
   const completedTask = service.createTask({ title: '历史任务', projectId: project.id });
   service.updateTask(completedTask.id, { status: TASK_STATUS.COMPLETED });
   const activeTask = service.createTask({ title: '未来任务', projectId: project.id });
@@ -1390,8 +1385,7 @@ test('放弃项目沿全部项目任务的计划链删除未来计划、规则�
   const { service, repository, now } = createHarness();
   const project = service.createProject({
     title: '完整链路项目',
-    deadlineAt: now() + 86_400_000,
-    objectives: requiredObjectives()
+    deadlineAt: now() + 86_400_000
   });
   const completedTask = service.createTask({
     title: '已完成但仍有计划的任务',
@@ -1400,8 +1394,7 @@ test('放弃项目沿全部项目任务的计划链删除未来计划、规则�
   service.updateTask(completedTask.id, { status: TASK_STATUS.COMPLETED });
   const foreignProject = service.createProject({
     title: '其他项目',
-    deadlineAt: now() + 86_400_000,
-    objectives: requiredObjectives()
+    deadlineAt: now() + 86_400_000
   });
   const foreignTask = service.createTask({
     title: '其他项目任务',
@@ -1516,13 +1509,11 @@ test('放弃项目把跨项目 override 槽位转为 skip，删除候选并保�
   const { service, repository, now } = createHarness();
   const sourceProject = service.createProject({
     title: '规则所属项目',
-    deadlineAt: now() + 86_400_000,
-    objectives: requiredObjectives()
+    deadlineAt: now() + 86_400_000
   });
   const overrideProject = service.createProject({
     title: '临时改绑项目',
-    deadlineAt: now() + 86_400_000,
-    objectives: requiredObjectives()
+    deadlineAt: now() + 86_400_000
   });
   const sourceTask = service.createTask({
     title: '规则任务 A',
@@ -1600,13 +1591,11 @@ test('M3：放弃项目断开计时草稿失效引用且保留仍有效的项目
   const { service, repository, now } = createHarness();
   const abandonedProject = service.createProject({
     title: '待放弃项目',
-    deadlineAt: now() + 86_400_000,
-    objectives: requiredObjectives()
+    deadlineAt: now() + 86_400_000
   });
   const retainedProject = service.createProject({
     title: '保留项目',
-    deadlineAt: now() + 86_400_000,
-    objectives: requiredObjectives()
+    deadlineAt: now() + 86_400_000
   });
   const deletingTask = service.createTask({
     title: '待删除任务',
@@ -1690,7 +1679,7 @@ test('M3：放弃项目断开计时草稿失效引用且保留仍有效的项目
 
 test('M3：删除任务清除未结束计划并保留历史计划和计时记录', () => {
   const { service, repository, now } = createHarness();
-  const project = service.createProject({ title: '关联项目', deadlineAt: now() + 86_400_000, objectives: requiredObjectives() });
+  const project = service.createProject({ title: '关联项目', deadlineAt: now() + 86_400_000 });
   const task = service.createTask({ title: '待删除任务', projectId: project.id });
   const historicalEvent = createCalendarEventForTask(service, { title: '历史任务计划', startedAt: now() - 3_600_000, endedAt: now() - 1_800_000, taskId: task.id });
   const start = now() + 3_600_000;
@@ -2017,13 +2006,11 @@ test('新关系链：计划创建、更新、修订和单次改期只能关联�
   const { service, repository, now } = createHarness();
   const firstProject = service.createProject({
     title: '甲项目',
-    deadlineAt: now() + 86_400_000,
-    objectives: requiredObjectives()
+    deadlineAt: now() + 86_400_000
   });
   const secondProject = service.createProject({
     title: '乙项目',
-    deadlineAt: now() + 86_400_000,
-    objectives: requiredObjectives()
+    deadlineAt: now() + 86_400_000
   });
   const firstTask = service.createTask({ title: '甲任务', projectId: firstProject.id });
   const secondTask = service.createTask({ title: '乙任务', projectId: secondProject.id });
@@ -2154,8 +2141,7 @@ test('新关系链：日志和计时只写计划关联，direct task/project 始
   const { service, repository, setNow, now } = createHarness();
   const project = service.createProject({
     title: '专注项目',
-    deadlineAt: now() + 86_400_000,
-    objectives: requiredObjectives()
+    deadlineAt: now() + 86_400_000
   });
   const task = service.createTask({ title: '专注任务', projectId: project.id });
   const event = createCalendarEventForTask(service, {
@@ -2385,8 +2371,7 @@ test('确认候选记录执行统一关联归一化，并保证具体计划与�
   const { service, repository, now } = createHarness();
   const project = service.createProject({
     title: '候选所属项目',
-    deadlineAt: now() + 86_400_000,
-    objectives: requiredObjectives()
+    deadlineAt: now() + 86_400_000
   });
   const task = service.createTask({ title: '候选任务', projectId: project.id });
   const event = service.createCalendarEvent({
@@ -2566,32 +2551,24 @@ test('M5：JSON 导出保留日志状态、来源与关系且不再暴露 CSV AP
   assert.equal(typeof service.exportLogsCsv, 'undefined');
 });
 
-test('M5：JSON 导出移除本地残留的 targetValue，并可被当前导入器读取', () => {
+test('M5：JSON 导出移除本地残留的未知字段，并可被当前导入器读取', () => {
   const { service, repository, now } = createHarness();
   const project = service.createProject({
     title: '历史项目',
-    deadlineAt: now() + 86_400_000,
-    objectives: requiredObjectives()
+    deadlineAt: now() + 86_400_000
   });
   repository.transaction((database) => {
     database.legacyRootField = 'ignored';
     database.projects
       .find((item) => item.id === project.id)
       .legacyProjectField = 'ignored';
-    database.projects
-      .find((item) => item.id === project.id)
-      .objectives[0]
-      .keyResults[0]
-      .targetValue = 100;
   });
 
   const json = service.exportJson();
   const exported = JSON.parse(json);
-  const exportedKeyResult = exported.projects[0].objectives[0].keyResults[0];
 
   assert.equal(Object.prototype.hasOwnProperty.call(exported, 'legacyRootField'), false);
   assert.equal(Object.prototype.hasOwnProperty.call(exported.projects[0], 'legacyProjectField'), false);
-  assert.equal(Object.prototype.hasOwnProperty.call(exportedKeyResult, 'targetValue'), false);
   assert.doesNotThrow(() => service.prepareJsonImport(json));
 });
 
@@ -2599,14 +2576,12 @@ test('M5：导入会忽略旧版和未知字段，不写入资料库或制造冲
   const { service, now } = createHarness();
   const project = service.createProject({
     title: '当前项目',
-    deadlineAt: now() + 86_400_000,
-    objectives: requiredObjectives()
+    deadlineAt: now() + 86_400_000
   });
   const imported = service.snapshot();
   const importedProject = imported.projects.find((item) => item.id === project.id);
   imported.legacyRootField = 'ignored';
   importedProject.legacyProjectField = 'ignored';
-  importedProject.objectives[0].keyResults[0].targetValue = 100;
 
   const prepared = service.prepareJsonImport(JSON.stringify(imported));
   const preview = service.previewJsonImport(prepared.token, { mode: IMPORT_MODE.INCREMENTAL });
@@ -2615,22 +2590,13 @@ test('M5：导入会忽略旧版和未知字段，不写入资料库或制造冲
   service.commitJsonImport(prepared.token);
   const storedProject = service.snapshot().projects.find((item) => item.id === project.id);
   assert.equal(Object.prototype.hasOwnProperty.call(storedProject, 'legacyProjectField'), false);
-  assert.equal(Object.prototype.hasOwnProperty.call(storedProject.objectives[0].keyResults[0], 'targetValue'), false);
 });
 
 test('M5：本地遗留的未知字段不影响导回刚导出的 JSON', () => {
   const { service, repository, now } = createHarness();
   const project = service.createProject({
     title: '历史项目',
-    deadlineAt: now() + 86_400_000,
-    objectives: requiredObjectives()
-  });
-  repository.transaction((database) => {
-    database.projects
-      .find((item) => item.id === project.id)
-      .objectives[0]
-      .keyResults[0]
-      .targetValue = 100;
+    deadlineAt: now() + 86_400_000
   });
 
   const prepared = service.prepareJsonImport(service.exportJson());
@@ -2638,8 +2604,7 @@ test('M5：本地遗留的未知字段不影响导回刚导出的 JSON', () => {
 
   assert.equal(preview.conflictCount, 0);
   service.commitJsonImport(prepared.token);
-  const storedProject = service.snapshot().projects.find((item) => item.id === project.id);
-  assert.equal(Object.prototype.hasOwnProperty.call(storedProject.objectives[0].keyResults[0], 'targetValue'), false);
+  assert.equal(service.snapshot().projects.some((item) => item.id === project.id), true);
 });
 
 test('导入准备和预览不写入，只有提交 token 才单次写入并保留日志事实字段', () => {
@@ -2927,8 +2892,7 @@ test('导入允许活动项目暂时超过五个，但之后仍禁止新增项�
   assert.throws(
     () => service.createProject({
       title: '仍受上限约束',
-      deadlineAt: now() + 86_400_000,
-      objectives: requiredObjectives()
+      deadlineAt: now() + 86_400_000
     }),
     (error) => error.code === 'ACTIVE_PROJECT_LIMIT'
   );

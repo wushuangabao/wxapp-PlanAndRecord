@@ -99,12 +99,6 @@ function easeOutCubic(progress) {
   return 1 - Math.pow(1 - progress, 3);
 }
 
-function easeOutBack(progress) {
-  const overshoot = 1.3;
-  const shifted = progress - 1;
-  return 1 + (overshoot + 1) * Math.pow(shifted, 3) + overshoot * Math.pow(shifted, 2);
-}
-
 function isDevelopmentRuntime() {
   if (typeof wx === 'undefined' || typeof wx.getAccountInfoSync !== 'function') return false;
   const accountInfo = wx.getAccountInfoSync();
@@ -360,7 +354,6 @@ Page({
     manualLogId: null,
     recoveryDraft: null,
     showDiscardRecoveryConfirm: false,
-    pendingDeleteLog: null,
     recentLogs: [],
     recentColumnIndex: 0,
     recentColumnStep: 0,
@@ -665,18 +658,17 @@ Page({
 
   snapRecentColumn(index, currentScrollLeft) {
     this.clearRecentScrollAnimation();
-    const currentIndex = clampRecentColumnIndex(this.data.recentColumnIndex, this.data.recentLogs.length);
     const nextIndex = clampRecentColumnIndex(index, this.data.recentLogs.length);
     const targetScrollLeft = this.data.recentColumnStep ? nextIndex * this.data.recentColumnStep : 0;
     this.setData({ recentColumnIndex: nextIndex });
     if (!Number.isFinite(currentScrollLeft)) {
-      this.setData({ recentScrollLeft: targetScrollLeft, recentScrollWithAnimation: true });
+      this.setData({ recentScrollLeft: targetScrollLeft, recentScrollWithAnimation: false });
       return;
     }
     this.animateRecentScrollLeft(targetScrollLeft, {
-      startScrollLeft: currentScrollLeft,
+      startScrollLeft: Math.max(0, currentScrollLeft),
       duration: RECENT_SNAP_ANIMATION_DURATION,
-      easing: nextIndex === currentIndex ? easeOutCubic : easeOutBack
+      easing: easeOutCubic
     });
   },
 
@@ -1189,32 +1181,23 @@ Page({
     const id = event.currentTarget.dataset.id;
     const item = this.data.recentLogs.find((log) => log.id === id);
     if (!item) return;
-    this.setData({
-      pendingDeleteLog: {
-        id,
-        title: item.isCandidate ? '删除候选记录？' : '删除时间记录？',
-        copy: item.isCandidate
-          ? '删除后不会生成实际投入，且无法恢复。'
-          : '删除后这条已确认的历史记录将无法恢复。'
+    wx.showModal({
+      title: item.isCandidate ? '删除候选记录' : '删除时间记录',
+      content: item.isCandidate
+        ? '删除后不会生成实际投入，且无法恢复。'
+        : '删除后这条记录将无法恢复。',
+      confirmColor: '#9a5550',
+      success: (result) => {
+        if (!result.confirm) return;
+        try {
+          getService().deleteLog(id, true);
+          showSaved('记录已删除');
+          this.refresh();
+        } catch (error) {
+          showError(error);
+        }
       }
     });
-  },
-
-  deleteRecentLog() {
-    const pendingDeleteLog = this.data.pendingDeleteLog;
-    if (!pendingDeleteLog) return;
-    try {
-      getService().deleteLog(pendingDeleteLog.id, true);
-      this.setData({ pendingDeleteLog: null });
-      showSaved('记录已删除');
-      this.refresh();
-    } catch (error) {
-      showError(error);
-    }
-  },
-
-  cancelDeleteRecentLog() {
-    this.setData({ pendingDeleteLog: null });
   },
 
   closeManual() {

@@ -36,7 +36,6 @@ const {
   canonicalizeRepeatPattern,
   requiredTitle,
   validLogTiming,
-  validPercentage,
   validPriority,
   validTimeRange
 } = require('../domain/validation');
@@ -192,6 +191,14 @@ class ApplicationService {
 
   activeProjects(database) {
     return database.projects.filter((project) => project.status === PROJECT_STATUS.ACTIVE);
+  }
+
+  requireWishToProjectConversion(database, wishId) {
+    const wish = this.requireEntity(database.wishes, wishId, '愿望');
+    if (this.activeProjects(database).length >= MAX_ACTIVE_PROJECTS) {
+      throw new DomainError('ACTIVE_PROJECT_LIMIT', '要保持专注，别贪多了~');
+    }
+    return wish;
   }
 
   requireEntity(items, id, label) {
@@ -593,6 +600,17 @@ class ApplicationService {
     }).result;
   }
 
+  deleteWish(id, confirmed) {
+    if (!confirmed) {
+      throw new DomainError('WISH_DELETE_CONFIRMATION_REQUIRED', '删除愿望需要二次确认');
+    }
+    return this.repository.transaction((database) => {
+      const wish = this.requireEntity(database.wishes, id, '愿望');
+      database.wishes = database.wishes.filter((item) => item.id !== id);
+      return { id: wish.id, title: wish.title };
+    }).result;
+  }
+
   createProject(input) {
     const now = this.now();
     const title = requiredTitle(input.title, '项目名称');
@@ -600,17 +618,15 @@ class ApplicationService {
     if (!isFiniteTimestamp(deadlineAt)) {
       throw new DomainError('DEADLINE_INVALID', '请设置有效的项目截止日期');
     }
-    const objectives = this.normalizeObjectives(input.objectives || [], now);
     return this.repository.transaction((database) => {
       if (this.activeProjects(database).length >= MAX_ACTIVE_PROJECTS) {
-        throw new DomainError('ACTIVE_PROJECT_LIMIT', `活动项目最多为 ${MAX_ACTIVE_PROJECTS} 个，请先归档或放弃项目`);
+        throw new DomainError('ACTIVE_PROJECT_LIMIT', `要保持专注，别贪多了~`);
       }
       const project = {
         id: createId('project', now),
         title,
         deadlineAt,
         status: PROJECT_STATUS.ACTIVE,
-        objectives,
         createdAt: now,
         updatedAt: now
       };
@@ -619,19 +635,20 @@ class ApplicationService {
     }).result;
   }
 
+  validateWishToProject(wishId) {
+    const wish = this.requireWishToProjectConversion(this.snapshot(), wishId);
+    return { id: wish.id, title: wish.title };
+  }
+
   convertWishToProject(wishId) {
     const now = this.now();
     return this.repository.transaction((database) => {
-      const wish = this.requireEntity(database.wishes, wishId, '愿望');
-      if (this.activeProjects(database).length >= MAX_ACTIVE_PROJECTS) {
-        throw new DomainError('ACTIVE_PROJECT_LIMIT', `活动项目最多为 ${MAX_ACTIVE_PROJECTS} 个，请先归档或放弃项目`);
-      }
+      const wish = this.requireWishToProjectConversion(database, wishId);
       const project = {
         id: createId('project', now),
         title: wish.title,
         deadlineAt: now + 24 * 60 * 60 * 1000,
         status: PROJECT_STATUS.ACTIVE,
-        objectives: [],
         createdAt: now,
         updatedAt: now
       };
@@ -654,24 +671,9 @@ class ApplicationService {
         }
         project.deadlineAt = Number(input.deadlineAt);
       }
-      if (input.objectives !== undefined) {
-        project.objectives = this.normalizeObjectives(input.objectives, now);
-      }
       project.updatedAt = now;
       return project;
     }).result;
-  }
-
-  normalizeObjectives(objectives, now) {
-    return objectives.map((objective) => ({
-      id: objective.id || createId('objective', now),
-      title: requiredTitle(objective.title, '目标名称'),
-      keyResults: (objective.keyResults || []).map((keyResult) => ({
-        id: keyResult.id || createId('key-result', now),
-        title: requiredTitle(keyResult.title, '关键结果标题'),
-        currentValue: validPercentage(keyResult.currentValue, '关键结果当前值')
-      }))
-    }));
   }
 
   setProjectArchived(id, archived) {

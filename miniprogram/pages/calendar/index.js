@@ -552,7 +552,7 @@ Page({
 
   deleteConfirmed(event) {
     const item = event.currentTarget.dataset.item;
-    wx.showModal({ title: '删除实际记录', content: '删除后这条已确认的历史记录将无法恢复。', confirmColor: '#9a5550', success: (result) => {
+    wx.showModal({ title: '删除实际记录', content: '删除后这条记录将无法恢复。', confirmColor: '#9a5550', success: (result) => {
       if (!result.confirm) return;
       try {
         getService().deleteLog(item.id, true);

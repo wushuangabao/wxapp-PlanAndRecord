@@ -23,19 +23,11 @@ function wish(id, title, now = NOW) {
   return { id, title, createdAt: now, updatedAt: now };
 }
 
-function project(id, title, now = NOW, objectives = []) {
+function project(id, title, now = NOW) {
   return {
-    id, title, deadlineAt: now + 86_400_000, status: 'active', objectives,
+    id, title, deadlineAt: now + 86_400_000, status: 'active',
     createdAt: now, updatedAt: now
   };
-}
-
-function objective(id, title, keyResults = []) {
-  return { id, title, keyResults };
-}
-
-function keyResult(id, title) {
-  return { id, title, currentValue: 0 };
 }
 
 function task(id, title, projectId = null, projectNameSnapshot = null, now = NOW) {
@@ -153,10 +145,8 @@ test('同 ID 且完整持久化值相同会跳过，对象属性顺序忽略而�
   const imported = database();
   local.wishes.push(wish('wish_same', '同一愿望'));
   imported.wishes.push({ updatedAt: NOW, title: '同一愿望', id: 'wish_same', createdAt: NOW });
-  const first = objective('objective_a', 'A', [keyResult('key_a', 'A')]);
-  const second = objective('objective_b', 'B', [keyResult('key_b', 'B')]);
-  local.projects.push(project('project_same', '数组顺序', NOW, [first, second]));
-  imported.projects.push(project('project_same', '数组顺序', NOW, [copy(second), copy(first)]));
+  local.timeLogs.push(timeLog('log_same', { tags: ['A', 'B'] }));
+  imported.timeLogs.push(timeLog('log_same', { tags: ['B', 'A'] }));
 
   const analysis = createImportAnalysis(local, imported, { mode: IMPORT_MODE.INCREMENTAL, now: NOW + 1 });
 
@@ -165,20 +155,12 @@ test('同 ID 且完整持久化值相同会跳过，对象属性顺序忽略而�
   assert.deepEqual(analysis.addedCounts, addedCounts());
 });
 
-test('同 ID 项目冲突按统一策略保留或整体替换 objectives 与 keyResults', () => {
+test('同 ID 项目冲突按统一策略保留或整体替换项目', () => {
   const local = database();
   const imported = database();
-  const localProject = project('project_aggregate', '聚合项目', NOW, [
-    objective('objective_local_only', '本地目标', [
-      keyResult('key_result_local_only', '本地关键结果')
-    ])
-  ]);
+  const localProject = project('project_aggregate', '本地项目');
   const importedProject = {
-    ...project('project_aggregate', '聚合项目', NOW, [
-      objective('objective_imported_only', '导入目标', [
-        keyResult('key_result_imported_only', '导入关键结果')
-      ])
-    ]),
+    ...project('project_aggregate', '导入项目'),
     updatedAt: NOW + 1
   };
   local.projects.push(localProject);
@@ -194,10 +176,7 @@ test('同 ID 项目冲突按统一策略保留或整体替换 objectives 与 key
 
   assert.deepEqual(keptProject, localProject);
   assert.deepEqual(usedProject, importedProject);
-  assert.deepEqual(usedProject.objectives.map((item) => item.id), ['objective_imported_only']);
-  assert.deepEqual(usedProject.objectives[0].keyResults.map((item) => item.id), ['key_result_imported_only']);
-  assert.equal(JSON.stringify(usedProject).includes('objective_local_only'), false);
-  assert.equal(JSON.stringify(usedProject).includes('key_result_local_only'), false);
+  assert.equal(usedProject.title, '导入项目');
 });
 
 test('同 ID 重复规则冲突按统一策略保留或整体替换 revisions', () => {
@@ -308,13 +287,11 @@ test('规则冲突后 override 零有效修订或导入链多有效修订时整�
   );
 });
 
-test('七类顶层聚合均按 ID 合并，项目和规则的嵌套聚合随父实体移动', () => {
+test('七类顶层聚合均按 ID 合并，规则修订随父实体移动', () => {
   const local = database();
   const imported = database();
   imported.wishes.push(wish('wish_imported', '愿望'));
-  imported.projects.push(project('project_imported', '项目', NOW, [
-    objective('objective_imported', '目标', [keyResult('key_result_imported', '关键结果')])
-  ]));
+  imported.projects.push(project('project_imported', '项目'));
   imported.tasks.push(task('task_imported', '任务', 'project_imported', '项目'));
   imported.calendarEvents.push(calendarEvent('event_imported', '计划', {
     projectId: 'project_imported', projectNameSnapshot: '项目', taskId: 'task_imported', taskNameSnapshot: '任务',
@@ -337,7 +314,7 @@ test('七类顶层聚合均按 ID 合并，项目和规则的嵌套聚合随父�
     wishes: 1, projects: 1, tasks: 1, calendarEvents: 1,
     repeatRules: 1, occurrenceExceptions: 1, timeLogs: 1
   }));
-  assert.deepEqual(resolved.database.projects[0].objectives[0].keyResults[0].id, 'key_result_imported');
+  assert.equal(resolved.database.projects[0].id, 'project_imported');
   assert.equal(resolved.database.repeatRules[0].revisions[0].id, 'revision_imported');
   assert.equal(resolved.summary.repairedReferenceCount, 0);
 });

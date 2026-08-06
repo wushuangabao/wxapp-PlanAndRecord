@@ -37,7 +37,6 @@ function expectDuplicateId(mutator) {
 function validProject() {
   return {
     id: 'project_1', title: '项目', deadlineAt: NOW + 86_400_000, status: 'active',
-    objectives: [{ id: 'objective_1', title: '目标', keyResults: [{ id: 'key_result_1', title: '结果', currentValue: 0 }] }],
     createdAt: NOW, updatedAt: NOW
   };
 }
@@ -228,13 +227,22 @@ test('合法的当前版本全量快照可以解析并返回克隆', () => {
   assert.notEqual(parsed, database);
 });
 
-test('JSON 快照的八类真实标题统一按 Unicode 码点 trim 和校验', () => {
+test('JSON 快照导入时丢弃项目中的 OKR 字段', () => {
+  const database = copySnapshot();
+  database.projects.push({
+    ...validProject(),
+    objectives: [{ id: 'legacy_objective', title: '旧目标', keyResults: [{ id: 'legacy_result', title: '旧结果', currentValue: 20 }] }]
+  });
+
+  const parsed = parseJsonSnapshot(JSON.stringify(database));
+  assert.equal(Object.hasOwn(parsed.projects[0], 'objectives'), false);
+});
+
+test('JSON 快照的六类真实标题统一按 Unicode 码点 trim 和校验', () => {
   const emoji = '🙂';
   const titleFields = [
     ['Wish', (database, title) => { database.wishes.push({ id: 'wish_1', title, createdAt: NOW, updatedAt: NOW }); }],
     ['Project', (database, title) => { database.projects.push({ ...validProject(), title }); }],
-    ['Objective', (database, title) => { const project = validProject(); project.objectives[0].title = title; database.projects.push(project); }],
-    ['KeyResult', (database, title) => { const project = validProject(); project.objectives[0].keyResults[0].title = title; database.projects.push(project); }],
     ['Task', (database, title) => { database.tasks.push({ ...validTask(), title }); }],
     ['CalendarEvent', (database, title) => { database.calendarEvents.push({ ...validEvent(), title }); }],
     ['RepeatRule', (database, title) => { database.repeatRules.push({ ...validRule(), title }); }],
@@ -258,20 +266,6 @@ test('JSON 快照的八类真实标题统一按 Unicode 码点 trim 和校验', 
       () => parseJsonSnapshot(JSON.stringify(rejected)),
       (error) => error.code === 'IMPORT_SCHEMA_INVALID',
       `${label} 应拒绝 26 个 emoji`
-    );
-  }
-});
-
-test('JSON 快照拒绝 Objective/KeyResult 空白标题', () => {
-  for (const field of ['objective', 'keyResult']) {
-    const database = copySnapshot();
-    const project = validProject();
-    if (field === 'objective') project.objectives[0].title = '   ';
-    else project.objectives[0].keyResults[0].title = '   ';
-    database.projects.push(project);
-    assert.throws(
-      () => parseJsonSnapshot(JSON.stringify(database)),
-      (error) => error.code === 'IMPORT_SCHEMA_INVALID'
     );
   }
 });
@@ -481,11 +475,11 @@ test('完整 override 导出再导入保持语义相等', () => {
   assert.equal(persistedValueEquals(first, second), true);
 });
 
-test('非法嵌套标题拒绝整快照且不修改输入对象', () => {
+test('非法项目标题拒绝整快照且不修改输入对象', () => {
   const database = copySnapshot();
   database.wishes.push({ id: 'wish_1', title: '  保持原值  ', createdAt: NOW, updatedAt: NOW });
   const project = validProject();
-  project.objectives[0].keyResults[0].title = '🙂'.repeat(26);
+  project.title = '🙂'.repeat(26);
   database.projects.push(project);
 
   assert.throws(
@@ -501,21 +495,16 @@ test('解析会忽略未知字段，但保留已知字段的严格校验', () =>
   database.localProfile.legacyProfileField = true;
   database.projects.push(validProject());
   database.projects[0].legacyProjectField = 'ignored';
-  database.projects[0].objectives[0].legacyObjectiveField = 'ignored';
-  database.projects[0].objectives[0].keyResults[0].targetValue = 100;
   database.timer.draft.legacyDraftField = 'ignored';
 
   const parsed = parseJsonSnapshot(JSON.stringify(database));
-  const keyResult = parsed.projects[0].objectives[0].keyResults[0];
 
   assert.equal(Object.prototype.hasOwnProperty.call(parsed, 'legacyRootField'), false);
   assert.equal(Object.prototype.hasOwnProperty.call(parsed.localProfile, 'legacyProfileField'), false);
   assert.equal(Object.prototype.hasOwnProperty.call(parsed.projects[0], 'legacyProjectField'), false);
-  assert.equal(Object.prototype.hasOwnProperty.call(parsed.projects[0].objectives[0], 'legacyObjectiveField'), false);
-  assert.equal(Object.prototype.hasOwnProperty.call(keyResult, 'targetValue'), false);
   assert.equal(Object.prototype.hasOwnProperty.call(parsed.timer.draft, 'legacyDraftField'), false);
 
-  database.projects[0].objectives[0].keyResults[0].currentValue = 101;
+  database.projects[0].deadlineAt = 'invalid';
   assert.throws(() => parseJsonSnapshot(JSON.stringify(database)), (error) => error.code === 'IMPORT_SCHEMA_INVALID');
 });
 
@@ -761,11 +750,9 @@ test('根时间戳和 localProfile 时间戳不做隐式类型转换', () => {
   expectSchemaInvalid((database) => { database.localProfile.updatedAt = String(NOW); });
 });
 
-test('愿望、项目、目标和关键结果字段类型严格校验', () => {
+test('愿望和项目字段类型严格校验', () => {
   expectSchemaInvalid((database) => { database.wishes.push({ id: 'wish_1', title: 1, createdAt: NOW, updatedAt: NOW }); });
   expectSchemaInvalid((database) => { database.projects.push({ ...validProject(), deadlineAt: String(NOW) }); });
-  expectSchemaInvalid((database) => { database.projects.push({ ...validProject(), objectives: {} }); });
-  expectSchemaInvalid((database) => { database.projects.push({ ...validProject(), objectives: [{ ...validProject().objectives[0], keyResults: [{ ...validProject().objectives[0].keyResults[0], currentValue: 101 }] }] }); });
 });
 
 test('任务、日历事件和重复规则字段类型与枚举严格校验', () => {
@@ -1120,10 +1107,9 @@ test('recoveryDraft 的候选预览必须是完整且有效的计时器建议', 
   });
 });
 
-test('重复 ID 包括顶层实体、嵌套目标、关键结果和修订均被拒绝', () => {
+test('重复 ID 包括顶层实体和修订均被拒绝', () => {
   expectDuplicateId((database) => { database.wishes.push({ id: database.localProfile.id, title: '重复', createdAt: NOW, updatedAt: NOW }); });
-  expectDuplicateId((database) => { database.projects.push({ ...validProject(), objectives: [{ ...validProject().objectives[0] }, { ...validProject().objectives[0], id: 'objective_1' }] }); });
-  expectDuplicateId((database) => { database.projects.push({ ...validProject(), objectives: [{ ...validProject().objectives[0], keyResults: [{ ...validProject().objectives[0].keyResults[0] }, { ...validProject().objectives[0].keyResults[0], id: 'key_result_1' }] }] }); });
+  expectDuplicateId((database) => { database.projects.push({ ...validProject(), id: database.localProfile.id }); });
   expectDuplicateId((database) => { database.repeatRules.push({ ...validRule(), revisions: [{ ...validRevision() }, { ...validRevision(), revision: 2 }] }); });
 });
 
