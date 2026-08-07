@@ -304,18 +304,11 @@ function buildProjectCards(activeProjects, tasks, expandedProjectIds, expandedCo
   });
 }
 
-function buildTaskEditor(activeProjects, defaultProjectId = null) {
-  const projectOptions = [{ id: null, title: '不关联项目' }].concat(
-    activeProjects.map((project) => ({ id: project.id, title: project.title }))
-  );
-  const projectIndex = Math.max(0, projectOptions.findIndex((project) => project.id === defaultProjectId));
+function buildTaskEditor(defaultProjectId = null) {
   return {
     mode: 'create',
     taskId: '',
-    projectOptions,
-    projectIndex,
-    projectTitle: projectOptions[projectIndex].title,
-    projectSelectionTouched: false
+    projectId: defaultProjectId
   };
 }
 
@@ -897,23 +890,22 @@ Page({
 
   openStandaloneTask() {
     const editor = this.data.taskEditor;
-    if (editor && !this.data.isTaskEditorOpen && editor.mode === 'create' && !editor.taskId) {
+    if (editor && !this.data.isTaskEditorOpen && editor.mode === 'create' && !editor.taskId && !editor.projectId) {
       this.setData({ isTaskEditorOpen: true });
       return;
     }
-    this.setData({ taskEditor: buildTaskEditor(this.data.activeProjects), taskTitle: '', isTaskEditorOpen: true });
+    this.setData({ taskEditor: buildTaskEditor(), taskTitle: '', isTaskEditorOpen: true });
   },
 
   openChildTask(event) {
     const project = this.data.activeProjects.find((item) => item.id === event.currentTarget.dataset.id);
     if (!project) return;
     const editor = this.data.taskEditor;
-    const selectedProject = editor && editor.projectOptions[editor.projectIndex];
-    if (editor && !this.data.isTaskEditorOpen && editor.mode === 'create' && !editor.taskId && selectedProject && selectedProject.id === project.id) {
+    if (editor && !this.data.isTaskEditorOpen && editor.mode === 'create' && !editor.taskId && editor.projectId === project.id) {
       this.setData({ isTaskEditorOpen: true });
       return;
     }
-    this.setData({ taskEditor: buildTaskEditor(this.data.activeProjects, project.id), taskTitle: '', isTaskEditorOpen: true });
+    this.setData({ taskEditor: buildTaskEditor(project.id), taskTitle: '', isTaskEditorOpen: true });
   },
 
   openTodoTitleEditor(event) {
@@ -962,28 +954,11 @@ Page({
     this.setData({ isTaskEditorOpen: false });
   },
 
-  onTaskProjectChange(event) {
-    const editor = this.data.taskEditor;
-    const projectIndex = Number(event.detail.value);
-    if (!editor || !Number.isInteger(projectIndex) || !editor.projectOptions[projectIndex]) return;
-    this.setData({
-      taskEditor: {
-        ...editor,
-        projectIndex,
-        projectTitle: editor.projectOptions[projectIndex].title,
-        projectSelectionTouched: true
-      }
-    });
-  },
-
   saveTaskEditor() {
     try {
       const editor = this.data.taskEditor;
       if (!editor) throw new Error('请先选择任务入口');
-      const selectedProject = editor.projectOptions[editor.projectIndex];
-      if (!selectedProject) throw new Error('请选择关联项目');
-      const projectId = selectedProject.id;
-      getService().createTask({ title: this.data.taskTitle, projectId });
+      getService().createTask({ title: this.data.taskTitle, projectId: editor.projectId || null });
       this.closeTaskEditor();
       showSaved('TODO 已创建');
       this.refresh({ resetTodoColumn: true });

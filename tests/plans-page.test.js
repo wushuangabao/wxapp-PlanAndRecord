@@ -298,18 +298,17 @@ test('计划页：删除愿望必须二次确认', () => {
   }
 });
 
-test('计划页：TODO 表单默认不关联，项目入口默认选中对应项目', () => {
+test('计划页：新建 TODO 的关联由入口决定，表单不提供项目选择', () => {
   const harness = createHarness();
   try {
     harness.page.openStandaloneTask();
-    assert.deepEqual(harness.page.data.taskEditor.projectOptions, [{ id: null, title: '不关联项目' }, { id: 'project_1', title: '项目一' }]);
-    assert.equal(harness.page.data.taskEditor.projectTitle, '不关联项目');
+    assert.equal(harness.page.data.taskEditor.projectId, null);
     harness.page.onField(inputEvent('taskTitle', '独立任务'));
     harness.page.saveTaskEditor();
     assert.deepEqual(harness.calls.createTask[0], { title: '独立任务', projectId: null });
 
     harness.page.openChildTask(event('project_1'));
-    assert.equal(harness.page.data.taskEditor.projectTitle, '项目一');
+    assert.equal(harness.page.data.taskEditor.projectId, 'project_1');
     harness.page.onField(inputEvent('taskTitle', '项目子任务'));
     harness.page.saveTaskEditor();
     assert.deepEqual(harness.calls.createTask[1], { title: '项目子任务', projectId: 'project_1' });
@@ -376,6 +375,27 @@ test('计划页：活动项目以内联子任务总览替代只读任务弹层',
   assert.match(wxss, /\.project-manage\s*\{/);
 });
 
+test('计划页：项目任务区以待处理和可展开的已完成列组织', () => {
+  const wxml = fs.readFileSync(plansWxmlPath, 'utf8');
+  const wxss = fs.readFileSync(plansWxssPath, 'utf8');
+
+  assert.match(wxml, /class="project-task-columns \{\{item\.completedCount \? 'has-completed' : ''\}\}"/);
+  assert.match(wxml, /<view class="project-column-heading">待处理<\/view>/);
+  assert.match(wxml, /class="project-todo-footer">[\s\S]*class="project-add-task"/);
+  assert.match(wxml, /class="project-inline-link project-completed-toggle" role="button" aria-label="\{\{item\.isCompletedExpanded \? '收起已完成项' : '展开已完成项'\}\}"/);
+  assert.match(wxml, /已完成 \{\{item\.completedCount\}\} 项/);
+  assert.match(wxml, /class="project-completed-list"/);
+  assert.match(wxss, /\.project-task-columns\s*\{[^}]*display:\s*flex;[^}]*align-items:\s*stretch;[^}]*margin-top:\s*14rpx;/s);
+  assert.match(wxss, /\.project-task-column\s*\{[^}]*flex:\s*1 1 0;[^}]*min-width:\s*0;/s);
+  assert.match(wxss, /\.project-task-columns\.has-completed \.project-todo-column\s*\{[^}]*flex-basis:\s*56%;[^}]*padding-right:\s*24rpx;/s);
+  assert.match(wxss, /\.project-completed-column::before\s*\{[^}]*width:\s*1rpx;[^}]*background:\s*#dedad3;/s);
+  assert.match(wxss, /\.project-completed-list\s*\{[^}]*padding:\s*8rpx 10rpx;[^}]*border-radius:\s*14rpx;[^}]*background:\s*#f3f1ed;/s);
+  assert.match(wxss, /\.project-todo-column\s*\{[^}]*display:\s*flex;[^}]*flex-direction:\s*column;/s);
+  assert.match(wxss, /\.project-todo-footer\s*\{[^}]*margin-top:\s*auto;[^}]*padding-top:\s*10rpx;/s);
+  assert.match(wxss, /\.project-task-empty\s*\{[^}]*display:\s*flex;[^}]*flex:\s*1;[^}]*align-items:\s*center;/s);
+  assert.match(wxss, /\.project-task-row \.todo-title\s*\{[^}]*white-space:\s*normal;[^}]*word-break:\s*break-word;/s);
+});
+
 test('计划页：项目内联子任务的勾选与标题编辑入口均提供至少 56rpx 热区', () => {
   const wxml = fs.readFileSync(plansWxmlPath, 'utf8');
   const wxss = fs.readFileSync(plansWxssPath, 'utf8');
@@ -414,13 +434,15 @@ test('计划页：标题输入以 25 个 Unicode 码点截断', () => {
 
 test('计划页：TODO 标题使用自动聚焦的内联输入，创建弹窗不再承担编辑职责', () => {
   const wxml = fs.readFileSync(plansWxmlPath, 'utf8');
+  const wxss = fs.readFileSync(plansWxssPath, 'utf8');
 
   assert.match(wxml, /class="[^"]*todo-title[^"]*"[^>]*data-id="{{task.id}}"[^>]*bindtap="openTodoTitleEditor"/);
   assert.match(wxml, /<input wx:if="{{todoTitleEditTaskId === task.id && todoTitleEditSource === 'todo'}}" class="todo-title-input"[^>]*focus="{{true}}"[^>]*bindinput="onTodoTitleInput"[^>]*bindblur="saveTodoTitle"[^>]*bindconfirm="saveTodoTitle"/);
   assert.doesNotMatch(wxml, /bindtap="openTaskEditor"/);
   assert.doesNotMatch(wxml, /taskEditor\.mode/);
   assert.match(wxml, /<sheet-header title="新建 TODO"/);
-  assert.match(wxml, /mode="selector" range="{{taskEditor.projectOptions}}" range-key="title"/);
+  assert.doesNotMatch(wxml, /taskEditor\.projectOptions|taskEditor\.projectIndex|taskEditor\.projectTitle|onTaskProjectChange/);
+  assert.doesNotMatch(wxss, /\.task-project-picker\s*\{/);
 });
 
 test('计划页：TODO 图标操作使用固定热区的 view 和统一删除图标', () => {
