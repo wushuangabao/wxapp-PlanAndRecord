@@ -124,6 +124,101 @@ function createRecurringPlanForTask(service, input) {
   return service.createRecurringPlan({ ...input, taskId });
 }
 
+test('空任务资料库原子创建同名 TODO 与普通或重复计划', () => {
+  const start = 1_700_000_000_000 + 3_600_000;
+  const eventHarness = createHarness();
+  const eventResult = eventHarness.service.createCalendarEventWithNewTask({
+    title: '  自动计划  ',
+    startedAt: start,
+    endedAt: start + 1_800_000,
+    priority: 2
+  });
+  const eventSnapshot = eventHarness.service.snapshot();
+  assert.equal(eventSnapshot.tasks.length, 1);
+  assert.equal(eventSnapshot.calendarEvents.length, 1);
+  assert.deepEqual(
+    [eventResult.task.title, eventResult.task.status, eventResult.task.projectId],
+    ['自动计划', TASK_STATUS.TODO, null]
+  );
+  assert.deepEqual(
+    [eventResult.event.taskId, eventResult.event.taskNameSnapshot],
+    [eventResult.task.id, '自动计划']
+  );
+
+  const repeatHarness = createHarness();
+  const repeatResult = repeatHarness.service.createRecurringPlanWithNewTask({
+    title: '自动固定日程',
+    startedAt: start,
+    endedAt: start + 1_800_000,
+    priority: 1,
+    frequency: 'daily',
+    interval: 1
+  });
+  const repeatSnapshot = repeatHarness.service.snapshot();
+  assert.equal(repeatSnapshot.tasks.length, 1);
+  assert.equal(repeatSnapshot.repeatRules.length, 1);
+  assert.equal(repeatSnapshot.calendarEvents.length, 1);
+  assert.equal(repeatResult.rule.revisions[0].taskId, repeatResult.task.id);
+  assert.equal(repeatResult.event.taskId, repeatResult.task.id);
+});
+
+test('显式新建同名任务支持已有任务资料库且失败不留下孤立 TODO', () => {
+  const start = 1_700_000_000_000 + 3_600_000;
+  const existingHarness = createHarness();
+  const existingTask = existingHarness.service.createTask({ title: '已有任务' });
+  const explicitResult = existingHarness.service.createCalendarEventWithNewTask({
+    title: '显式新建任务',
+    startedAt: start,
+    endedAt: start + 1_800_000,
+    priority: 1
+  });
+  const existingSnapshot = existingHarness.service.snapshot();
+  assert.equal(existingSnapshot.tasks.length, 2);
+  assert.ok(existingSnapshot.tasks.some((item) => item.id === existingTask.id));
+  assert.deepEqual(
+    [explicitResult.task.title, explicitResult.task.status, explicitResult.task.projectId],
+    ['显式新建任务', TASK_STATUS.TODO, null]
+  );
+  assert.equal(explicitResult.event.taskId, explicitResult.task.id);
+
+  const recurringHarness = createHarness();
+  recurringHarness.service.createTask({ title: '已有固定日程任务' });
+  const recurringResult = recurringHarness.service.createRecurringPlanWithNewTask({
+    title: '显式新建固定日程任务',
+    startedAt: start,
+    endedAt: start + 1_800_000,
+    priority: 1,
+    frequency: 'daily',
+    interval: 1
+  });
+  assert.equal(recurringHarness.service.snapshot().tasks.length, 2);
+  assert.equal(recurringResult.rule.revisions[0].taskId, recurringResult.task.id);
+  assert.equal(recurringResult.event.taskId, recurringResult.task.id);
+
+  const invalidHarness = createHarness();
+  assert.throws(() => invalidHarness.service.createCalendarEventWithNewTask({
+    title: '非法计划',
+    startedAt: start,
+    endedAt: start,
+    priority: 1
+  }));
+  assert.equal(invalidHarness.service.snapshot().tasks.length, 0);
+  assert.equal(invalidHarness.service.snapshot().calendarEvents.length, 0);
+
+  const failingStorage = new TrackingStorage();
+  const failingHarness = createHarness(undefined, failingStorage);
+  failingStorage.resetCalls();
+  failingStorage.failNextSet = true;
+  assert.throws(() => failingHarness.service.createCalendarEventWithNewTask({
+    title: '写入失败计划',
+    startedAt: start,
+    endedAt: start + 1_800_000,
+    priority: 1
+  }));
+  assert.equal(failingHarness.service.snapshot().tasks.length, 0);
+  assert.equal(failingHarness.service.snapshot().calendarEvents.length, 0);
+});
+
 test('删除愿望需要二次确认并只移除目标愿望', () => {
   const { service } = createHarness();
   const deletedWish = service.createWish('准备删除的愿望');

@@ -412,6 +412,25 @@ class ApplicationService {
     };
   }
 
+  createTaskRecord(database, title, now, association = {}) {
+    const task = {
+      id: createId('task', now),
+      title,
+      status: TASK_STATUS.TODO,
+      projectId: association.projectId || null,
+      projectNameSnapshot: association.projectNameSnapshot || null,
+      completedAt: null,
+      createdAt: now,
+      updatedAt: now
+    };
+    database.tasks.unshift(task);
+    return task;
+  }
+
+  createPlanTaskFromTitle(database, title, now) {
+    return this.createTaskRecord(database, title, now);
+  }
+
   resolveCalendarEventRecordAssociation(database, calendarEventId) {
     if (!this.hasReferenceValue(calendarEventId)) {
       return {
@@ -898,18 +917,7 @@ class ApplicationService {
     const title = requiredTitle(input.title, '任务标题');
     return this.repository.transaction((database) => {
       const association = input.projectId ? this.resolveAssociations(database, input) : {};
-      const task = {
-        id: createId('task', now),
-        title,
-        status: TASK_STATUS.TODO,
-        projectId: association.projectId || null,
-        projectNameSnapshot: association.projectNameSnapshot || null,
-        completedAt: null,
-        createdAt: now,
-        updatedAt: now
-      };
-      database.tasks.unshift(task);
-      return task;
+      return this.createTaskRecord(database, title, now, association);
     }).result;
   }
 
@@ -1042,6 +1050,29 @@ class ApplicationService {
     }).result;
   }
 
+  createCalendarEventWithNewTask(input) {
+    const now = this.now();
+    this.rejectDirectPlanProject(input);
+    const title = requiredTitle(input.title, '计划标题');
+    const startedAt = Number(input.startedAt);
+    const endedAt = Number(input.endedAt);
+    validTimeRange(startedAt, endedAt, '计划时间');
+    return this.repository.transaction((database) => {
+      const task = this.createPlanTaskFromTitle(database, title, now);
+      const association = this.resolvePlanTaskAssociation(database, task.id);
+      const event = createCalendarEvent({
+        ...input,
+        ...association,
+        title,
+        startedAt,
+        endedAt,
+        priority: validPriority(input.priority)
+      }, now);
+      database.calendarEvents.push(event);
+      return { task, event };
+    }).result;
+  }
+
   updateCalendarEvent(id, input) {
     const now = this.now();
     this.rejectDirectPlanProject(input);
@@ -1128,6 +1159,41 @@ class ApplicationService {
       database.repeatRules.push(rule);
       database.calendarEvents.push(event);
       return { rule, event };
+    }).result;
+  }
+
+  createRecurringPlanWithNewTask(input) {
+    const now = this.now();
+    this.rejectDirectPlanProject(input);
+    const title = requiredTitle(input.title, '固定日程标题');
+    const startedAt = Number(input.startedAt);
+    const endedAt = Number(input.endedAt);
+    validTimeRange(startedAt, endedAt, '固定日程时间');
+    const pattern = canonicalizeRepeatPattern(input);
+    return this.repository.transaction((database) => {
+      const task = this.createPlanTaskFromTitle(database, title, now);
+      const association = this.resolvePlanTaskAssociation(database, task.id);
+      const rule = createRepeatRule({
+        ...input,
+        ...association,
+        title,
+        startedAt,
+        endedAt,
+        priority: validPriority(input.priority),
+        ...pattern
+      }, now);
+      const event = createCalendarEvent({
+        ...association,
+        title,
+        startedAt,
+        endedAt,
+        priority: validPriority(input.priority),
+        repeatRuleId: rule.id,
+        repeatRuleSummarySnapshot: title
+      }, now);
+      database.repeatRules.push(rule);
+      database.calendarEvents.push(event);
+      return { task, rule, event };
     }).result;
   }
 

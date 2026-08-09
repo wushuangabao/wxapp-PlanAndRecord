@@ -79,32 +79,180 @@ test('M3：TODO 和项目的右上角新建入口为无底色深灰加号，页�
   assert.match(wxss, /\.section-add\s*\{[^}]*flex:\s*0 0 54rpx;[^}]*border-radius:\s*0;[^}]*background:\s*transparent;[^}]*color:\s*#59635d;/s);
 });
 
-test('M4：日历提供计划块编辑删除入口，重复实例编辑弹层只渲染一次', () => {
+test('M4：日历详情层提供原有操作，画布块不显示状态文字且顶部保留图例', () => {
   const wxml = fs.readFileSync(calendarWxmlPath, 'utf8');
   const script = fs.readFileSync(calendarScriptPath, 'utf8');
   const wxss = fs.readFileSync(calendarWxssPath, 'utf8');
   assert.match(wxml, /openPlanEditor/);
-  assert.match(wxml, /item\.type === 'plan' && !item\.virtual && item\.canEditPlan/);
-  assert.match(wxml, /item\.type === 'plan' && item\.canAssociate/);
-  assert.match(wxml, /item\.type === 'plan' && !item\.virtual[^>]*bindtap="deletePlan"/);
-  assert.match(wxml, /item\.virtual[^>]*bindtap="confirmItem"/);
-  assert.match(wxml, /item\.virtual[^>]*bindtap="openOccurrenceEditor"/);
-  assert.match(wxml, /item\.virtual[^>]*bindtap="skipVirtualOccurrence"/);
-  assert.match(wxml, /item\.type === 'candidate' && !item\.virtual[^>]*bindtap="confirmItem"/);
-  assert.match(wxml, /item\.type === 'candidate' && !item\.virtual[^>]*bindtap="openLogEditor"/);
-  assert.match(wxml, /item\.type === 'candidate' && !item\.virtual[^>]*bindtap="discardCandidate"/);
+  assert.match(wxml, /detailItem\.type === 'plan' && !detailItem\.virtual && detailItem\.canEditPlan/);
+  assert.match(wxml, /detailItem\.type === 'plan' && detailItem\.canAssociate/);
+  assert.match(wxml, /detailItem\.type === 'plan' && !detailItem\.virtual[^>]*bindtap="deletePlan"/);
+  assert.match(wxml, /detailItem\.virtual[^>]*bindtap="confirmItem"/);
+  assert.match(wxml, /detailItem\.virtual[^>]*bindtap="openOccurrenceEditor"/);
+  assert.match(wxml, /detailItem\.virtual[^>]*bindtap="openRuleFollowingEditor">修改本次及后续/);
+  assert.match(wxml, /detailItem\.virtual[^>]*bindtap="skipVirtualOccurrence"/);
+  assert.match(wxml, /detailItem\.type === 'candidate' && !detailItem\.virtual[^>]*bindtap="confirmItem"/);
+  assert.match(wxml, /detailItem\.type === 'candidate' && !detailItem\.virtual[^>]*bindtap="openLogEditor"/);
+  assert.match(wxml, /detailItem\.type === 'candidate' && !detailItem\.virtual[^>]*bindtap="discardCandidate"/);
   assert.match(script, /item\.virtual\s*\?\s*'重复计划·待确认'/);
   assert.match(script, /item\.type === 'candidate'\s*\?\s*'候选记录'/);
   assert.doesNotMatch(script, /virtual[^\n]*candidate|candidate[^\n]*virtual/);
-  assert.match(wxss, /\.timeline-item\.plan\s*\{[^}]*#7b918b/s);
-  assert.match(wxml, /savePlanEditor/);
+  assert.match(wxss, /\.calendar-block\.plan\s*\{[^}]*#7b918b/s);
+  assert.match(wxml, /bindtap="openItemDetail"/);
+  assert.match(wxml, /class="calendar-legend"[^>]*>[\s\S]*>计划<[\s\S]*>候选<[\s\S]*>实际</);
+  assert.match(wxml, /class="block-title">\{\{item\.title\}\}<\/view>/);
+  assert.match(wxml, /detailItem\.isAggregate/);
+  assert.match(wxml, /wx:for="\{\{detailItem\.aggregateItems\}\}"[\s\S]*bindtap="openItemDetail"/);
+  assert.match(wxss, /\.calendar-block\.aggregate\s*\{[^}]*#a9bdae[^}]*#e6ece7/s);
+  assert.match(wxml, /bind:confirm="submitPlanForm"/);
+  assert.match(wxml, /title="\{\{planEditor \? '编辑计划' : '新增计划'\}\}"/);
+  assert.doesNotMatch(wxml, /编辑计划块|bindtap="closePlanEditor"/);
+  assert.equal((wxml.match(/wx:if="\{\{isCreateOpen\}\}"/g) || []).length, 1);
   assert.equal((wxml.match(/修改重复实例/g) || []).length, 1);
+  assert.match(wxml, /bind:confirm="submitOccurrenceEditor"/);
+  assert.doesNotMatch(wxml, /<button[^>]*bindtap="saveRuleFollowing"/);
 });
 
-test('日历计划块只选择必选任务，日志编辑只选择标签和计划块', () => {
+test('日历新增表单不会沿用刚编辑或取消的计划字段', () => {
+  const page = loadCalendarPage();
+  Object.assign(page.data, {
+    anchor: Date.now(),
+    tasks: [{ id: '', title: '请选择任务' }],
+    taskIndex: 0,
+    title: '刚编辑过的计划',
+    priority: 3,
+    repeatEnabled: true,
+    frequencyIndex: 2,
+    interval: '4',
+    repeatWeekdays: [1, 3, 5]
+  });
+
+  page.openCreatePlan();
+
+  assert.equal(page.data.title, '');
+  assert.equal(page.data.priority, 1);
+  assert.equal(page.data.repeatEnabled, false);
+  assert.equal(page.data.frequencyIndex, 0);
+  assert.equal(page.data.interval, '1');
+  assert.deepEqual(page.data.repeatWeekdays, []);
+});
+
+test('日历切换粒度恢复已有滚动位置，仅首次进入日视图定位当前小时', () => {
+  const page = loadCalendarPage();
+  page.refresh = () => {};
+  let focusCount = 0;
+  page.focusCurrentHour = () => { focusCount += 1; };
+  page.data.view = 'week';
+  page.viewScrollTops = { day: 640, week: 128 };
+
+  page.changeView({ currentTarget: { dataset: { view: 'day' } } });
+  assert.equal(page.data.calendarScrollTop, 640);
+  assert.equal(focusCount, 0);
+
+  page.data.view = 'week';
+  delete page.viewScrollTops.day;
+  page.changeView({ currentTarget: { dataset: { view: 'day' } } });
+  assert.equal(page.data.calendarScrollTop, 0);
+  assert.equal(focusCount, 1);
+});
+
+test('日历画布以首次有效移动锁定手势方向', () => {
+  const page = loadCalendarPage();
+  const offsets = [];
+  page.animateRangeChange = (offset) => offsets.push(offset);
+
+  page.onCanvasTouchStart({ touches: [{ clientX: 0, clientY: 0 }] });
+  page.onCanvasTouchMove({ touches: [{ clientX: 4, clientY: 20 }] });
+  page.onCanvasTouchEnd({ changedTouches: [{ clientX: 100, clientY: 24 }] });
+  assert.deepEqual(offsets, []);
+
+  page.onCanvasTouchStart({ touches: [{ clientX: 0, clientY: 0 }] });
+  page.onCanvasTouchMove({ touches: [{ clientX: 20, clientY: 4 }] });
+  page.onCanvasTouchEnd({ changedTouches: [{ clientX: 60, clientY: 80 }] });
+  assert.deepEqual(offsets, [-1]);
+
+  const wxml = fs.readFileSync(calendarWxmlPath, 'utf8');
+  assert.match(wxml, /bindtouchmove="onCanvasTouchMove"/);
+});
+
+test('日历重复实例详情入口按模式提交单次修改或后续修订', () => {
+  const page = loadCalendarPage();
+  const calls = [];
+  page.saveOccurrenceOverride = () => calls.push('occurrence');
+  page.saveRuleFollowing = () => calls.push('following');
+
+  page.data.editorMode = 'occurrence';
+  page.submitOccurrenceEditor();
+  page.data.editorMode = 'following';
+  page.submitOccurrenceEditor();
+
+  assert.deepEqual(calls, ['occurrence', 'following']);
+});
+
+test('日历横向切换在动画中点更新日期并在结束后解除动画锁', () => {
+  const originalSetTimeout = global.setTimeout;
+  const originalClearTimeout = global.clearTimeout;
+  const scheduled = [];
+  global.setTimeout = (callback, delay) => {
+    scheduled.push({ callback, delay });
+    return scheduled.length;
+  };
+  global.clearTimeout = () => {};
+  try {
+    const page = loadCalendarPage();
+    page.data.view = 'day';
+    page.data.anchor = new Date(2026, 7, 8, 12, 0).getTime();
+    let refreshCount = 0;
+    page.refresh = () => { refreshCount += 1; };
+
+    page.animateRangeChange(1);
+    assert.equal(page.data.pageTurnClass, 'page-turn-next');
+    assert.deepEqual(scheduled.map((item) => item.delay), [140, 280]);
+
+    scheduled[0].callback();
+    assert.equal(new Date(page.data.anchor).getDate(), 9);
+    assert.equal(refreshCount, 1);
+
+    scheduled[1].callback();
+    assert.equal(page.data.pageTurnClass, '');
+    assert.equal(page.pageTurnEndTimer, null);
+  } finally {
+    global.setTimeout = originalSetTimeout;
+    global.clearTimeout = originalClearTimeout;
+  }
+});
+
+test('日历当前时间线与今天范围状态可随本地时间刷新', () => {
+  const page = loadCalendarPage();
+  page.data.view = 'day';
+  page.data.anchor = new Date(2026, 7, 8, 12, 0).getTime();
+  page.data.currentTimeLineStyle = '';
+  page.data.rangeIncludesToday = false;
+
+  page.refreshCurrentTimeLine(new Date(2026, 7, 8, 8, 30).getTime());
+  assert.equal(page.data.currentTimeLineStyle, 'top: 748.00rpx;');
+  assert.equal(page.data.rangeIncludesToday, true);
+
+  page.refreshCurrentTimeLine(new Date(2026, 7, 9, 8, 30).getTime());
+  assert.equal(page.data.currentTimeLineStyle, '');
+  assert.equal(page.data.rangeIncludesToday, false);
+});
+
+test('日历计划块按资料库任务状态显示关联入口，日志编辑只选择标签和计划块', () => {
   const script = fs.readFileSync(calendarScriptPath, 'utf8');
   const wxml = fs.readFileSync(calendarWxmlPath, 'utf8');
+  const wxss = fs.readFileSync(calendarWxssPath, 'utf8');
   assert.match(wxml, /任务（必选）/);
+  assert.match(wxml, /show-confirm="\{\{true\}\}"/);
+  assert.match(wxml, /wx:if="\{\{planEditor \|\| hasAnyTasks\}\}"[^>]*task-picker-trigger[^>]*bindtap="openTaskPicker"/);
+  assert.match(script, /title: '新建同名任务'/);
+  assert.match(wxml, /task-option-create/);
+  assert.match(wxml, /<sheet-header title="选择任务"[\s\S]*<scroll-view class="task-option-list" scroll-y="\{\{true\}\}" enable-flex="\{\{true\}\}" style="height: \{\{taskPickerListHeight\}\}rpx;"/);
+  assert.match(wxss, /\.task-picker-modal\s*\{[^}]*max-height:\s*72vh;[^}]*overflow:\s*hidden;/s);
+  assert.match(wxss, /\.task-option-list\s*\{[^}]*display:\s*flex;[^}]*flex-direction:\s*column;[^}]*overflow:\s*hidden;/s);
+  assert.match(script, /TASK_PICKER_MAX_LIST_HEIGHT_RPX\s*=\s*600/);
+  assert.doesNotMatch(wxml, /<picker wx:if="\{\{hasAnyTasks\}\}"[^>]*data-key="taskIndex"/);
+  assert.doesNotMatch(wxml, /请先在“计划”页创建一个未完成任务/);
   assert.match(wxml, /项目归属（由任务决定）/);
   assert.match(wxml, /logEventIndex/);
   assert.match(wxml, /wx:for="\{\{logTags\}\}"/);
@@ -120,6 +268,14 @@ test('日历计划块只选择必选任务，日志编辑只选择标签和计�
   const page = loadCalendarPage();
   assert.equal(page.data.maxTagsPerLog, 10);
   assert.match(wxml, /class="tag-chip tag-input" focus maxlength="10"/);
+  page.data.planFormTasks = [{ id: '', title: '请选择任务' }].concat(
+    Array.from({ length: 8 }, (_, index) => ({ id: `task-${index}`, title: `任务 ${index}` }))
+  );
+  page.openTaskPicker();
+  assert.equal(page.data.taskPickerListHeight, 600);
+  page.data.planFormTasks = page.data.planFormTasks.slice(0, 3);
+  page.openTaskPicker();
+  assert.equal(page.data.taskPickerListHeight, 204);
 });
 
 test('日历日志编辑器分别提供开始结束日期、秒级时间和暂停时长', () => {
@@ -191,9 +347,21 @@ test('日历页：持久化标题输入以 25 个 Unicode 码点截断', () => {
   assert.equal(page.data.title, emoji.repeat(25));
 
   const wxml = fs.readFileSync(calendarWxmlPath, 'utf8');
-  for (const key of ['title', 'editorTitle', 'planTitle']) {
+  for (const key of ['title', 'editorTitle']) {
     assert.match(wxml, new RegExp(`maxlength="-1"[^>]*data-key="${key}"[^>]*bindinput="onTitleField"`));
   }
+});
+
+test('日历新增计划的开始结束时间复用计划页标签、日期和时间三列布局', () => {
+  const wxml = fs.readFileSync(calendarWxmlPath, 'utf8');
+  const wxss = fs.readFileSync(calendarWxssPath, 'utf8');
+  assert.match(wxml, /class="plan-time-label">开始时间<\/view>/);
+  assert.match(wxml, /class="plan-time-label">结束时间<\/view>/);
+  assert.equal((wxml.match(/class="plan-time-picker plan-time-date"/g) || []).length, 2);
+  assert.equal((wxml.match(/class="plan-time-picker plan-time-clock"/g) || []).length, 2);
+  assert.match(wxss, /\.plan-time-label\s*\{[^}]*flex:\s*0 0 112rpx;[^}]*font-size:\s*26rpx;/s);
+  assert.match(wxss, /\.plan-time-date\s*\{[^}]*flex:\s*1;[^}]*min-width:\s*0;/s);
+  assert.match(wxss, /\.plan-time-clock\s*\{[^}]*flex:\s*0 0 180rpx;/s);
 });
 
 test('日历创建计划只向服务提交任务关联', () => {
@@ -219,6 +387,7 @@ test('日历创建计划只向服务提交任务关联', () => {
       endDate: '2026-07-30',
       endTime: '10:00',
       tasks: [{ id: 'task_review', title: '评审任务' }],
+      hasAnyTasks: true,
       taskIndex: 0,
       repeatEnabled: false
     });
@@ -229,6 +398,322 @@ test('日历创建计划只向服务提交任务关联', () => {
   } finally {
     global.getApp = originalGetApp;
     global.wx = originalWx;
+  }
+});
+
+test('日历在资料库完全无任务时通过原子入口创建同名 TODO 与计划', () => {
+  const originalGetApp = global.getApp;
+  const originalWx = global.wx;
+  const received = [];
+  global.getApp = () => ({
+    globalData: {
+      bootstrap: {
+        applicationService: {
+          createCalendarEventWithNewTask(input) { received.push({ type: 'event', input }); },
+          createRecurringPlanWithNewTask(input) { received.push({ type: 'repeat', input }); }
+        }
+      }
+    }
+  });
+  global.wx = { showToast() {} };
+  try {
+    const base = {
+      title: '自动生成 TODO',
+      startDate: '2026-07-30',
+      startTime: '09:00',
+      endDate: '2026-07-30',
+      endTime: '10:00',
+      tasks: [{ id: '', title: '请选择任务' }],
+      hasAnyTasks: false,
+      hasTaskOptions: false,
+      taskIndex: 0
+    };
+    const eventPage = loadCalendarPage();
+    Object.assign(eventPage.data, base, { repeatEnabled: false });
+    eventPage.refresh = () => {};
+    eventPage.createPlan();
+
+    const repeatPage = loadCalendarPage();
+    Object.assign(repeatPage.data, base, { repeatEnabled: true, frequencyIndex: 0 });
+    repeatPage.refresh = () => {};
+    repeatPage.createPlan();
+
+    assert.equal(received[0].type, 'event');
+    assert.equal(received[1].type, 'repeat');
+    assert.equal(received[0].input.title, '自动生成 TODO');
+    assert.equal(Object.prototype.hasOwnProperty.call(received[0].input, 'taskId'), false);
+    assert.equal(Object.prototype.hasOwnProperty.call(received[1].input, 'taskId'), false);
+  } finally {
+    global.getApp = originalGetApp;
+    global.wx = originalWx;
+  }
+});
+
+test('日历已有任务时选择新建同名任务走原子入口', () => {
+  const originalGetApp = global.getApp;
+  const originalWx = global.wx;
+  const received = [];
+  global.getApp = () => ({
+    globalData: {
+      bootstrap: {
+        applicationService: {
+          createCalendarEventWithNewTask(input) { received.push({ type: 'event', input }); },
+          createRecurringPlanWithNewTask(input) { received.push({ type: 'repeat', input }); }
+        }
+      }
+    }
+  });
+  global.wx = { showToast() {} };
+  try {
+    const base = {
+      title: '选择后新建 TODO',
+      startDate: '2026-07-30',
+      startTime: '09:00',
+      endDate: '2026-07-30',
+      endTime: '10:00',
+      tasks: [
+        { id: '', title: '请选择任务' },
+        { id: '__create_same_title_task__', title: '新建同名任务', optionType: 'create' },
+        { id: 'task_existing', title: '已有任务', optionType: 'task' }
+      ],
+      hasAnyTasks: true,
+      taskIndex: 1
+    };
+    const eventPage = loadCalendarPage();
+    Object.assign(eventPage.data, base, { repeatEnabled: false });
+    eventPage.refresh = () => {};
+    eventPage.createPlan();
+
+    const repeatPage = loadCalendarPage();
+    Object.assign(repeatPage.data, base, { repeatEnabled: true, frequencyIndex: 0 });
+    repeatPage.refresh = () => {};
+    repeatPage.createPlan();
+
+    assert.deepEqual(received.map((item) => item.type), ['event', 'repeat']);
+    assert.equal(Object.prototype.hasOwnProperty.call(received[0].input, 'taskId'), false);
+    assert.equal(Object.prototype.hasOwnProperty.call(received[1].input, 'taskId'), false);
+  } finally {
+    global.getApp = originalGetApp;
+    global.wx = originalWx;
+  }
+});
+
+test('日历创建计划后使用服务实际返回的事件定位', () => {
+  const originalGetApp = global.getApp;
+  const originalWx = global.wx;
+  const createdEvent = {
+    id: 'event_created',
+    startedAt: new Date(2026, 7, 8, 18, 0).getTime(),
+    endedAt: new Date(2026, 7, 8, 19, 0).getTime()
+  };
+  global.getApp = () => ({
+    globalData: {
+      bootstrap: {
+        applicationService: {
+          createRecurringPlan() { return { rule: { id: 'rule_created' }, event: createdEvent }; }
+        }
+      }
+    }
+  });
+  global.wx = { showToast() {} };
+  try {
+    const page = loadCalendarPage();
+    Object.assign(page.data, {
+      title: '定位新计划',
+      startDate: '2026-08-08',
+      startTime: '18:00',
+      endDate: '2026-08-08',
+      endTime: '19:00',
+      tasks: [{ id: 'task_existing', title: '已有任务', optionType: 'task' }],
+      hasAnyTasks: true,
+      taskIndex: 0,
+      repeatEnabled: true,
+      frequencyIndex: 0,
+      repeatWeekdays: []
+    });
+    let revealed;
+    page.revealCreatedPlan = (event) => { revealed = event; };
+
+    page.createPlan();
+
+    assert.equal(revealed, createdEvent);
+    assert.equal(page.data.isCreateOpen, false);
+  } finally {
+    global.getApp = originalGetApp;
+    global.wx = originalWx;
+  }
+});
+
+test('日历创建范围外计划时切换锚点，范围内计划保留当前范围', () => {
+  const originalWx = global.wx;
+  global.wx = {};
+  try {
+    const page = loadCalendarPage();
+    page.data.view = 'day';
+    page.data.anchor = new Date(2026, 7, 8, 12, 0).getTime();
+    page.data.calendarScrollTop = 160;
+    page.currentCalendarScrollTop = 160;
+    page.viewScrollTops = { day: 160 };
+    const revealedIds = [];
+    let refreshCount = 0;
+    page.refresh = (callback) => {
+      refreshCount += 1;
+      if (callback) callback();
+    };
+    page.scrollCreatedPlanIntoView = (id) => { revealedIds.push(id); };
+
+    page.revealCreatedPlan({
+      id: 'event_same_day',
+      startedAt: new Date(2026, 7, 8, 18, 0).getTime(),
+      endedAt: new Date(2026, 7, 8, 19, 0).getTime()
+    });
+    assert.equal(page.data.calendarScrollTop, 160);
+    assert.equal(new Date(page.data.anchor).getDate(), 8);
+
+    page.revealCreatedPlan({
+      id: 'event_next_day',
+      startedAt: new Date(2026, 7, 9, 9, 0).getTime(),
+      endedAt: new Date(2026, 7, 9, 10, 0).getTime()
+    });
+    assert.equal(page.data.calendarScrollTop, 0);
+    assert.equal(page.currentCalendarScrollTop, 0);
+    assert.equal(new Date(page.data.anchor).getDate(), 9);
+    assert.equal(refreshCount, 2);
+    assert.deepEqual(revealedIds, ['event_same_day', 'event_next_day']);
+  } finally {
+    global.wx = originalWx;
+  }
+});
+
+test('日历只在新建计划块不完整可见时平滑滚动到其附近', () => {
+  const originalWx = global.wx;
+  const originalSetTimeout = global.setTimeout;
+  const originalClearTimeout = global.clearTimeout;
+  const selectors = [];
+  const scheduled = [];
+  let rects = [];
+  global.setTimeout = (callback, delay) => {
+    scheduled.push({ callback, delay });
+    return scheduled.length;
+  };
+  global.clearTimeout = () => {};
+  global.wx = {
+    createSelectorQuery() {
+      return {
+        select(selector) {
+          selectors.push(selector);
+          return this;
+        },
+        boundingClientRect() { return this; },
+        exec(callback) { callback(rects); }
+      };
+    }
+  };
+  try {
+    const page = loadCalendarPage();
+    page.data.view = 'day';
+    page.data.calendarScrollTop = 120;
+    page.currentCalendarScrollTop = 120;
+    page.viewScrollTops = { day: 120 };
+
+    rects = [
+      { top: 100, bottom: 500, height: 400 },
+      { top: 200, bottom: 254, height: 54 }
+    ];
+    page.scrollCreatedPlanIntoView('event_visible');
+    assert.equal(page.data.calendarScrollTop, 120);
+
+    rects = [
+      { top: 100, bottom: 500, height: 400 },
+      { top: 600, bottom: 654, height: 54 }
+    ];
+    page.scrollCreatedPlanIntoView('event_hidden');
+    assert.equal(page.data.calendarScrollTop, 447);
+    assert.equal(page.data.calendarScrollWithAnimation, true);
+    assert.equal(page.data.scrollIntoView, 'calendar-block-event_hidden');
+    assert.equal(page.currentCalendarScrollTop, 447);
+    assert.equal(page.viewScrollTops.day, 447);
+    assert.deepEqual(scheduled.map((item) => item.delay), [360]);
+    assert.deepEqual(selectors, [
+      '.calendar-scroll',
+      '#calendar-block-event_visible',
+      '.calendar-scroll',
+      '#calendar-block-event_hidden'
+    ]);
+
+    const wxml = fs.readFileSync(calendarWxmlPath, 'utf8');
+    assert.match(wxml, /scroll-with-animation="\{\{calendarScrollWithAnimation\}\}"/);
+    assert.match(wxml, /id="\{\{item\.domId\}\}"/);
+  } finally {
+    global.wx = originalWx;
+    global.setTimeout = originalSetTimeout;
+    global.clearTimeout = originalClearTimeout;
+  }
+});
+
+test('日历新计划节点暂未完成渲染时仍按 ID 定位并在动画后复核', () => {
+  const originalWx = global.wx;
+  const originalSetTimeout = global.setTimeout;
+  const originalClearTimeout = global.clearTimeout;
+  const scheduled = [];
+  global.setTimeout = (callback, delay) => {
+    scheduled.push({ callback, delay });
+    return scheduled.length;
+  };
+  global.clearTimeout = () => {};
+  global.wx = {
+    createSelectorQuery() {
+      return {
+        select() { return this; },
+        boundingClientRect() { return this; },
+        exec(callback) { callback([{ top: 100, bottom: 500, height: 400 }, null]); }
+      };
+    }
+  };
+  try {
+    const page = loadCalendarPage();
+    page.scrollCreatedPlanIntoView('event_rendering');
+
+    assert.equal(page.data.scrollIntoView, 'calendar-block-event_rendering');
+    assert.equal(page.data.calendarScrollWithAnimation, true);
+    assert.deepEqual(scheduled.map((item) => item.delay), [360]);
+  } finally {
+    global.wx = originalWx;
+    global.setTimeout = originalSetTimeout;
+    global.clearTimeout = originalClearTimeout;
+  }
+});
+
+test('日历只有已完成任务时仍提供新建同名任务且不混入编辑任务选项', () => {
+  const originalGetApp = global.getApp;
+  global.getApp = () => ({
+    globalData: {
+      bootstrap: {
+        applicationService: {
+          snapshot() {
+            return {
+              projects: [],
+              tasks: [{ id: 'task_completed', title: '已完成任务', status: 'completed' }],
+              calendarEvents: []
+            };
+          },
+          timeline() { return []; }
+        }
+      }
+    }
+  });
+  try {
+    const page = loadCalendarPage();
+    page.refresh();
+    assert.equal(page.data.hasAnyTasks, true);
+    assert.equal(page.data.hasTaskOptions, false);
+    assert.deepEqual(
+      page.data.tasks.map((item) => item.optionType || 'placeholder'),
+      ['placeholder', 'create']
+    );
+    assert.deepEqual(page.data.planTasks.map((item) => item.id), ['']);
+  } finally {
+    global.getApp = originalGetApp;
   }
 });
 
@@ -258,13 +743,16 @@ test('日历按任务当前 projectId 派生只读项目标题', () => {
   try {
     const page = loadCalendarPage();
     page.refresh();
-    assert.equal(page.data.tasks[1].derivedProjectName, '重命名后的项目');
+    assert.equal(
+      page.data.tasks.find((item) => item.id === 'task_plan').derivedProjectName,
+      '重命名后的项目'
+    );
   } finally {
     global.getApp = originalGetApp;
   }
 });
 
-test('日历只在重叠日志卡片显示低干扰的实际与候选计数', () => {
+test('日历只在重叠条目的详情层显示低干扰的实际与候选计数', () => {
   const originalGetApp = global.getApp;
   const snapshot = { projects: [], tasks: [], calendarEvents: [] };
   const timeline = [{
@@ -303,6 +791,7 @@ test('日历只在重叠日志卡片显示低干扰的实际与候选计数', ()
   });
   try {
     const page = loadCalendarPage();
+    page.data.anchor = timeline[0].startedAt;
     page.refresh();
     const itemById = new Map(page.data.timeline.map((item) => [item.id, item]));
 
@@ -320,9 +809,9 @@ test('日历只在重叠日志卡片显示低干扰的实际与候选计数', ()
     const wxml = fs.readFileSync(calendarWxmlPath, 'utf8');
     const wxss = fs.readFileSync(calendarWxssPath, 'utf8');
     assert.match(wxml, /item\.overlapMeta[^}]*is-overlapping/);
-    assert.match(wxml, /wx:if="\{\{item\.displayOverlap\}\}"[^>]*overlap-note/);
-    assert.match(wxss, /\.timeline-item\.is-overlapping\s*\{[^}]*background:\s*#f8f5ee;[^}]*box-shadow:/s);
-    assert.doesNotMatch(wxss, /\.timeline-item\.is-overlapping\s*\{[^}]*border-left:/s);
+    assert.match(wxml, /wx:if="\{\{detailItem\.displayOverlap\}\}"[^>]*detail-overlap/);
+    assert.match(wxss, /\.calendar-block\.is-overlapping\s*\{[^}]*box-shadow:/s);
+    assert.doesNotMatch(wxss, /\.calendar-block\.is-overlapping\s*\{[^}]*border-left:/s);
   } finally {
     global.getApp = originalGetApp;
   }
@@ -403,25 +892,30 @@ test('尚未结束的失效任务计划可补绑任务，历史失效计划保�
     page.openPlanEditor({
       currentTarget: { dataset: { item: itemById.get('event_repairable') } }
     });
-    assert.equal(page.data.planTaskIndex, 0);
-    assert.equal(page.data.planTasks[0].title, '请选择任务');
+    assert.equal(page.data.isCreateOpen, true);
+    assert.equal(page.data.title, itemById.get('event_repairable').title);
+    assert.equal(page.data.planFormTaskIndex, 0);
+    assert.equal(page.data.planFormTasks[0].title, '请选择任务');
+    assert.equal(page.data.planFormTasks.some((item) => item.optionType === 'create'), false);
 
     page.refresh = () => {};
     page.savePlanEditor();
     assert.equal(updates.length, 0);
     assert.equal(toasts.at(-1).title, '请选择任务');
 
-    page.data.planTasks.push({ id: 'task_missing', title: '已失效任务' });
-    page.data.planTaskIndex = page.data.planTasks.length - 1;
+    page.data.planFormTasks.push({ id: 'task_missing', title: '已失效任务' });
+    page.data.planFormTaskIndex = page.data.planFormTasks.length - 1;
     page.savePlanEditor();
     assert.equal(updates.length, 0);
     assert.equal(toasts.at(-1).title, '请选择任务');
 
-    page.data.planTaskIndex = page.data.planTasks.findIndex((item) => item.id === 'task_live');
+    page.data.planFormTaskIndex = page.data.planFormTasks.findIndex((item) => item.id === 'task_live');
     page.savePlanEditor();
     assert.equal(updates.length, 1);
     assert.equal(updates[0].id, 'event_repairable');
     assert.equal(updates[0].input.taskId, 'task_live');
+    assert.equal(page.data.isCreateOpen, false);
+    assert.equal(page.data.planEditor, null);
   } finally {
     global.getApp = originalGetApp;
     global.wx = originalWx;

@@ -1,52 +1,160 @@
 <view class="page">
-  <view class="eyebrow">ONE TIMELINE, THREE KINDS OF DATA</view>
-  <view class="view-tabs"><view wx:for="{{views}}" wx:key="*this" class="tab {{view === item ? 'active' : ''}}" data-view="{{item}}" bindtap="changeView">{{item === 'day' ? '日' : item === 'week' ? '周' : item === 'month' ? '月' : '年'}}</view></view>
-  <view class="range"><button class="nav-button" data-offset="-1" bindtap="moveRange">‹</button><view class="range-label">{{rangeLabel}}</view><button class="nav-button" data-offset="1" bindtap="moveRange">›</button></view>
-
-  <view class="card form-card">
-    <view class="section-title">新增计划</view>
-    <input class="input" maxlength="-1" placeholder="计划标题" value="{{title}}" data-key="title" bindinput="onTitleField" />
-    <view class="datetime-row"><picker mode="date" value="{{startDate}}" data-key="startDate" bindchange="onField"><view>{{startDate}}</view></picker><picker mode="time" value="{{startTime}}" data-key="startTime" bindchange="onField"><view>{{startTime}}</view></picker></view>
-    <view class="datetime-row"><picker mode="date" value="{{endDate}}" data-key="endDate" bindchange="onField"><view>{{endDate}}</view></picker><picker mode="time" value="{{endTime}}" data-key="endTime" bindchange="onField"><view>{{endTime}}</view></picker></view>
-    <picker range="{{tasks}}" range-key="title" value="{{taskIndex}}" data-key="taskIndex" bindchange="onPicker"><view class="picker">任务（必选）：{{tasks[taskIndex].title || '请选择任务'}}</view></picker>
-    <view wx:if="{{tasks[taskIndex].id}}" class="derived-field">项目归属（由任务决定）：{{tasks[taskIndex].derivedProjectName || '未关联项目'}}</view>
-    <view class="priority-row"><view>优先级</view><view class="priority-choices"><view class="priority-choice priority-1 {{priority === 1 ? 'selected' : ''}}" data-priority="1" bindtap="choosePriority"></view><view class="priority-choice priority-2 {{priority === 2 ? 'selected' : ''}}" data-priority="2" bindtap="choosePriority"></view><view class="priority-choice priority-3 {{priority === 3 ? 'selected' : ''}}" data-priority="3" bindtap="choosePriority"></view></view></view>
-    <view class="switch-row"><view>固定日程</view><switch checked="{{repeatEnabled}}" color="#55725e" data-key="repeatEnabled" bindchange="onSwitch" /></view>
-    <view wx:if="{{repeatEnabled}}" class="repeat-options"><picker range="{{frequencyLabels}}" value="{{frequencyIndex}}" data-key="frequencyIndex" bindchange="onPicker"><view class="picker">{{frequencyLabels[frequencyIndex]}}</view></picker><checkbox-group wx:if="{{frequencyIndex === 1}}" class="weekday-group" bindchange="onWeekdaysChange"><label wx:for="{{weekdayLabels}}" wx:key="*this" class="weekday"><checkbox value="{{index}}" checked="{{repeatWeekdays.indexOf(index) !== -1}}" color="#55725e" />{{item}}</label></checkbox-group><input class="input" type="number" placeholder="重复间隔，例如 1" value="{{interval}}" data-key="interval" bindinput="onField" /></view>
-    <view wx:if="{{!hasTaskOptions}}" class="form-hint">请先在“计划”页创建一个未完成任务。</view>
-    <button class="primary {{!hasTaskOptions ? 'is-disabled' : ''}}" disabled="{{!hasTaskOptions}}" bindtap="createPlan">{{repeatEnabled ? '创建固定日程' : '创建计划块'}}</button>
-  </view>
-
-  <view class="legend"><view><text class="dot plan-dot"></text>计划</view><view><text class="dot candidate-dot"></text>候选</view><view><text class="dot actual-dot"></text>实际</view></view>
-  <view wx:if="{{!timeline.length}}" class="empty">这个范围内还没有计划或记录。</view>
-  <view wx:for="{{timeline}}" wx:key="id" class="timeline-item {{item.type}} {{item.overlapMeta ? 'is-overlapping' : ''}}">
-    <view class="priority-mark priority-{{item.priority}}"></view>
-    <view class="timeline-main">
-      <view class="item-title">{{item.title}}</view>
-      <view class="muted">{{item.displayTime}} · {{item.displayKind}}</view>
-      <view wx:if="{{item.displayOverlap}}" class="overlap-note">{{item.displayOverlap}}</view>
-      <view class="actions">
-        <button wx:if="{{item.type === 'plan' && item.canAssociate}}" class="text-button" data-item="{{item}}" bindtap="startTimerFromPlan">从此开始计时</button>
-        <button wx:if="{{item.type === 'plan' && !item.virtual && item.canEditPlan}}" class="text-button" data-item="{{item}}" bindtap="openPlanEditor">编辑计划</button>
-        <button wx:if="{{item.type === 'plan' && !item.virtual}}" class="danger-button" data-item="{{item}}" bindtap="deletePlan">删除计划</button>
-        <button wx:if="{{item.virtual}}" class="text-button" data-item="{{item}}" bindtap="confirmItem">确认</button>
-        <button wx:if="{{item.virtual}}" class="text-button" data-item="{{item}}" bindtap="openOccurrenceEditor">修改</button>
-        <button wx:if="{{item.virtual}}" class="danger-button" data-item="{{item}}" bindtap="skipVirtualOccurrence">跳过</button>
-        <button wx:if="{{item.type === 'candidate' && !item.virtual}}" class="text-button" data-item="{{item}}" bindtap="confirmItem">确认</button>
-        <button wx:if="{{item.type === 'candidate' && !item.virtual}}" class="text-button" data-item="{{item}}" bindtap="openLogEditor">编辑确认</button>
-        <button wx:if="{{item.type === 'candidate' && !item.virtual}}" class="danger-button" data-item="{{item}}" bindtap="discardCandidate">作废</button>
-        <button wx:if="{{item.type === 'confirmed'}}" class="text-button" data-item="{{item}}" bindtap="openLogEditor">编辑</button>
-        <button wx:if="{{item.type === 'confirmed'}}" class="danger-button" data-item="{{item}}" bindtap="deleteConfirmed">删除</button>
+  <view class="calendar-toolbar">
+    <view class="toolbar-left">
+      <view class="range-label">{{rangeLabel}}</view>
+      <view wx:if="{{!timeline.length}}" class="range-empty">这个范围内还没有计划或记录。</view>
+    </view>
+    <view class="toolbar-right">
+      <view class="toolbar-controls">
+        <view class="today-button {{rangeIncludesToday ? 'is-current-range' : ''}}" role="button" aria-label="回到今天" bindtap="goToday">今天</view>
+        <view class="view-tabs">
+          <view wx:for="{{views}}" wx:key="*this" class="tab {{view === item ? 'active' : ''}}" role="button" aria-label="切换到{{item === 'year' ? '年' : item === 'month' ? '月' : item === 'week' ? '周' : '日'}}视图" data-view="{{item}}" bindtap="changeView">{{item === 'year' ? '年' : item === 'month' ? '月' : item === 'week' ? '周' : '日'}}</view>
+        </view>
+      </view>
+      <view class="calendar-legend" aria-label="日历状态图例">
+        <view class="legend-item"><view class="legend-dot plan"></view><text>计划</text></view>
+        <view class="legend-item"><view class="legend-dot candidate"></view><text>候选</text></view>
+        <view class="legend-item"><view class="legend-dot actual"></view><text>实际</text></view>
       </view>
     </view>
   </view>
 
-  <view wx:if="{{editor}}" class="modal-mask"><view class="modal"><sheet-header title="修改重复实例" show-confirm="{{true}}" bind:confirm="saveOccurrenceOverride" bind:cancel="closeOccurrenceEditor" /><input class="input" maxlength="-1" value="{{editorTitle}}" data-key="editorTitle" bindinput="onTitleField" /><picker mode="date" value="{{editorDate}}" data-key="editorDate" bindchange="onEditorField"><view class="picker">{{editorDate}}</view></picker><view class="datetime-row"><picker mode="time" value="{{editorStart}}" data-key="editorStart" bindchange="onEditorField"><view>{{editorStart}}</view></picker><picker mode="time" value="{{editorEnd}}" data-key="editorEnd" bindchange="onEditorField"><view>{{editorEnd}}</view></picker></view><view class="priority-choices"><view class="priority-choice priority-1 {{editorPriority === 1 ? 'selected' : ''}}" data-priority="1" bindtap="chooseEditorPriority"></view><view class="priority-choice priority-2 {{editorPriority === 2 ? 'selected' : ''}}" data-priority="2" bindtap="chooseEditorPriority"></view><view class="priority-choice priority-3 {{editorPriority === 3 ? 'selected' : ''}}" data-priority="3" bindtap="chooseEditorPriority"></view></view><button class="secondary" bindtap="saveRuleFollowing">修改此项及后续</button></view></view>
+  <scroll-view
+    class="calendar-scroll {{pageTurnClass}}"
+    scroll-y="{{true}}"
+    scroll-top="{{calendarScrollTop}}"
+    scroll-into-view="{{scrollIntoView}}"
+    scroll-with-animation="{{calendarScrollWithAnimation}}"
+    enhanced="{{true}}"
+    show-scrollbar="{{false}}"
+    bindscroll="onCanvasScroll"
+    bindtouchstart="onCanvasTouchStart"
+    bindtouchmove="onCanvasTouchMove"
+    bindtouchend="onCanvasTouchEnd"
+    bindtouchcancel="onCanvasTouchCancel"
+  >
+    <view class="calendar-grid" style="height: {{canvasHeight}}rpx;">
+      <view class="time-axis" style="height: {{canvasHeight}}rpx;">
+        <view wx:for="{{timeRows}}" wx:key="key" id="calendar-time-row-{{index}}" class="time-row" style="{{item.style}}">
+          <text>{{item.label}}</text>
+        </view>
+      </view>
+      <view class="schedule-canvas" style="height: {{canvasHeight}}rpx;">
+        <view wx:for="{{timeRows}}" wx:key="key" class="grid-row" style="{{item.style}}"></view>
+        <view wx:if="{{currentTimeLineStyle}}" class="current-time-line" style="{{currentTimeLineStyle}}" aria-hidden="true"></view>
+        <view
+          wx:for="{{timeline}}"
+          wx:key="renderKey"
+          id="{{item.domId}}"
+          class="calendar-block {{item.visualType}} {{item.isSegmented ? 'is-segmented' : ''}} {{item.continuesBefore ? 'continues-before' : ''}} {{item.continuesAfter ? 'continues-after' : ''}} {{item.overlapMeta ? 'is-overlapping' : ''}}"
+          style="{{item.blockStyle}}"
+          role="button"
+          aria-label="{{item.ariaLabel}}"
+          data-item="{{item}}"
+          bindtap="openItemDetail"
+        >
+          <view wx:if="{{item.continuesBefore}}" class="continuation continuation-before"></view>
+          <view class="block-title">{{item.title}}</view>
+          <view wx:if="{{item.continuesAfter}}" class="continuation continuation-after"></view>
+        </view>
+      </view>
+      <view class="calendar-grid-bottom-line" aria-hidden="true"></view>
+    </view>
+    <view class="calendar-scroll-safe-space" aria-hidden="true"></view>
+  </scroll-view>
 
-  <view wx:if="{{planEditor}}" class="modal-mask"><view class="modal"><sheet-header title="编辑计划块" show-confirm="{{true}}" bind:confirm="savePlanEditor" bind:cancel="closePlanEditor" /><input class="input" maxlength="-1" value="{{planTitle}}" data-key="planTitle" bindinput="onTitleField" /><picker mode="date" value="{{planStartDate}}" data-key="planStartDate" bindchange="onEditorField"><view class="picker">开始日期：{{planStartDate}}</view></picker><view class="datetime-row"><picker mode="time" value="{{planStartTime}}" data-key="planStartTime" bindchange="onEditorField"><view>{{planStartTime}}</view></picker><picker mode="time" value="{{planEndTime}}" data-key="planEndTime" bindchange="onEditorField"><view>{{planEndTime}}</view></picker></view><picker mode="date" value="{{planEndDate}}" data-key="planEndDate" bindchange="onEditorField"><view class="picker">结束日期：{{planEndDate}}</view></picker><picker range="{{planTasks}}" range-key="title" value="{{planTaskIndex}}" data-key="planTaskIndex" bindchange="onPicker"><view class="picker">任务（必选）：{{planTasks[planTaskIndex].title || '请选择任务'}}</view></picker><view wx:if="{{planTasks[planTaskIndex].id}}" class="derived-field">项目归属（由任务决定）：{{planTasks[planTaskIndex].derivedProjectName || '未关联项目'}}</view><view class="priority-choices"><view class="priority-choice priority-1 {{planPriority === 1 ? 'selected' : ''}}" data-priority="1" bindtap="choosePlanPriority"></view><view class="priority-choice priority-2 {{planPriority === 2 ? 'selected' : ''}}" data-priority="2" bindtap="choosePlanPriority"></view><view class="priority-choice priority-3 {{planPriority === 3 ? 'selected' : ''}}" data-priority="3" bindtap="choosePlanPriority"></view></view></view></view>
+  <view class="calendar-fab" role="button" aria-label="新增计划" bindtap="openCreatePlan">+</view>
 
-  <view wx:if="{{logEditor}}" class="modal-mask">
-    <view class="modal">
+  <view wx:if="{{isCreateOpen}}" class="modal-mask" bindtap="closeCreatePlan">
+    <view class="modal create-modal" catchtap="noop">
+      <sheet-header title="{{planEditor ? '编辑计划' : '新增计划'}}" show-confirm="{{true}}" confirm-text="{{planEditor ? '保存' : '创建'}}" bind:confirm="submitPlanForm" bind:cancel="closeCreatePlan" />
+      <input class="input" maxlength="-1" placeholder="计划标题" value="{{title}}" data-key="title" bindinput="onTitleField" />
+      <view class="plan-time-row"><view class="plan-time-label">开始时间</view><picker class="plan-time-picker plan-time-date" mode="date" value="{{startDate}}" data-key="startDate" bindchange="onField"><view>{{startDate}}</view></picker><picker class="plan-time-picker plan-time-clock" mode="time" value="{{startTime}}" data-key="startTime" bindchange="onField"><view>{{startTime}}</view></picker></view>
+      <view class="plan-time-row"><view class="plan-time-label">结束时间</view><picker class="plan-time-picker plan-time-date" mode="date" value="{{endDate}}" data-key="endDate" bindchange="onField"><view>{{endDate}}</view></picker><picker class="plan-time-picker plan-time-clock" mode="time" value="{{endTime}}" data-key="endTime" bindchange="onField"><view>{{endTime}}</view></picker></view>
+      <view wx:if="{{planEditor || hasAnyTasks}}" class="picker task-picker-trigger {{planFormTasks[planFormTaskIndex].optionType === 'create' ? 'is-create-task' : ''}}" role="button" aria-label="选择任务，当前为{{planFormTasks[planFormTaskIndex].title || '请选择任务'}}" aria-expanded="{{isTaskPickerOpen}}" bindtap="openTaskPicker">任务（必选）：{{planFormTasks[planFormTaskIndex].title || '请选择任务'}}<text class="task-picker-arrow">›</text></view>
+      <view wx:if="{{(planEditor || hasAnyTasks) && planFormTasks[planFormTaskIndex].optionType === 'task'}}" class="derived-field">项目归属（由任务决定）：{{planFormTasks[planFormTaskIndex].derivedProjectName || '未关联项目'}}</view>
+      <view wx:if="{{!planEditor && hasAnyTasks && planFormTasks[planFormTaskIndex].optionType === 'create'}}" class="derived-field create-task-hint">确认后将创建同名、未关联项目的 TODO。</view>
+      <view class="priority-row"><view>优先级</view><view class="priority-choices"><view class="priority-choice priority-1 {{priority === 1 ? 'selected' : ''}}" role="button" aria-label="低优先级" data-priority="1" bindtap="choosePriority"></view><view class="priority-choice priority-2 {{priority === 2 ? 'selected' : ''}}" role="button" aria-label="中优先级" data-priority="2" bindtap="choosePriority"></view><view class="priority-choice priority-3 {{priority === 3 ? 'selected' : ''}}" role="button" aria-label="高优先级" data-priority="3" bindtap="choosePriority"></view></view></view>
+      <view wx:if="{{!planEditor}}" class="switch-row"><view>固定日程</view><switch checked="{{repeatEnabled}}" color="#55725e" data-key="repeatEnabled" bindchange="onSwitch" /></view>
+      <view wx:if="{{!planEditor && repeatEnabled}}" class="repeat-options"><picker range="{{frequencyLabels}}" value="{{frequencyIndex}}" data-key="frequencyIndex" bindchange="onPicker"><view class="picker">{{frequencyLabels[frequencyIndex]}}</view></picker><checkbox-group wx:if="{{frequencyIndex === 1}}" class="weekday-group" bindchange="onWeekdaysChange"><label wx:for="{{weekdayLabels}}" wx:key="*this" class="weekday"><checkbox value="{{index}}" checked="{{repeatWeekdays.indexOf(index) !== -1}}" color="#55725e" />{{item}}</label></checkbox-group><input class="input" type="number" placeholder="重复间隔，例如 1" value="{{interval}}" data-key="interval" bindinput="onField" /></view>
+    </view>
+  </view>
+
+  <view wx:if="{{isTaskPickerOpen}}" class="modal-mask task-picker-mask" bindtap="closeTaskPicker">
+    <view class="modal task-picker-modal" catchtap="noop">
+      <sheet-header title="选择任务" bind:cancel="closeTaskPicker" />
+      <scroll-view class="task-option-list" scroll-y="{{true}}" enable-flex="{{true}}" style="height: {{taskPickerListHeight}}rpx;">
+        <block wx:for="{{planFormTasks}}" wx:key="id">
+          <view
+            wx:if="{{item.id}}"
+            class="task-option {{item.optionType === 'create' ? 'task-option-create' : ''}} {{planFormTaskIndex === index ? 'selected' : ''}}"
+            role="button"
+            aria-label="{{item.optionType === 'create' ? '新建与计划同名的任务' : '选择任务' + item.title}}"
+            aria-checked="{{planFormTaskIndex === index}}"
+            data-index="{{index}}"
+            bindtap="chooseTaskOption"
+          >
+            <view class="task-option-copy">
+              <view class="task-option-title">{{item.title}}</view>
+              <view class="task-option-meta">{{item.optionType === 'create' ? '自动创建与计划同名的任务，默认不关联项目' : item.derivedProjectName}}</view>
+            </view>
+            <view wx:if="{{planFormTaskIndex === index}}" class="task-option-check" aria-hidden="true">✓</view>
+          </view>
+        </block>
+      </scroll-view>
+    </view>
+  </view>
+
+  <view wx:if="{{detailItem}}" class="modal-mask" bindtap="closeItemDetail">
+    <view class="modal detail-modal" catchtap="noop">
+      <sheet-header title="{{detailItem.isAggregate ? '重叠条目' : detailItem.title}}" bind:cancel="closeItemDetail" />
+      <block wx:if="{{detailItem.isAggregate}}">
+        <view class="aggregate-summary">此处还有 {{detailItem.hiddenCount}} 个重叠条目</view>
+        <view class="aggregate-item-list">
+          <view
+            wx:for="{{detailItem.aggregateItems}}"
+            wx:key="id"
+            class="aggregate-item"
+            role="button"
+            aria-label="查看{{item.title}}，{{item.displayTime}}"
+            data-item="{{item}}"
+            bindtap="openItemDetail"
+          >
+            <view class="aggregate-item-title">{{item.title}}</view>
+            <view class="aggregate-item-time">{{item.displayTime}}</view>
+          </view>
+        </view>
+      </block>
+      <block wx:else>
+        <view class="detail-time">{{detailItem.displayTime}}</view>
+        <view wx:if="{{detailItem.displayTaskName}}" class="detail-row"><text>任务</text><text>{{detailItem.displayTaskName}}</text></view>
+        <view wx:if="{{detailItem.displayProjectName}}" class="detail-row"><text>项目</text><text>{{detailItem.displayProjectName}}</text></view>
+        <view wx:if="{{detailItem.displayPriority}}" class="detail-row"><text>优先级</text><text>{{detailItem.displayPriority}}</text></view>
+        <view wx:if="{{detailItem.note}}" class="detail-row detail-row-stack"><text>备注</text><text>{{detailItem.note}}</text></view>
+        <view wx:if="{{detailItem.displayTags}}" class="detail-row detail-row-stack"><text>标签</text><text>{{detailItem.displayTags}}</text></view>
+        <view wx:if="{{detailItem.displayOverlap}}" class="detail-overlap">{{detailItem.displayOverlap}}</view>
+        <view class="detail-actions">
+          <view wx:if="{{detailItem.type === 'plan' && detailItem.canAssociate}}" class="detail-action primary-action" role="button" data-item="{{detailItem}}" bindtap="startTimerFromPlan">从此开始计时</view>
+          <view wx:if="{{detailItem.type === 'plan' && !detailItem.virtual && detailItem.canEditPlan}}" class="detail-action" role="button" data-item="{{detailItem}}" bindtap="openPlanEditor">编辑计划</view>
+          <view wx:if="{{detailItem.type === 'plan' && !detailItem.virtual}}" class="detail-action danger-action" role="button" data-item="{{detailItem}}" bindtap="deletePlan">删除计划</view>
+          <view wx:if="{{detailItem.virtual}}" class="detail-action primary-action" role="button" data-item="{{detailItem}}" bindtap="confirmItem">确认</view>
+          <view wx:if="{{detailItem.virtual}}" class="detail-action" role="button" data-item="{{detailItem}}" bindtap="openOccurrenceEditor">修改本次</view>
+          <view wx:if="{{detailItem.virtual}}" class="detail-action" role="button" data-item="{{detailItem}}" bindtap="openRuleFollowingEditor">修改本次及后续</view>
+          <view wx:if="{{detailItem.virtual}}" class="detail-action danger-action" role="button" data-item="{{detailItem}}" bindtap="skipVirtualOccurrence">跳过</view>
+          <view wx:if="{{detailItem.type === 'candidate' && !detailItem.virtual}}" class="detail-action primary-action" role="button" data-item="{{detailItem}}" bindtap="confirmItem">确认</view>
+          <view wx:if="{{detailItem.type === 'candidate' && !detailItem.virtual}}" class="detail-action" role="button" data-item="{{detailItem}}" bindtap="openLogEditor">编辑确认</view>
+          <view wx:if="{{detailItem.type === 'candidate' && !detailItem.virtual}}" class="detail-action danger-action" role="button" data-item="{{detailItem}}" bindtap="discardCandidate">作废</view>
+          <view wx:if="{{detailItem.type === 'confirmed'}}" class="detail-action" role="button" data-item="{{detailItem}}" bindtap="openLogEditor">编辑</view>
+          <view wx:if="{{detailItem.type === 'confirmed'}}" class="detail-action danger-action" role="button" data-item="{{detailItem}}" bindtap="deleteConfirmed">删除</view>
+        </view>
+      </block>
+    </view>
+  </view>
+
+  <view wx:if="{{editor}}" class="modal-mask" bindtap="closeOccurrenceEditor"><view class="modal" catchtap="noop"><sheet-header title="{{editorMode === 'following' ? '修改本次及后续' : '修改重复实例'}}" show-confirm="{{true}}" bind:confirm="submitOccurrenceEditor" bind:cancel="closeOccurrenceEditor" /><input class="input" maxlength="-1" value="{{editorTitle}}" data-key="editorTitle" bindinput="onTitleField" /><picker mode="date" value="{{editorDate}}" data-key="editorDate" bindchange="onEditorField"><view class="picker">{{editorDate}}</view></picker><view class="datetime-row"><picker mode="time" value="{{editorStart}}" data-key="editorStart" bindchange="onEditorField"><view>{{editorStart}}</view></picker><picker mode="time" value="{{editorEnd}}" data-key="editorEnd" bindchange="onEditorField"><view>{{editorEnd}}</view></picker></view><view class="priority-choices"><view class="priority-choice priority-1 {{editorPriority === 1 ? 'selected' : ''}}" data-priority="1" bindtap="chooseEditorPriority"></view><view class="priority-choice priority-2 {{editorPriority === 2 ? 'selected' : ''}}" data-priority="2" bindtap="chooseEditorPriority"></view><view class="priority-choice priority-3 {{editorPriority === 3 ? 'selected' : ''}}" data-priority="3" bindtap="chooseEditorPriority"></view></view></view></view>
+
+  <view wx:if="{{logEditor}}" class="modal-mask" bindtap="closeLogEditor">
+    <view class="modal" catchtap="noop">
       <sheet-header title="编辑时间记录" show-confirm="{{true}}" bind:confirm="saveLogEditor" bind:cancel="closeLogEditor" />
       <view class="log-time-row">
         <view class="log-field-label">开始时间</view>

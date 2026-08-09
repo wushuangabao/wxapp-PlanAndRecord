@@ -6,27 +6,57 @@ const assert = require('node:assert/strict');
 const pagesRoot = path.join(__dirname, '../miniprogram/pages');
 const miniprogramRoot = path.join(__dirname, '../miniprogram');
 
-test('四个页面的英文眉题在滚动时固定在顶部', () => {
-  for (const page of ['timer', 'plans', 'calendar', 'profile']) {
+test('页面主头部在滚动时固定在顶部', () => {
+  for (const page of ['timer', 'plans', 'profile']) {
     const source = fs.readFileSync(path.join(pagesRoot, page, 'index.wxss'), 'utf8');
     const wxml = fs.readFileSync(path.join(pagesRoot, page, 'index.wxml'), 'utf8');
     assert.match(source, /\.eyebrow\s*\{[^}]*position:\s*sticky;[^}]*top:\s*0;/s, page);
     assert.match(wxml, /<view class="page">\s*<view class="eyebrow">/s, page);
   }
+  const calendarWxml = fs.readFileSync(path.join(pagesRoot, 'calendar/index.wxml'), 'utf8');
+  const calendarWxss = fs.readFileSync(path.join(pagesRoot, 'calendar/index.wxss'), 'utf8');
+  assert.match(calendarWxml, /<view class="page">\s*<view class="calendar-toolbar">/s);
+  assert.match(calendarWxss, /\.calendar-toolbar\s*\{[^}]*position:\s*sticky;[^}]*top:\s*0;/s);
 });
 
-test('日历日视图显示单个日期，范围标签始终单行显示', () => {
+test('日历顶部提供当前范围、今天按钮、四种粒度与右对齐状态图例', () => {
   const script = fs.readFileSync(path.join(pagesRoot, 'calendar/index.js'), 'utf8');
   const wxml = fs.readFileSync(path.join(pagesRoot, 'calendar/index.wxml'), 'utf8');
   const wxss = fs.readFileSync(path.join(pagesRoot, 'calendar/index.wxss'), 'utf8');
-  assert.match(script, /this\.data\.view === 'day'/);
+  assert.match(script, /formatRangeLabel\(range, this\.data\.view\)/);
+  assert.match(script, /data:\s*\{[\s\S]*?view:\s*'day'/);
+  assert.match(script, /views:\s*\['year', 'month', 'week', 'day'\]/);
   assert.match(wxml, /class="range-label"/);
+  assert.match(wxml, /class="toolbar-left">[\s\S]*class="range-label"[\s\S]*wx:if="\{\{!timeline\.length\}\}" class="range-empty"/);
+  assert.match(wxml, /class="today-button \{\{rangeIncludesToday \? 'is-current-range' : ''\}\}"[^>]*bindtap="goToday"/);
+  assert.match(wxml, /class="toolbar-right">[\s\S]*class="view-tabs"[\s\S]*class="calendar-legend"/);
+  assert.match(wxml, /class="legend-dot plan"[\s\S]*>计划<[\s\S]*class="legend-dot candidate"[\s\S]*>候选<[\s\S]*class="legend-dot actual"[\s\S]*>实际</);
   assert.match(wxss, /\.range-label\s*\{[^}]*white-space:\s*nowrap;/s);
-  assert.match(wxss, /\.nav-button\s*\{[^}]*width:\s*44rpx;/s);
+  assert.match(wxss, /\.toolbar-left,\s*\.toolbar-right\s*\{[^}]*grid-template-rows:\s*52rpx 20rpx;/s);
+  assert.match(wxss, /\.toolbar-right\s*\{[^}]*justify-items:\s*end;/s);
+  assert.match(wxss, /\.calendar-legend\s*\{[^}]*justify-content:\s*flex-end;/s);
+  assert.match(wxss, /\.tab\s*\{[^}]*width:\s*54rpx;/s);
+  assert.match(wxss, /\.today-button\s*\{[^}]*border:\s*0;/s);
+  assert.match(wxss, /\.today-button\.is-current-range\s*\{[^}]*border:\s*4rpx solid #a9bdae;/s);
+  assert.match(wxml, /class="calendar-scroll \{\{pageTurnClass\}\}"/);
+  assert.match(wxml, /wx:if="\{\{currentTimeLineStyle\}\}" class="current-time-line" style="\{\{currentTimeLineStyle\}\}"/);
+  assert.doesNotMatch(wxml, /class="calendar-empty"/);
+  assert.doesNotMatch(wxml, /time-axis-terminal|24:00/);
+  assert.match(script, /animateRangeChange\(deltaX < 0 \? 1 : -1\)/);
+  assert.match(wxss, /@keyframes calendar-page-next/);
+  assert.doesNotMatch(wxss, /\.calendar-toolbar\s*\{[^}]*min-height:/s);
+  assert.match(wxss, /\.page\s*\{[^}]*display:\s*flex;[^}]*flex-direction:\s*column;/s);
+  assert.match(wxss, /\.calendar-scroll\s*\{[^}]*flex:\s*1 1 0;[^}]*height:\s*0;/s);
+  assert.match(wxss, /\.time-row,\s*\.grid-row\s*\{[^}]*position:\s*absolute;/s);
+  assert.match(wxml, /class="calendar-grid-bottom-line"/);
+  assert.match(wxss, /\.calendar-grid-bottom-line\s*\{[^}]*bottom:\s*0;[^}]*background:\s*#dedad3;/s);
+  assert.match(wxss, /\.calendar-scroll-safe-space\s*\{[^}]*background:\s*#f3f1ed;/s);
+  assert.match(wxss, /\.calendar-scroll\s*\{[^}]*background:\s*#f3f1ed;/s);
+  assert.doesNotMatch(wxml, /class="nav-button"/);
 });
 
 test('所有自定义底部弹窗复用共享头部组件', () => {
-  const expectedModalCounts = { plans: 5, calendar: 3 };
+  const expectedModalCounts = { plans: 5, calendar: 5 };
 
   for (const page of ['timer', ...Object.keys(expectedModalCounts)]) {
     const pageDirectory = path.join(pagesRoot, page);

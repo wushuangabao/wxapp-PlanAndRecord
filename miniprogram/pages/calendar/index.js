@@ -5,6 +5,13 @@ const { limitTitleCodePoints } = require('../../domain/validation');
 const { resolveEditedTimestamp, timePickerState } = require('../../utils/log-time-editor');
 const { rangeForView, shiftAnchor } = require('../../utils/date-range');
 const {
+  buildCalendarBlocks,
+  buildTimeRows,
+  currentTimeLinePosition,
+  defaultPlanDate,
+  formatRangeLabel
+} = require('../../utils/calendar-grid');
+const {
   defaultDateTime,
   formatDateTime,
   getService,
@@ -13,12 +20,33 @@ const {
   writeRecentLogHighlight
 } = require('../../utils/page');
 
-const VIEW_LABELS = { day: '日', week: '周', month: '月', year: '年' };
 const FREQUENCY_VALUES = ['daily', 'weekly', 'monthly'];
 const FREQUENCY_LABELS = ['每日', '每周', '每月'];
 const DAY_MS = 24 * 60 * 60 * 1_000;
 const PLAN_WINDOW_PADDING_MS = DAY_MS;
 const MAX_PLAN_WINDOW_MS = 3 * DAY_MS;
+const PAGE_TURN_DURATION_MS = 280;
+const PAGE_TURN_SWAP_MS = PAGE_TURN_DURATION_MS / 2;
+const CURRENT_TIME_TICK_MS = 60 * 1_000;
+const GESTURE_DIRECTION_THRESHOLD_PX = 12;
+const CREATE_TASK_OPTION_ID = '__create_same_title_task__';
+const CREATED_PLAN_VISIBLE_EDGE_PX = 8;
+const CREATED_PLAN_VISIBLE_BOTTOM_INSET_PX = 72;
+const TASK_OPTION_ROW_HEIGHT_RPX = 96;
+const TASK_OPTION_GAP_RPX = 12;
+const TASK_PICKER_MAX_LIST_HEIGHT_RPX = 600;
+
+function calendarBlockDomId(id) {
+  return `calendar-block-${String(id || '').replace(/[^A-Za-z0-9_-]/g, '-')}`;
+}
+
+function createdPlanEvent(result) {
+  if (!result || typeof result !== 'object') return null;
+  if (result.event && typeof result.event === 'object') return result.event;
+  return Number.isFinite(result.startedAt) && Number.isFinite(result.endedAt)
+    ? result
+    : null;
+}
 
 function findOptionIndex(options, id) {
   const index = options.findIndex((item) => item.id === id);
@@ -32,10 +60,31 @@ function taskOptions(snapshot) {
       .filter((item) => item.status !== 'completed')
       .map((item) => ({
         ...item,
+        optionType: 'task',
         derivedProjectName: (projectById.get(item.projectId) || {}).title
           || '未关联项目'
       }))
   );
+}
+
+function taskPickerListHeight(options) {
+  const optionCount = (options || []).filter((item) => item && item.id).length;
+  if (!optionCount) return 0;
+  return Math.min(
+    TASK_PICKER_MAX_LIST_HEIGHT_RPX,
+    optionCount * TASK_OPTION_ROW_HEIGHT_RPX + (optionCount - 1) * TASK_OPTION_GAP_RPX
+  );
+}
+
+function createPlanTaskOptions(snapshot) {
+  const options = taskOptions(snapshot);
+  options.splice(1, 0, {
+    id: CREATE_TASK_OPTION_ID,
+    title: '新建同名任务',
+    optionType: 'create',
+    derivedProjectName: '未关联项目'
+  });
+  return options;
 }
 
 function boundedPlanRange(startedAt, endedAt, fallbackNow = Date.now()) {
@@ -157,11 +206,21 @@ function overlapLabel(overlapMeta) {
 
 Page({
   data: {
-    view: 'week',
+    view: 'day',
     anchor: Date.now(),
     rangeLabel: '',
+    timeRows: [],
+    canvasHeight: 0,
+    calendarScrollTop: 0,
+    calendarScrollWithAnimation: false,
+    scrollIntoView: '',
+    rangeIncludesToday: false,
+    currentTimeLineStyle: '',
+    pageTurnClass: '',
     maxTagsPerLog: MAX_TAGS_PER_LOG,
     timeline: [],
+    detailItem: null,
+    isCreateOpen: false,
     title: '',
     startDate: '',
     startTime: '',
@@ -172,9 +231,15 @@ Page({
     frequencyIndex: 0,
     interval: '1',
     repeatWeekdays: [],
+    editorMode: 'occurrence',
     tasks: [],
+    hasAnyTasks: false,
     hasTaskOptions: false,
     taskIndex: 0,
+    planFormTasks: [],
+    planFormTaskIndex: 0,
+    isTaskPickerOpen: false,
+    taskPickerListHeight: 0,
     editor: null,
     editorTitle: '',
     editorDate: '',
@@ -193,17 +258,10 @@ Page({
     logTags: [],
     logTagInputVisible: false,
     planEditor: null,
-    planTitle: '',
-    planStartDate: '',
-    planStartTime: '',
-    planEndDate: '',
-    planEndTime: '',
-    planPriority: 1,
     planTasks: [],
-    planTaskIndex: 0,
     logEvents: [],
     logEventIndex: 0,
-    views: ['day', 'week', 'month', 'year'],
+    views: ['year', 'month', 'week', 'day'],
     frequencyLabels: FREQUENCY_LABELS,
     weekdayLabels: ['日', '一', '二', '三', '四', '五', '六']
   },
@@ -216,19 +274,40 @@ Page({
 
   onShow() {
     this.refresh();
+    this.startCurrentTimeTicker();
   },
 
-  refresh() {
+  onHide() {
+    this.stopCurrentTimeTicker();
+  },
+
+  onUnload() {
+    clearTimeout(this.pageTurnSwapTimer);
+    clearTimeout(this.pageTurnEndTimer);
+    clearTimeout(this.createdPlanScrollVerifyTimer);
+    this.stopCurrentTimeTicker();
+  },
+
+  refresh(afterRefresh) {
     try {
       const service = getService();
       const snapshot = service.snapshot();
       const range = rangeForView(this.data.anchor, this.data.view);
       const now = Date.now();
       const knownTaskIds = new Set(snapshot.tasks.map((item) => item.id));
-      const tasks = taskOptions(snapshot);
+      const tasks = createPlanTaskOptions(snapshot);
+      const planTasks = taskOptions(snapshot);
       const selectedTaskId = this.data.tasks[this.data.taskIndex] && this.data.tasks[this.data.taskIndex].id;
-      const timeline = service.timeline(range.start, range.end).map((item) => {
+      const projectById = new Map(snapshot.projects.map((item) => [item.id, item]));
+      this.taskById = new Map(snapshot.tasks.map((item) => [item.id, {
+        ...item,
+        derivedProjectName: (projectById.get(item.projectId) || {}).title
+          || (item.status === 'completed' ? item.projectNameSnapshot : null)
+          || '未关联项目'
+      }]));
+      const rawTimeline = service.timeline(range.start, range.end).map((item) => {
         const canAssociate = knownTaskIds.has(item.taskId);
+        const task = this.taskById.get(item.taskId);
         return {
           ...item,
           displayTime: `${formatDateTime(item.startedAt)} – ${formatDateTime(item.endedAt)}`,
@@ -240,6 +319,12 @@ Page({
                 ? '计划'
                 : '实际记录',
           displayOverlap: overlapLabel(item.overlapMeta),
+          displayTaskName: (task && task.title) || item.taskNameSnapshot || '',
+          displayProjectName: (task && task.derivedProjectName !== '未关联项目'
+            ? task.derivedProjectName
+            : '') || item.projectNameSnapshot || '',
+          displayTags: Array.isArray(item.tags) ? item.tags.join('、') : '',
+          displayPriority: item.priority || null,
           priority: item.priority || 1,
           canAssociate,
           canEditPlan: item.type === 'plan'
@@ -247,25 +332,32 @@ Page({
             && (canAssociate || item.endedAt > now)
         };
       });
-      const projectById = new Map(snapshot.projects.map((item) => [item.id, item]));
-      this.taskById = new Map(snapshot.tasks.map((item) => [item.id, {
+      const grid = buildTimeRows(range, this.data.view);
+      const currentTimeTop = currentTimeLinePosition(now, range, grid);
+      const timeline = buildCalendarBlocks(rawTimeline, range, this.data.view, grid).map((item) => ({
         ...item,
-        derivedProjectName: (projectById.get(item.projectId) || {}).title
-          || (item.status === 'completed' ? item.projectNameSnapshot : null)
-          || '未关联项目'
-      }]));
+        domId: calendarBlockDomId(item.renderKey || item.id),
+        ariaLabel: item.isAggregate
+          ? `${item.title}，点击查看被聚合的重叠条目`
+          : `${item.displayKind}，${item.title}，${item.displayTime}`
+      }));
       this.eventById = new Map(snapshot.calendarEvents.map((item) => [item.id, item]));
       this.currentSnapshot = snapshot;
       this.currentService = service;
       this.setData({
         tasks,
-        planTasks: tasks,
-        hasTaskOptions: tasks.length > 1,
+        planTasks,
+        hasAnyTasks: snapshot.tasks.length > 0,
+        hasTaskOptions: planTasks.length > 1,
         taskIndex: findOptionIndex(tasks, selectedTaskId),
         timeline,
-        rangeLabel: this.data.view === 'day'
-          ? formatDateTime(range.start).slice(0, 10)
-          : `${formatDateTime(range.start).slice(0, 10)} ～ ${formatDateTime(range.end).slice(0, 10)}`
+        timeRows: grid.rows,
+        canvasHeight: grid.canvasHeight,
+        rangeLabel: formatRangeLabel(range, this.data.view),
+        rangeIncludesToday: now >= range.start && now <= range.end,
+        currentTimeLineStyle: currentTimeTop === null ? '' : `top: ${currentTimeTop.toFixed(2)}rpx;`
+      }, () => {
+        if (typeof afterRefresh === 'function') afterRefresh();
       });
     } catch (error) {
       showError(error);
@@ -273,11 +365,299 @@ Page({
   },
 
   changeView(event) {
-    this.setData({ view: event.currentTarget.dataset.view }, () => this.refresh());
+    const view = event.currentTarget.dataset.view;
+    if (view === this.data.view) return;
+    this.cancelPageTurn();
+    if (!this.viewScrollTops) this.viewScrollTops = {};
+    const hasSavedScrollTop = Object.prototype.hasOwnProperty.call(this.viewScrollTops, view);
+    const calendarScrollTop = this.viewScrollTops[view] || 0;
+    this.currentCalendarScrollTop = calendarScrollTop;
+    this.setData({
+      view,
+      calendarScrollTop,
+      calendarScrollWithAnimation: false,
+      scrollIntoView: ''
+    }, () => {
+      this.refresh();
+      if (!hasSavedScrollTop) this.focusCurrentHour();
+    });
   },
 
   moveRange(event) {
-    this.setData({ anchor: shiftAnchor(this.data.anchor, this.data.view, Number(event.currentTarget.dataset.offset)) }, () => this.refresh());
+    this.animateRangeChange(Number(event.currentTarget.dataset.offset));
+  },
+
+  goToday() {
+    this.cancelPageTurn();
+    this.currentCalendarScrollTop = 0;
+    if (!this.viewScrollTops) this.viewScrollTops = {};
+    this.viewScrollTops[this.data.view] = 0;
+    this.setData({
+      anchor: Date.now(),
+      calendarScrollTop: 0,
+      calendarScrollWithAnimation: false,
+      scrollIntoView: ''
+    }, () => {
+      this.refresh();
+      this.focusCurrentHour();
+    });
+  },
+
+  focusCurrentHour() {
+    if (this.data.view !== 'day') return;
+    const now = new Date();
+    const anchor = new Date(this.data.anchor);
+    if (now.getFullYear() !== anchor.getFullYear()
+      || now.getMonth() !== anchor.getMonth()
+      || now.getDate() !== anchor.getDate()) return;
+    this.setData({ scrollIntoView: '' }, () => {
+      this.setData({ scrollIntoView: `calendar-time-row-${Math.max(0, now.getHours() - 1)}` });
+    });
+  },
+
+  refreshCurrentTimeLine(now = Date.now()) {
+    const range = rangeForView(this.data.anchor, this.data.view);
+    const grid = buildTimeRows(range, this.data.view);
+    const top = currentTimeLinePosition(now, range, grid);
+    const currentTimeLineStyle = top === null ? '' : `top: ${top.toFixed(2)}rpx;`;
+    const rangeIncludesToday = now >= range.start && now <= range.end;
+    if (currentTimeLineStyle !== this.data.currentTimeLineStyle
+      || rangeIncludesToday !== this.data.rangeIncludesToday) {
+      this.setData({ currentTimeLineStyle, rangeIncludesToday });
+    }
+  },
+
+  startCurrentTimeTicker() {
+    this.stopCurrentTimeTicker();
+    const now = Date.now();
+    const delay = CURRENT_TIME_TICK_MS - (now % CURRENT_TIME_TICK_MS) + 20;
+    this.currentTimeLineTimer = setTimeout(() => {
+      this.currentTimeLineTimer = null;
+      this.refreshCurrentTimeLine();
+      this.startCurrentTimeTicker();
+    }, delay);
+  },
+
+  stopCurrentTimeTicker() {
+    clearTimeout(this.currentTimeLineTimer);
+    this.currentTimeLineTimer = null;
+  },
+
+  onCanvasScroll(event) {
+    if (!this.viewScrollTops) this.viewScrollTops = {};
+    this.currentCalendarScrollTop = event.detail.scrollTop;
+    this.viewScrollTops[this.data.view] = this.currentCalendarScrollTop;
+  },
+
+  applyCreatedPlanScroll(eventId, targetScrollTop) {
+    const updates = {
+      calendarScrollWithAnimation: true,
+      scrollIntoView: calendarBlockDomId(eventId)
+    };
+    if (Number.isFinite(targetScrollTop)) {
+      updates.calendarScrollTop = targetScrollTop;
+      this.currentCalendarScrollTop = targetScrollTop;
+      if (!this.viewScrollTops) this.viewScrollTops = {};
+      this.viewScrollTops[this.data.view] = targetScrollTop;
+    }
+    this.setData({ scrollIntoView: '' }, () => this.setData(updates));
+  },
+
+  scrollCreatedPlanIntoView(eventId, verifyAttempt = 0) {
+    if (!eventId) return;
+    if (verifyAttempt === 0) {
+      clearTimeout(this.createdPlanScrollVerifyTimer);
+      this.createdPlanScrollVerifyTimer = null;
+    }
+    if (typeof wx === 'undefined' || typeof wx.createSelectorQuery !== 'function') {
+      this.applyCreatedPlanScroll(eventId);
+      return;
+    }
+    const query = wx.createSelectorQuery();
+    query.select('.calendar-scroll').boundingClientRect();
+    query.select(`#${calendarBlockDomId(eventId)}`).boundingClientRect();
+    query.exec((rects) => {
+      const viewport = rects && rects[0];
+      const block = rects && rects[1];
+      if (!viewport || !block) {
+        this.applyCreatedPlanScroll(eventId);
+        if (verifyAttempt === 0) {
+          this.createdPlanScrollVerifyTimer = setTimeout(() => {
+            this.createdPlanScrollVerifyTimer = null;
+            this.scrollCreatedPlanIntoView(eventId, 1);
+          }, PAGE_TURN_DURATION_MS + 80);
+        }
+        return;
+      }
+      const viewportBottom = Number.isFinite(viewport.bottom)
+        ? viewport.bottom
+        : viewport.top + viewport.height;
+      const blockBottom = Number.isFinite(block.bottom)
+        ? block.bottom
+        : block.top + block.height;
+      const visibleTop = viewport.top + CREATED_PLAN_VISIBLE_EDGE_PX;
+      const visibleBottom = viewportBottom - CREATED_PLAN_VISIBLE_BOTTOM_INSET_PX;
+      if (block.top >= visibleTop && blockBottom <= visibleBottom) return;
+
+      const currentScrollTop = Number.isFinite(this.currentCalendarScrollTop)
+        ? this.currentCalendarScrollTop
+        : (this.viewScrollTops && this.viewScrollTops[this.data.view]) || 0;
+      const targetScrollTop = Math.max(
+        0,
+        currentScrollTop + block.top - viewport.top
+          - Math.max(0, (viewport.height - block.height) / 2)
+      );
+      this.applyCreatedPlanScroll(eventId, targetScrollTop);
+      if (verifyAttempt === 0) {
+        this.createdPlanScrollVerifyTimer = setTimeout(() => {
+          this.createdPlanScrollVerifyTimer = null;
+          this.scrollCreatedPlanIntoView(eventId, 1);
+        }, PAGE_TURN_DURATION_MS + 80);
+      }
+    });
+  },
+
+  revealCreatedPlan(event) {
+    if (!event) {
+      this.refresh();
+      return;
+    }
+    const range = rangeForView(this.data.anchor, this.data.view);
+    const isInCurrentRange = event.endedAt > range.start && event.startedAt <= range.end;
+    const revealAfterRefresh = () => {
+      const reveal = () => this.scrollCreatedPlanIntoView(event.id);
+      if (typeof wx !== 'undefined' && typeof wx.nextTick === 'function') {
+        wx.nextTick(reveal);
+      } else {
+        reveal();
+      }
+    };
+    if (isInCurrentRange) {
+      this.refresh(revealAfterRefresh);
+      return;
+    }
+
+    this.cancelPageTurn();
+    this.currentCalendarScrollTop = 0;
+    if (!this.viewScrollTops) this.viewScrollTops = {};
+    this.viewScrollTops[this.data.view] = 0;
+    this.setData({
+      anchor: event.startedAt,
+      calendarScrollTop: 0,
+      calendarScrollWithAnimation: false,
+      scrollIntoView: ''
+    }, () => this.refresh(revealAfterRefresh));
+  },
+
+  onCanvasTouchStart(event) {
+    const touch = event.touches && event.touches[0];
+    this.canvasTouchStart = touch
+      ? { x: touch.clientX, y: touch.clientY, direction: null }
+      : null;
+  },
+
+  onCanvasTouchMove(event) {
+    const start = this.canvasTouchStart;
+    const touch = event.touches && event.touches[0];
+    if (!start || !touch || start.direction) return;
+    const deltaX = touch.clientX - start.x;
+    const deltaY = touch.clientY - start.y;
+    if (Math.max(Math.abs(deltaX), Math.abs(deltaY)) < GESTURE_DIRECTION_THRESHOLD_PX) return;
+    start.direction = Math.abs(deltaX) > Math.abs(deltaY) ? 'horizontal' : 'vertical';
+  },
+
+  onCanvasTouchEnd(event) {
+    const start = this.canvasTouchStart;
+    const touch = event.changedTouches && event.changedTouches[0];
+    this.canvasTouchStart = null;
+    if (!start || !touch) return;
+    const deltaX = touch.clientX - start.x;
+    if (start.direction !== 'horizontal' || Math.abs(deltaX) < 48) return;
+    this.animateRangeChange(deltaX < 0 ? 1 : -1);
+  },
+
+  onCanvasTouchCancel() {
+    this.canvasTouchStart = null;
+  },
+
+  cancelPageTurn() {
+    clearTimeout(this.pageTurnSwapTimer);
+    clearTimeout(this.pageTurnEndTimer);
+    this.pageTurnSwapTimer = null;
+    this.pageTurnEndTimer = null;
+    if (this.data.pageTurnClass) this.setData({ pageTurnClass: '' });
+  },
+
+  animateRangeChange(offset) {
+    if (!offset || this.pageTurnEndTimer) return;
+    const targetAnchor = shiftAnchor(this.data.anchor, this.data.view, offset);
+    const pageTurnClass = offset > 0 ? 'page-turn-next' : 'page-turn-previous';
+    this.setData({ pageTurnClass });
+    this.pageTurnSwapTimer = setTimeout(() => {
+      this.pageTurnSwapTimer = null;
+      this.setData({ anchor: targetAnchor }, () => this.refresh());
+    }, PAGE_TURN_SWAP_MS);
+    this.pageTurnEndTimer = setTimeout(() => {
+      this.pageTurnEndTimer = null;
+      this.setData({ pageTurnClass: '' });
+    }, PAGE_TURN_DURATION_MS);
+  },
+
+  openItemDetail(event) {
+    this.setData({ detailItem: event.currentTarget.dataset.item });
+  },
+
+  closeItemDetail() {
+    this.setData({ detailItem: null });
+  },
+
+  openCreatePlan() {
+    const now = Date.now();
+    const start = defaultDateTime(now + 60 * 60 * 1000);
+    const end = defaultDateTime(now + 2 * 60 * 60 * 1000);
+    const date = defaultPlanDate(this.data.anchor, now);
+    const wrapsDay = end.time <= start.time;
+    this.setData({
+      isCreateOpen: true,
+      planEditor: null,
+      planFormTasks: this.data.tasks.slice(),
+      planFormTaskIndex: this.data.taskIndex,
+      isTaskPickerOpen: false,
+      title: '',
+      startDate: date,
+      endDate: date,
+      startTime: wrapsDay ? '09:00' : start.time,
+      endTime: wrapsDay ? '10:00' : end.time,
+      priority: 1,
+      repeatEnabled: false,
+      frequencyIndex: 0,
+      interval: '1',
+      repeatWeekdays: []
+    });
+  },
+
+  closeCreatePlan() {
+    this.setData({ isCreateOpen: false, isTaskPickerOpen: false, planEditor: null });
+  },
+
+  openTaskPicker() {
+    this.setData({
+      isTaskPickerOpen: true,
+      taskPickerListHeight: taskPickerListHeight(this.data.planFormTasks)
+    });
+  },
+
+  closeTaskPicker() {
+    this.setData({ isTaskPickerOpen: false });
+  },
+
+  chooseTaskOption(event) {
+    const planFormTaskIndex = Number(event.currentTarget.dataset.index);
+    this.setData({
+      planFormTaskIndex,
+      ...(!this.data.planEditor ? { taskIndex: planFormTaskIndex } : {}),
+      isTaskPickerOpen: false
+    });
   },
 
   onField(event) {
@@ -304,28 +684,63 @@ Page({
     this.setData({ priority: Number(event.currentTarget.dataset.priority) });
   },
 
+  submitPlanForm() {
+    if (this.data.planEditor) {
+      this.savePlanEditor();
+      return;
+    }
+    this.createPlan();
+  },
+
   createPlan() {
     try {
       const startedAt = parseLocalDateTime(this.data.startDate, this.data.startTime);
       const endedAt = parseLocalDateTime(this.data.endDate, this.data.endTime);
-      const task = this.data.tasks[this.data.taskIndex];
-      if (!task || !task.id) {
+      const service = getService();
+      const formTasks = this.data.planFormTasks.length ? this.data.planFormTasks : this.data.tasks;
+      const formTaskIndex = this.data.planFormTasks.length ? this.data.planFormTaskIndex : this.data.taskIndex;
+      const task = formTasks[formTaskIndex];
+      const shouldCreateTask = !this.data.hasAnyTasks
+        || (task && task.optionType === 'create');
+      if (!shouldCreateTask && (!task || !task.id)) {
         throw new Error('请选择任务');
       }
-      const input = { title: this.data.title, startedAt, endedAt, priority: this.data.priority, taskId: task.id };
+      const input = {
+        title: this.data.title,
+        startedAt,
+        endedAt,
+        priority: this.data.priority,
+        ...(shouldCreateTask ? {} : { taskId: task.id })
+      };
+      let result;
       if (this.data.repeatEnabled) {
         input.frequency = FREQUENCY_VALUES[this.data.frequencyIndex];
         input.interval = Number(this.data.interval);
         input.weekdays = this.data.repeatWeekdays.length ? this.data.repeatWeekdays : [new Date(startedAt).getDay()];
         input.monthDay = new Date(startedAt).getDate();
-        getService().createRecurringPlan(input);
+        if (shouldCreateTask) {
+          result = service.createRecurringPlanWithNewTask(input);
+        } else {
+          result = service.createRecurringPlan(input);
+        }
         showSaved('固定日程已创建');
       } else {
-        getService().createCalendarEvent(input);
+        if (shouldCreateTask) {
+          result = service.createCalendarEventWithNewTask(input);
+        } else {
+          result = service.createCalendarEvent(input);
+        }
         showSaved('计划块已创建');
       }
-      this.setData({ title: '', repeatEnabled: false, repeatWeekdays: [] });
-      this.refresh();
+      const event = createdPlanEvent(result);
+      this.setData({
+        title: '',
+        repeatEnabled: false,
+        repeatWeekdays: [],
+        isCreateOpen: false,
+        isTaskPickerOpen: false,
+        planEditor: null
+      }, () => this.revealCreatedPlan(event));
     } catch (error) {
       showError(error);
     }
@@ -338,6 +753,7 @@ Page({
         ? { originRuleId: item.ruleId, originOccurrenceId: item.originOccurrenceId }
         : { calendarEventId: item.id };
       getService().startTimer(association);
+      this.closeItemDetail();
       showSaved('已从计划块开始计时');
       wx.switchTab({ url: '/pages/timer/index' });
     } catch (error) {
@@ -353,6 +769,7 @@ Page({
         ? service.confirmVirtualOccurrence(item)
         : service.confirmCandidateLog(item.id);
       writeRecentLogHighlight(this.currentSnapshot, log && log.id);
+      this.closeItemDetail();
       showSaved(item.virtual ? '重复计划已确认' : '候选记录已确认');
       this.refresh();
     } catch (error) {
@@ -366,6 +783,7 @@ Page({
       if (!result.confirm) return;
       try {
         getService().deleteLog(item.id, true);
+        this.closeItemDetail();
         showSaved('候选已作废');
         this.refresh();
       } catch (error) { showError(error); }
@@ -378,6 +796,7 @@ Page({
       if (!result.confirm) return;
       try {
         getService().skipOccurrence(item.ruleId, item.occurrenceStart);
+        this.closeItemDetail();
         showSaved('本次重复计划已跳过');
         this.refresh();
       } catch (error) { showError(error); }
@@ -388,46 +807,46 @@ Page({
     const item = event.currentTarget.dataset.item;
     const start = defaultDateTime(item.startedAt);
     const end = defaultDateTime(item.endedAt);
-    const planTasks = this.data.tasks.slice();
+    const planTasks = this.data.planTasks.slice();
     const existingTask = this.taskById && this.taskById.get(item.taskId);
     if (existingTask && !planTasks.some((task) => task.id === existingTask.id)) {
-      planTasks.push(existingTask);
+      planTasks.push({ ...existingTask, optionType: 'task' });
     }
     const planTaskIndex = existingTask
       ? findOptionIndex(planTasks, existingTask.id)
       : 0;
     this.setData({
+      detailItem: null,
+      isCreateOpen: true,
+      isTaskPickerOpen: false,
       planEditor: item,
-      planTitle: item.title,
-      planStartDate: start.date,
-      planStartTime: start.time,
-      planEndDate: end.date,
-      planEndTime: end.time,
-      planPriority: item.priority,
-      planTasks,
-      planTaskIndex
+      title: item.title,
+      startDate: start.date,
+      startTime: start.time,
+      endDate: end.date,
+      endTime: end.time,
+      priority: item.priority,
+      repeatEnabled: false,
+      planFormTasks: planTasks,
+      planFormTaskIndex: planTaskIndex
     });
-  },
-
-  closePlanEditor() {
-    this.setData({ planEditor: null });
   },
 
   savePlanEditor() {
     try {
       const item = this.data.planEditor;
-      const task = this.data.planTasks[this.data.planTaskIndex];
+      const task = this.data.planFormTasks[this.data.planFormTaskIndex];
       if (!task || !task.id || !this.taskById || !this.taskById.has(task.id)) {
         throw new Error('请选择任务');
       }
       getService().updateCalendarEvent(item.id, {
-        title: this.data.planTitle,
-        startedAt: parseLocalDateTime(this.data.planStartDate, this.data.planStartTime),
-        endedAt: parseLocalDateTime(this.data.planEndDate, this.data.planEndTime),
-        priority: this.data.planPriority,
+        title: this.data.title,
+        startedAt: parseLocalDateTime(this.data.startDate, this.data.startTime),
+        endedAt: parseLocalDateTime(this.data.endDate, this.data.endTime),
+        priority: this.data.priority,
         taskId: task.id
       });
-      this.closePlanEditor();
+      this.closeCreatePlan();
       showSaved('计划块已更新');
       this.refresh();
     } catch (error) { showError(error); }
@@ -444,6 +863,7 @@ Page({
         if (!result.confirm) return;
         try {
           getService().deleteCalendarEvent(item.id, true);
+          this.closeItemDetail();
           showSaved('计划块已删除');
           this.refresh();
         } catch (error) { showError(error); }
@@ -451,12 +871,14 @@ Page({
     });
   },
 
-  openOccurrenceEditor(event) {
+  openOccurrenceEditorWithMode(event, editorMode) {
     const item = event.currentTarget.dataset.item;
     const start = defaultDateTime(item.startedAt);
     const end = defaultDateTime(item.endedAt);
     this.setData({
+      detailItem: null,
       editor: item,
+      editorMode,
       editorTitle: item.title,
       editorDate: start.date,
       editorStart: start.time,
@@ -465,8 +887,16 @@ Page({
     });
   },
 
+  openOccurrenceEditor(event) {
+    this.openOccurrenceEditorWithMode(event, 'occurrence');
+  },
+
+  openRuleFollowingEditor(event) {
+    this.openOccurrenceEditorWithMode(event, 'following');
+  },
+
   closeOccurrenceEditor() {
-    this.setData({ editor: null });
+    this.setData({ editor: null, editorMode: 'occurrence' });
   },
 
   onEditorField(event) {
@@ -514,8 +944,12 @@ Page({
     this.setData({ editorPriority: Number(event.currentTarget.dataset.priority) });
   },
 
-  choosePlanPriority(event) {
-    this.setData({ planPriority: Number(event.currentTarget.dataset.priority) });
+  submitOccurrenceEditor() {
+    if (this.data.editorMode === 'following') {
+      this.saveRuleFollowing();
+      return;
+    }
+    this.saveOccurrenceOverride();
   },
 
   saveOccurrenceOverride() {
@@ -556,6 +990,7 @@ Page({
       if (!result.confirm) return;
       try {
         getService().deleteLog(item.id, true);
+        this.closeItemDetail();
         showSaved('记录已删除');
         this.refresh();
       } catch (error) { showError(error); }
@@ -604,6 +1039,7 @@ Page({
     this.logOriginalStartedAt = item.startedAt;
     this.logOriginalEndedAt = item.endedAt;
     this.setData({
+      detailItem: null,
       logEditor: item,
       logStartDate: start.date,
       logStartTimeValue: timePickerState(item.startedAt).value,
@@ -730,5 +1166,8 @@ Page({
       showSaved(item.type === 'candidate' ? '候选已编辑并确认' : '记录已更新');
       this.refresh();
     } catch (error) { showError(error); }
+  },
+
+  noop() {
   }
 });
