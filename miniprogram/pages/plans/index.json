@@ -2,6 +2,7 @@
   "navigationBarTitleText": "计划",
   "usingComponents": {
     "delete-icon": "/components/delete-icon/index",
+    "plan-editor-sheet": "/components/plan-editor-sheet/index",
     "sheet-header": "/components/sheet-header/index"
   }
 }

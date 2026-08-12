@@ -1,0 +1,49 @@
+<view wx:if="{{visible}}" class="modal-mask" bindtap="cancel">
+  <view class="modal create-modal" catchtap="noop">
+    <sheet-header title="{{planEditor ? '编辑计划' : '新增计划'}}" show-confirm="{{true}}" confirm-text="{{planEditor ? '保存' : '创建'}}" bind:confirm="submitPlanForm" bind:cancel="cancel" />
+    <input class="input" maxlength="-1" placeholder="计划标题" value="{{title}}" data-key="title" bindinput="onTitleField" />
+    <view class="plan-time-row"><view class="plan-time-label">开始时间</view><picker class="plan-time-picker plan-time-date" mode="date" value="{{startDate}}" data-key="startDate" bindchange="onField"><view>{{startDate}}</view></picker><picker class="plan-time-picker plan-time-clock" mode="time" value="{{startTime}}" data-key="startTime" bindchange="onField"><view>{{startTime}}</view></picker></view>
+    <view class="plan-time-row"><view class="plan-time-label">结束时间</view><picker class="plan-time-picker plan-time-date" mode="date" value="{{endDate}}" data-key="endDate" bindchange="onField"><view>{{endDate}}</view></picker><picker class="plan-time-picker plan-time-clock" mode="time" value="{{endTime}}" data-key="endTime" bindchange="onField"><view>{{endTime}}</view></picker></view>
+    <view wx:if="{{variant === 'calendar' && (planEditor || hasAnyTasks)}}" class="picker task-picker-trigger {{planFormTasks[planFormTaskIndex].optionType === 'create' ? 'is-create-task' : ''}}" role="button" aria-label="选择任务，当前为{{planFormTasks[planFormTaskIndex].title || '请选择任务'}}" aria-expanded="{{isTaskPickerOpen}}" bindtap="openTaskPicker">任务（必选）：{{planFormTasks[planFormTaskIndex].title || '请选择任务'}}<text class="task-picker-arrow">›</text></view>
+    <view wx:if="{{variant === 'calendar' && (planEditor || hasAnyTasks) && planFormTasks[planFormTaskIndex].optionType === 'task'}}" class="derived-field">项目归属（由任务决定）：{{planFormTasks[planFormTaskIndex].derivedProjectName || '未关联项目'}}</view>
+    <view wx:if="{{variant === 'calendar' && !planEditor && hasAnyTasks && planFormTasks[planFormTaskIndex].optionType === 'create'}}" class="derived-field create-task-hint">确认后将创建同名、未关联项目的 TODO。</view>
+    <view class="priority-row"><view>优先级</view><view class="priority-choices"><view class="priority-choice priority-1 {{priority === 1 ? 'selected' : ''}}" role="button" aria-label="低优先级" data-priority="1" bindtap="choosePriority"></view><view class="priority-choice priority-2 {{priority === 2 ? 'selected' : ''}}" role="button" aria-label="中优先级" data-priority="2" bindtap="choosePriority"></view><view class="priority-choice priority-3 {{priority === 3 ? 'selected' : ''}}" role="button" aria-label="高优先级" data-priority="3" bindtap="choosePriority"></view></view></view>
+    <view wx:if="{{variant === 'calendar' && !planEditor}}" class="switch-row"><view>固定日程</view><switch checked="{{repeatEnabled}}" color="#55725e" data-key="repeatEnabled" bindchange="onSwitch" /></view>
+    <view wx:if="{{variant === 'calendar' && !planEditor && repeatEnabled}}" class="repeat-options">
+      <view class="repeat-interval-row"><text>每隔</text><input class="input repeat-interval-input" type="number" value="{{repeatGap}}" aria-label="重复间隔，只能输入非负整数" bindinput="onRepeatGapInput" /><picker class="repeat-frequency-picker" range="{{frequencyUnits}}" value="{{frequencyIndex}}" data-key="frequencyIndex" aria-label="选择重复周期单位" bindchange="onPicker"><view class="picker repeat-frequency-field">{{frequencyUnits[frequencyIndex]}}</view></picker><text>{{repeatOccurrenceText}}</text></view>
+      <checkbox-group wx:if="{{frequencyIndex === 1}}" class="weekday-group" bindchange="onWeekdaysChange"><label wx:for="{{weekdayOptions}}" wx:key="value" class="weekday"><checkbox value="{{item.value}}" checked="{{item.checked}}" color="#55725e" />{{item.label}}</label></checkbox-group>
+      <scroll-view wx:if="{{frequencyIndex === 2}}" class="month-day-scroll" scroll-y="{{true}}" enhanced="{{true}}" show-scrollbar="{{false}}">
+        <checkbox-group class="month-day-group" bindchange="onMonthDaysChange">
+          <label wx:for="{{monthDayOptions}}" wx:key="value" class="month-day-option" aria-label="{{item.value}}号">
+            <checkbox class="month-day-checkbox" value="{{item.value}}" checked="{{item.checked}}" color="#55725e" />{{item.label}}
+          </label>
+        </checkbox-group>
+      </scroll-view>
+    </view>
+  </view>
+</view>
+
+<view wx:if="{{visible && variant === 'calendar' && isTaskPickerOpen}}" class="modal-mask task-picker-mask" bindtap="closeTaskPicker">
+  <view class="modal task-picker-modal" catchtap="noop">
+    <sheet-header title="选择任务" bind:cancel="closeTaskPicker" />
+    <scroll-view class="task-option-list" scroll-y="{{true}}" enable-flex="{{true}}" style="height: {{taskPickerListHeight}}rpx;">
+      <block wx:for="{{planFormTasks}}" wx:key="id">
+        <view
+          wx:if="{{item.id}}"
+          class="task-option {{item.optionType === 'create' ? 'task-option-create' : ''}} {{planFormTaskIndex === index ? 'selected' : ''}}"
+          role="button"
+          aria-label="{{item.optionType === 'create' ? '新建与计划同名的任务' : '选择任务' + item.title}}"
+          aria-checked="{{planFormTaskIndex === index}}"
+          data-index="{{index}}"
+          bindtap="chooseTaskOption"
+        >
+          <view class="task-option-copy">
+            <view class="task-option-title">{{item.title}}</view>
+            <view class="task-option-meta">{{item.optionType === 'create' ? '自动创建与计划同名的任务，默认不关联项目' : item.derivedProjectName}}</view>
+          </view>
+          <view wx:if="{{planFormTaskIndex === index}}" class="task-option-check" aria-hidden="true">✓</view>
+        </view>
+      </block>
+    </scroll-view>
+  </view>
+</view>

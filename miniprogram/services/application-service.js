@@ -390,8 +390,19 @@ class ApplicationService {
     return task;
   }
 
-  createPlanTaskFromTitle(database, title, now) {
-    return this.createTaskRecord(database, title, now);
+  createPlanTaskFromTitle(database, title, now, association = {}) {
+    return this.createTaskRecord(database, title, now, association);
+  }
+
+  resolveActiveTaskProjectAssociation(database, taskProjectId) {
+    if (!this.hasReferenceValue(taskProjectId)) {
+      return { projectId: null, projectNameSnapshot: null };
+    }
+    const project = this.requireEntity(database.projects, taskProjectId, '项目');
+    if (project.status !== PROJECT_STATUS.ACTIVE) {
+      throw new DomainError('PROJECT_NOT_ACTIVE', '只能关联活动项目');
+    }
+    return { projectId: project.id, projectNameSnapshot: project.title };
   }
 
   resolveCalendarEventRecordAssociation(database, calendarEventId) {
@@ -950,7 +961,8 @@ class ApplicationService {
     const endedAt = Number(input.endedAt);
     validTimeRange(startedAt, endedAt, '计划时间');
     return this.repository.transaction((database) => {
-      const task = this.createPlanTaskFromTitle(database, title, now);
+      const taskAssociation = this.resolveActiveTaskProjectAssociation(database, input.taskProjectId);
+      const task = this.createPlanTaskFromTitle(database, title, now, taskAssociation);
       const association = this.resolvePlanTaskAssociation(database, task.id);
       const event = createCalendarEvent({
         ...input,

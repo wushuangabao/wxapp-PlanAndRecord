@@ -357,9 +357,12 @@ Page({
     isWishExpanded: false,
     isProjectCreateOpen: false,
     isTaskEditorOpen: false,
+    isPlanSheetOpen: false,
     isProjectEditorOpen: false,
     pendingTaskProjectLinkId: '',
     taskEditor: null,
+    planEditorInitialValue: null,
+    todoEditorSnapshot: null,
     taskProjectPicker: null,
     projectEditor: null,
     projectEditorTitle: '',
@@ -952,6 +955,54 @@ Page({
   dismissTaskEditor() {
     if (!this.data.taskEditor) return;
     this.setData({ isTaskEditorOpen: false });
+  },
+
+  openPlanFromTodo() {
+    if (!this.data.taskEditor || !this.data.isTaskEditorOpen) return;
+    const snapshot = {
+      taskTitle: this.data.taskTitle,
+      taskEditor: this.data.taskEditor
+    };
+    this.setData({
+      todoEditorSnapshot: snapshot,
+      isTaskEditorOpen: false,
+      isPlanSheetOpen: true,
+      planEditorInitialValue: {
+        title: this.data.taskTitle || '',
+        anchorDate: Date.now(),
+        priority: 1,
+        hasAnyTasks: false,
+        taskOptions: [],
+        taskIndex: 0,
+        newTaskProjectId: this.data.taskEditor.projectId || null
+      }
+    });
+  },
+
+  onPlanEditorCancel() {
+    const snapshot = this.data.todoEditorSnapshot;
+    this.setData({
+      isPlanSheetOpen: false,
+      planEditorInitialValue: null,
+      taskEditor: snapshot ? snapshot.taskEditor : this.data.taskEditor,
+      taskTitle: snapshot ? snapshot.taskTitle : this.data.taskTitle,
+      isTaskEditorOpen: true,
+      todoEditorSnapshot: null
+    });
+  },
+
+  onPlanEditorSuccess() {
+    this.setData({
+      isPlanSheetOpen: false,
+      planEditorInitialValue: null,
+      todoEditorSnapshot: null,
+      taskEditor: null,
+      taskTitle: '',
+      isTaskEditorOpen: false
+    }, () => {
+      showSaved('计划块已创建');
+      this.refresh({ resetTodoColumn: true });
+    });
   },
 
   saveTaskEditor() {

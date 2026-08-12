@@ -1,0 +1,6 @@
+{
+  "component": true,
+  "usingComponents": {
+    "sheet-header": "/components/sheet-header/index"
+  }
+}

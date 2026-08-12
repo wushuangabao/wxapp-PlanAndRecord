@@ -70,10 +70,8 @@ test('日历计划优先级只用三档绿色呈现，不显示数字或优先�
 });
 
 test('所有自定义底部弹窗复用共享头部组件', () => {
-  const expectedModalCounts = { plans: 5, calendar: 4 };
+  const expectedModalCounts = { plans: 5, calendar: 2 };
   const calendarModalBindings = [
-    'closeCreatePlan',
-    'closeTaskPicker',
     'closeItemDetail',
     'closeLogEditor'
   ];
@@ -96,6 +94,18 @@ test('所有自定义底部弹窗复用共享头部组件', () => {
     assert.equal(sheetHeaderCount, modalCount, page);
     assert.doesNotMatch(wxml, /class="modal-title"/, page);
   }
+
+  const planEditorWxml = fs.readFileSync(
+    path.join(miniprogramRoot, 'components/plan-editor-sheet/index.wxml'),
+    'utf8'
+  );
+  const planEditorModalCount = (planEditorWxml.match(/class="modal(?:\s[^\"]*)?"/g) || []).length;
+  const planEditorSheetHeaderCount = (planEditorWxml.match(/<sheet-header\b/g) || []).length;
+  assert.equal(planEditorModalCount, 2, 'plan-editor-sheet');
+  assert.equal(planEditorSheetHeaderCount, planEditorModalCount, 'plan-editor-sheet');
+  assert.match(planEditorWxml, /bindtap="cancel"/);
+  assert.match(planEditorWxml, /bindtap="closeTaskPicker"/);
+  assert.doesNotMatch(planEditorWxml, /class="modal-title"/);
 });
 
 test('所有页面和共享控件使用莫兰迪绿色主色板', () => {

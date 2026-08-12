@@ -103,6 +103,8 @@
 .project-completed-chevron.is-expanded { transform: rotate(225deg) translate(-2rpx, -2rpx); }
 .project-add-task { margin-top: 10rpx; }
 .input { box-sizing: border-box; width: 100%; min-height: 74rpx; margin: 14rpx 0; padding: 16rpx; border: 1rpx solid #d0cdc6; border-radius: 12rpx; }
+.todo-set-time-row { display: flex; justify-content: flex-end; margin-top: 8rpx; }
+.todo-set-time { padding: 8rpx 0 8rpx 16rpx; color: #4d695b; font-size: 28rpx; line-height: 40rpx; }
 .task-project-modal { max-height: 78vh; padding: 36rpx 32rpx calc(24rpx + env(safe-area-inset-bottom)); background: #ece9e4; }
 .task-project-options { box-sizing: border-box; max-height: 56vh; background: #faf9f7; }
 .task-project-option { display: flex; align-items: center; justify-content: center; box-sizing: border-box; width: 100%; min-height: 96rpx; margin: 0; padding: 18rpx 24rpx; border-radius: 0; background: #faf9f7; color: #343a36; font-size: 30rpx; font-weight: 400; line-height: 1.4; text-align: center; }

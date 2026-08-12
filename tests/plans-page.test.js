@@ -317,6 +317,76 @@ test('计划页：新建 TODO 的关联由入口决定，表单不提供项目�
   }
 });
 
+test('计划页：新建 TODO 提供设定时间并切换到复用计划弹窗', () => {
+  const wxml = fs.readFileSync(plansWxmlPath, 'utf8');
+  const wxss = fs.readFileSync(plansWxssPath, 'utf8');
+  const json = JSON.parse(fs.readFileSync(plansJsonPath, 'utf8'));
+  assert.equal(json.usingComponents['plan-editor-sheet'], '/components/plan-editor-sheet/index');
+  assert.match(wxml, /aria-label="设定时间"[^>]*bindtap="openPlanFromTodo"/);
+  assert.match(wxml, /设定时间/);
+  assert.match(wxss, /\.todo-set-time\s*\{[^}]*color:\s*#4d695b;/s);
+  assert.match(wxml, /variant="plans-todo"/);
+  assert.match(wxml, /visible="\{\{isPlanSheetOpen\}\}"/);
+});
+
+test('计划页：设定时间预填标题，取消恢复 TODO 名，成功后清理编辑态', () => {
+  const harness = createHarness();
+  try {
+    harness.page.openStandaloneTask();
+    harness.page.onTitleField(inputEvent('taskTitle', 'A'));
+    harness.page.openPlanFromTodo();
+    assert.equal(harness.page.data.isTaskEditorOpen, false);
+    assert.equal(harness.page.data.isPlanSheetOpen, true);
+    assert.equal(harness.page.data.planEditorInitialValue.title, 'A');
+    assert.equal(harness.page.data.planEditorInitialValue.newTaskProjectId, null);
+    assert.equal(harness.page.data.todoEditorSnapshot.taskTitle, 'A');
+
+    harness.page.onPlanEditorCancel();
+    assert.equal(harness.page.data.isPlanSheetOpen, false);
+    assert.equal(harness.page.data.isTaskEditorOpen, true);
+    assert.equal(harness.page.data.taskTitle, 'A');
+
+    harness.page.openPlanFromTodo();
+    const callbacks = [];
+    const refreshCalls = [];
+    harness.page.setData = (updates, callback) => {
+      Object.assign(harness.page.data, updates);
+      if (callback) callbacks.push(callback);
+    };
+    harness.page.refresh = (options) => refreshCalls.push(options);
+    harness.page.onPlanEditorSuccess({
+      detail: {
+        operation: 'create-event',
+        result: { task: { id: 't1', title: 'B' }, event: { id: 'e1', title: 'B' } },
+        revealTarget: { id: 'e1' }
+      }
+    });
+    assert.equal(harness.page.data.isPlanSheetOpen, false);
+    assert.equal(harness.page.data.isTaskEditorOpen, false);
+    assert.equal(harness.page.data.taskEditor, null);
+    assert.deepEqual(refreshCalls, []);
+    assert.equal(harness.wxState.toast, undefined);
+    assert.equal(callbacks.length, 1);
+    callbacks[0]();
+    assert.deepEqual(refreshCalls, [{ resetTodoColumn: true }]);
+    assert.equal(harness.wxState.toast.title, '计划块已创建');
+  } finally {
+    harness.restore();
+  }
+});
+
+test('计划页：项目入口设定时间携带 newTaskProjectId', () => {
+  const harness = createHarness();
+  try {
+    harness.page.openChildTask(event('project_1'));
+    harness.page.onTitleField(inputEvent('taskTitle', '子任务'));
+    harness.page.openPlanFromTodo();
+    assert.equal(harness.page.data.planEditorInitialValue.newTaskProjectId, 'project_1');
+  } finally {
+    harness.restore();
+  }
+});
+
 test('计划页：点击 TODO 标题就地编辑，输入完成后只更新标题', () => {
   const harness = createHarness();
   try {

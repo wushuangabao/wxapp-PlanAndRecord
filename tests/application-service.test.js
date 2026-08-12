@@ -230,6 +230,71 @@ test('显式新建同名任务支持已有任务资料库且失败不留下孤�
   assert.equal(failingHarness.service.snapshot().calendarEvents.length, 0);
 });
 
+test('createCalendarEventWithNewTask 支持活动项目 taskProjectId 并拒绝归档或不存在项目', () => {
+  const start = 1_700_000_000_000 + 3_600_000;
+  const activeHarness = createHarness();
+  const project = activeHarness.service.createProject({
+    title: '活动项目',
+    deadlineAt: start + 86_400_000
+  });
+  const linked = activeHarness.service.createCalendarEventWithNewTask({
+    title: '带项目计划',
+    startedAt: start,
+    endedAt: start + 1_800_000,
+    priority: 1,
+    taskProjectId: project.id
+  });
+  assert.equal(linked.task.projectId, project.id);
+  assert.equal(linked.task.projectNameSnapshot, '活动项目');
+  assert.equal(linked.event.projectId, null);
+  assert.equal(linked.event.projectNameSnapshot, '活动项目');
+  assert.equal(linked.event.taskId, linked.task.id);
+  assert.equal(linked.event.title, '带项目计划');
+  assert.equal(linked.task.title, '带项目计划');
+
+  const omitted = createHarness().service.createCalendarEventWithNewTask({
+    title: '无项目计划',
+    startedAt: start,
+    endedAt: start + 1_800_000,
+    priority: 1
+  });
+  assert.equal(omitted.task.projectId, null);
+  assert.equal(omitted.event.projectId, null);
+
+  const missingHarness = createHarness();
+  assert.throws(
+    () => missingHarness.service.createCalendarEventWithNewTask({
+      title: '无效项目',
+      startedAt: start,
+      endedAt: start + 1_800_000,
+      priority: 1,
+      taskProjectId: 'project_missing'
+    }),
+    (error) => error.code === 'ENTITY_NOT_FOUND'
+  );
+  assert.equal(missingHarness.service.snapshot().tasks.length, 0);
+  assert.equal(missingHarness.service.snapshot().calendarEvents.length, 0);
+
+  const archivedHarness = createHarness();
+  const archived = archivedHarness.service.createProject({
+    title: '归档项目',
+    deadlineAt: start + 86_400_000
+  });
+  archivedHarness.service.setProjectArchived(archived.id, true);
+  assert.throws(
+    () => archivedHarness.service.createCalendarEventWithNewTask({
+      title: '归档项目计划',
+      startedAt: start,
+      endedAt: start + 1_800_000,
+      priority: 1,
+      taskProjectId: archived.id
+    }),
+    (error) => error.code === 'PROJECT_NOT_ACTIVE'
+  );
+  assert.equal(archivedHarness.service.snapshot().tasks.length, 0);
+  assert.equal(archivedHarness.service.snapshot().calendarEvents.length, 0);
+});
+
 test('删除愿望需要二次确认并只移除目标愿望', () => {
   const { service } = createHarness();
   const deletedWish = service.createWish('准备删除的愿望');

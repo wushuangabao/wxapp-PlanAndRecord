@@ -1,14 +1,11 @@
 const { MAX_TAGS_PER_LOG } = require('../../domain/constants');
-const { parseLocalDateTime } = require('../../domain/time');
 const { normalizeTags } = require('../../domain/tags');
-const { limitTitleCodePoints } = require('../../domain/validation');
 const { resolveEditedTimestamp, timePickerState } = require('../../utils/log-time-editor');
 const { rangeForView, shiftAnchor } = require('../../utils/date-range');
 const {
   buildCalendarBlocks,
   buildTimeRows,
   currentTimeLinePosition,
-  defaultPlanDate,
   formatRangeLabel
 } = require('../../utils/calendar-grid');
 const {
@@ -20,21 +17,6 @@ const {
   writeRecentLogHighlight
 } = require('../../utils/page');
 
-const FREQUENCY_VALUES = ['daily', 'weekly', 'monthly'];
-const FREQUENCY_UNITS = ['天', '周', '月'];
-const WEEKDAY_OPTIONS = [
-  { label: '一', value: 1 },
-  { label: '二', value: 2 },
-  { label: '三', value: 3 },
-  { label: '四', value: 4 },
-  { label: '五', value: 5 },
-  { label: '六', value: 6 },
-  { label: '日', value: 0 }
-];
-const MONTH_DAY_OPTIONS = Array.from({ length: 31 }, (_, index) => ({
-  label: String(index + 1),
-  value: index + 1
-}));
 const DAY_MS = 24 * 60 * 60 * 1_000;
 const PLAN_WINDOW_PADDING_MS = DAY_MS;
 const MAX_PLAN_WINDOW_MS = 3 * DAY_MS;
@@ -45,9 +27,6 @@ const GESTURE_DIRECTION_THRESHOLD_PX = 12;
 const CREATE_TASK_OPTION_ID = '__create_same_title_task__';
 const CREATED_PLAN_VISIBLE_EDGE_PX = 8;
 const CREATED_PLAN_VISIBLE_BOTTOM_INSET_PX = 72;
-const TASK_OPTION_ROW_HEIGHT_RPX = 96;
-const TASK_OPTION_GAP_RPX = 12;
-const TASK_PICKER_MAX_LIST_HEIGHT_RPX = 600;
 
 function calendarBlockDomId(id) {
   return `calendar-block-${String(id || '').replace(/[^A-Za-z0-9_-]/g, '-')}`;
@@ -55,15 +34,6 @@ function calendarBlockDomId(id) {
 
 function priorityAriaLabel(priority) {
   return ['', '低优先级', '中优先级', '高优先级'][Number(priority)] || '';
-}
-
-function createdPlanTarget(result) {
-  if (!result || typeof result !== 'object') return null;
-  if (result.occurrence && typeof result.occurrence === 'object') return result.occurrence;
-  if (result.event && typeof result.event === 'object') return result.event;
-  return Number.isFinite(result.startedAt) && Number.isFinite(result.endedAt)
-    ? result
-    : null;
 }
 
 function findOptionIndex(options, id) {
@@ -82,15 +52,6 @@ function taskOptions(snapshot) {
         derivedProjectName: (projectById.get(item.projectId) || {}).title
           || '未关联项目'
       }))
-  );
-}
-
-function taskPickerListHeight(options) {
-  const optionCount = (options || []).filter((item) => item && item.id).length;
-  if (!optionCount) return 0;
-  return Math.min(
-    TASK_PICKER_MAX_LIST_HEIGHT_RPX,
-    optionCount * TASK_OPTION_ROW_HEIGHT_RPX + (optionCount - 1) * TASK_OPTION_GAP_RPX
   );
 }
 
@@ -205,48 +166,6 @@ function secondTimeValue(value) {
   return /^\d{2}:\d{2}$/.test(value || '') ? `${value}:00` : value;
 }
 
-function repeatIntervalFromGap(value) {
-  if (typeof value === 'string' && !value.trim()) {
-    throw new Error('重复间隔必须是非负整数');
-  }
-  const gap = Number(value);
-  if (!Number.isSafeInteger(gap) || gap < 0 || !Number.isSafeInteger(gap + 1)) {
-    throw new Error('重复间隔必须是非负整数');
-  }
-  return gap + 1;
-}
-
-function defaultRepeatWeekdays(now = Date.now()) {
-  return [new Date(now).getDay()];
-}
-
-function defaultRepeatMonthDays(now = Date.now()) {
-  return [new Date(now).getDate()];
-}
-
-function weekdayOptionsWithSelection(weekdays) {
-  return WEEKDAY_OPTIONS.map((option) => ({
-    ...option,
-    checked: weekdays.includes(option.value)
-  }));
-}
-
-function monthDayOptionsWithSelection(monthDays) {
-  return MONTH_DAY_OPTIONS.map((option) => ({
-    ...option,
-    checked: monthDays.includes(option.value)
-  }));
-}
-
-function repeatOccurrenceText(frequencyIndex, weekdays, monthDays) {
-  const selectedCount = frequencyIndex === 1
-    ? weekdays.length
-    : frequencyIndex === 2
-      ? monthDays.length
-      : 1;
-  return selectedCount === 1 ? '一次' : `${selectedCount}次`;
-}
-
 function resolveLogTimestamp(originalTimestamp, edited, date, time) {
   return resolveEditedTimestamp({
     originalTimestamp,
@@ -263,9 +182,6 @@ function overlapLabel(overlapMeta) {
   if (overlapMeta.candidateCount > 0) counts.push(`候选 ${overlapMeta.candidateCount} 条`);
   return counts.length ? `与其他记录重叠：${counts.join('、')}` : '';
 }
-
-const INITIAL_REPEAT_WEEKDAYS = defaultRepeatWeekdays();
-const INITIAL_REPEAT_MONTH_DAYS = defaultRepeatMonthDays();
 
 Page({
   data: {
@@ -284,26 +200,12 @@ Page({
     timeline: [],
     detailItem: null,
     isCreateOpen: false,
-    title: '',
-    startDate: '',
-    startTime: '',
-    endDate: '',
-    endTime: '',
-    priority: 1,
-    repeatEnabled: false,
-    frequencyIndex: 0,
-    repeatGap: '0',
-    repeatWeekdays: INITIAL_REPEAT_WEEKDAYS,
-    repeatMonthDays: INITIAL_REPEAT_MONTH_DAYS,
-    repeatOccurrenceText: '一次',
+    planEditorMode: 'create',
+    planEditorInitialValue: null,
     tasks: [],
     hasAnyTasks: false,
     hasTaskOptions: false,
     taskIndex: 0,
-    planFormTasks: [],
-    planFormTaskIndex: 0,
-    isTaskPickerOpen: false,
-    taskPickerListHeight: 0,
     logEditor: null,
     logStartDate: '',
     logStartTimeValue: '',
@@ -315,20 +217,10 @@ Page({
     logNote: '',
     logTags: [],
     logTagInputVisible: false,
-    planEditor: null,
     planTasks: [],
     logEvents: [],
     logEventIndex: 0,
-    views: ['year', 'month', 'week', 'day'],
-    frequencyUnits: FREQUENCY_UNITS,
-    weekdayOptions: weekdayOptionsWithSelection(INITIAL_REPEAT_WEEKDAYS),
-    monthDayOptions: monthDayOptionsWithSelection(INITIAL_REPEAT_MONTH_DAYS)
-  },
-
-  onLoad() {
-    const start = defaultDateTime(Date.now() + 60 * 60 * 1000);
-    const end = defaultDateTime(Date.now() + 2 * 60 * 60 * 1000);
-    this.setData({ startDate: start.date, startTime: start.time, endDate: end.date, endTime: end.time });
+    views: ['year', 'month', 'week', 'day']
   },
 
   onShow() {
@@ -678,189 +570,45 @@ Page({
   },
 
   openCreatePlan() {
-    const now = Date.now();
-    const start = defaultDateTime(now + 60 * 60 * 1000);
-    const end = defaultDateTime(now + 2 * 60 * 60 * 1000);
-    const date = defaultPlanDate(this.data.anchor, now);
-    const wrapsDay = end.time <= start.time;
-    const repeatWeekdays = defaultRepeatWeekdays(now);
-    const repeatMonthDays = defaultRepeatMonthDays(now);
     this.setData({
       isCreateOpen: true,
-      planEditor: null,
-      planFormTasks: this.data.tasks.slice(),
-      planFormTaskIndex: this.data.taskIndex,
-      isTaskPickerOpen: false,
-      title: '',
-      startDate: date,
-      endDate: date,
-      startTime: wrapsDay ? '09:00' : start.time,
-      endTime: wrapsDay ? '10:00' : end.time,
-      priority: 1,
-      repeatEnabled: false,
-      frequencyIndex: 0,
-      repeatGap: '0',
-      repeatWeekdays,
-      repeatMonthDays,
-      repeatOccurrenceText: '一次',
-      weekdayOptions: weekdayOptionsWithSelection(repeatWeekdays),
-      monthDayOptions: monthDayOptionsWithSelection(repeatMonthDays)
+      planEditorMode: 'create',
+      planEditorInitialValue: {
+        title: '',
+        anchorDate: this.data.anchor,
+        priority: 1,
+        hasAnyTasks: this.data.hasAnyTasks,
+        taskOptions: this.data.tasks.slice(),
+        taskIndex: this.data.taskIndex
+      }
     });
   },
 
-  closeCreatePlan() {
-    this.setData({ isCreateOpen: false, isTaskPickerOpen: false, planEditor: null });
+  onPlanEditorTaskIndexChange(event) {
+    this.setData({ taskIndex: Number(event.detail.taskIndex) });
   },
 
-  openTaskPicker() {
-    this.setData({
-      isTaskPickerOpen: true,
-      taskPickerListHeight: taskPickerListHeight(this.data.planFormTasks)
-    });
-  },
-
-  closeTaskPicker() {
-    this.setData({ isTaskPickerOpen: false });
-  },
-
-  chooseTaskOption(event) {
-    const planFormTaskIndex = Number(event.currentTarget.dataset.index);
-    this.setData({
-      planFormTaskIndex,
-      ...(!this.data.planEditor ? { taskIndex: planFormTaskIndex } : {}),
-      isTaskPickerOpen: false
-    });
-  },
-
-  onField(event) {
-    this.setData({ [event.currentTarget.dataset.key]: event.detail.value });
-  },
-
-  onRepeatGapInput(event) {
-    const rawValue = event.detail.value;
-    const repeatGap = String(rawValue === undefined || rawValue === null ? '' : rawValue);
-    if (!/^\d*$/.test(repeatGap)) {
-      return String(this.data.repeatGap === undefined || this.data.repeatGap === null
-        ? ''
-        : this.data.repeatGap);
-    }
-    this.setData({ repeatGap });
-    return repeatGap;
-  },
-
-  onTitleField(event) {
-    this.setData({ [event.currentTarget.dataset.key]: limitTitleCodePoints(event.detail.value) });
+  onPlanEditorCancel() {
+    this.setData({ isCreateOpen: false, planEditorInitialValue: null });
   },
 
   onPicker(event) {
     const key = event.currentTarget.dataset.key;
     const value = Number(event.detail.value);
-    const updates = { [key]: value };
-    if (key === 'frequencyIndex') {
-      updates.repeatOccurrenceText = repeatOccurrenceText(
-        value,
-        this.data.repeatWeekdays,
-        this.data.repeatMonthDays
-      );
-    }
-    this.setData(updates);
+    this.setData({ [key]: value });
   },
 
-  onSwitch(event) {
-    this.setData({ [event.currentTarget.dataset.key]: event.detail.value });
-  },
-
-  onWeekdaysChange(event) {
-    const repeatWeekdays = event.detail.value.map(Number);
-    this.setData({
-      repeatWeekdays,
-      repeatOccurrenceText: repeatOccurrenceText(
-        this.data.frequencyIndex,
-        repeatWeekdays,
-        this.data.repeatMonthDays
-      ),
-      weekdayOptions: weekdayOptionsWithSelection(repeatWeekdays)
-    });
-  },
-
-  onMonthDaysChange(event) {
-    const repeatMonthDays = event.detail.value.map(Number).sort((left, right) => left - right);
-    this.setData({
-      repeatMonthDays,
-      repeatOccurrenceText: repeatOccurrenceText(
-        this.data.frequencyIndex,
-        this.data.repeatWeekdays,
-        repeatMonthDays
-      ),
-      monthDayOptions: monthDayOptionsWithSelection(repeatMonthDays)
-    });
-  },
-
-  choosePriority(event) {
-    this.setData({ priority: Number(event.currentTarget.dataset.priority) });
-  },
-
-  submitPlanForm() {
-    if (this.data.planEditor) {
-      this.savePlanEditor();
-      return;
-    }
-    this.createPlan();
-  },
-
-  createPlan() {
-    try {
-      const startedAt = parseLocalDateTime(this.data.startDate, this.data.startTime);
-      const endedAt = parseLocalDateTime(this.data.endDate, this.data.endTime);
-      const service = getService();
-      const formTasks = this.data.planFormTasks.length ? this.data.planFormTasks : this.data.tasks;
-      const formTaskIndex = this.data.planFormTasks.length ? this.data.planFormTaskIndex : this.data.taskIndex;
-      const task = formTasks[formTaskIndex];
-      const shouldCreateTask = !this.data.hasAnyTasks
-        || (task && task.optionType === 'create');
-      if (!shouldCreateTask && (!task || !task.id)) {
-        throw new Error('请选择任务');
+  onPlanEditorSuccess(event) {
+    const { operation, revealTarget } = event.detail;
+    this.setData({ isCreateOpen: false, planEditorInitialValue: null }, () => {
+      if (operation === 'update-event') {
+        showSaved('计划块已更新');
+        this.refresh();
+        return;
       }
-      const input = {
-        title: this.data.title,
-        startedAt,
-        endedAt,
-        priority: this.data.priority,
-        ...(shouldCreateTask ? {} : { taskId: task.id })
-      };
-      let result;
-      if (this.data.repeatEnabled) {
-        input.frequency = FREQUENCY_VALUES[this.data.frequencyIndex];
-        input.interval = repeatIntervalFromGap(this.data.repeatGap);
-        input.weekdays = input.frequency === 'weekly' ? this.data.repeatWeekdays : [];
-        input.monthDays = input.frequency === 'monthly' ? this.data.repeatMonthDays : [];
-        if (shouldCreateTask) {
-          result = service.createRecurringPlanWithNewTask(input);
-        } else {
-          result = service.createRecurringPlan(input);
-        }
-        showSaved('固定日程已创建');
-      } else {
-        if (shouldCreateTask) {
-          result = service.createCalendarEventWithNewTask(input);
-        } else {
-          result = service.createCalendarEvent(input);
-        }
-        showSaved('计划块已创建');
-      }
-      const target = createdPlanTarget(result);
-      this.setData({
-        title: '',
-        repeatEnabled: false,
-        repeatWeekdays: [],
-        repeatMonthDays: [],
-        isCreateOpen: false,
-        isTaskPickerOpen: false,
-        planEditor: null
-      }, () => this.revealCreatedPlan(target));
-    } catch (error) {
-      showError(error);
-    }
+      showSaved(operation === 'create-recurring' ? '固定日程已创建' : '计划块已创建');
+      this.revealCreatedPlan(revealTarget);
+    });
   },
 
   startTimerFromPlan(event) {
@@ -922,8 +670,6 @@ Page({
 
   openPlanEditor(event) {
     const item = event.currentTarget.dataset.item;
-    const start = defaultDateTime(item.startedAt);
-    const end = defaultDateTime(item.endedAt);
     const planTasks = this.data.planTasks.slice();
     const existingTask = this.taskById && this.taskById.get(item.taskId);
     if (existingTask && !planTasks.some((task) => task.id === existingTask.id)) {
@@ -935,38 +681,13 @@ Page({
     this.setData({
       detailItem: null,
       isCreateOpen: true,
-      isTaskPickerOpen: false,
-      planEditor: item,
-      title: item.title,
-      startDate: start.date,
-      startTime: start.time,
-      endDate: end.date,
-      endTime: end.time,
-      priority: item.priority,
-      repeatEnabled: false,
-      planFormTasks: planTasks,
-      planFormTaskIndex: planTaskIndex
-    });
-  },
-
-  savePlanEditor() {
-    try {
-      const item = this.data.planEditor;
-      const task = this.data.planFormTasks[this.data.planFormTaskIndex];
-      if (!task || !task.id || !this.taskById || !this.taskById.has(task.id)) {
-        throw new Error('请选择任务');
+      planEditorMode: 'edit',
+      planEditorInitialValue: {
+        plan: item,
+        taskOptions: planTasks,
+        taskIndex: planTaskIndex
       }
-      getService().updateCalendarEvent(item.id, {
-        title: this.data.title,
-        startedAt: parseLocalDateTime(this.data.startDate, this.data.startTime),
-        endedAt: parseLocalDateTime(this.data.endDate, this.data.endTime),
-        priority: this.data.priority,
-        taskId: task.id
-      });
-      this.closeCreatePlan();
-      showSaved('计划块已更新');
-      this.refresh();
-    } catch (error) { showError(error); }
+    });
   },
 
   deletePlan(event) {
