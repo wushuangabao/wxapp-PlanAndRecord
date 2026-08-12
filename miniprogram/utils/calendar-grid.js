@@ -115,6 +115,15 @@ function visualType(item) {
   return item.type === 'candidate' ? 'candidate' : 'confirmed';
 }
 
+function planPriorityClass(item, type = visualType(item)) {
+  if (type !== 'plan') return '';
+  const priority = Number(item.priority);
+  const safePriority = Number.isInteger(priority) && priority >= 1 && priority <= 3
+    ? priority
+    : 1;
+  return `plan-priority-${safePriority}`;
+}
+
 function rowIndexForTimestamp(rows, timestamp) {
   const index = rows.findIndex((row) => timestamp >= row.start && timestamp < row.end);
   return index < 0 ? rows.length - 1 : index;
@@ -140,9 +149,11 @@ function rawBlock(item, range, view, grid) {
   }
   const unclippedHeight = Math.max(MIN_BLOCK_HEIGHT, bottom - top);
   const adjustedTop = Math.min(top, Math.max(0, grid.canvasHeight - unclippedHeight));
+  const type = visualType(item);
   return {
     ...item,
-    visualType: visualType(item),
+    visualType: type,
+    priorityClass: planPriorityClass(item, type),
     continuesBefore: item.startedAt < range.start,
     continuesAfter: item.endedAt > rangeEndExclusive,
     blockTop: adjustedTop,

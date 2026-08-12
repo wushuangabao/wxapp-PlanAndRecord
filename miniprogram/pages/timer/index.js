@@ -352,6 +352,7 @@ Page({
     manualEvents: [],
     manualEventIndex: 0,
     manualMode: 'manual',
+    manualEditingCandidate: false,
     manualLogId: null,
     recoveryDraft: null,
     showDiscardRecoveryConfirm: false,
@@ -1087,6 +1088,7 @@ Page({
     this.setData({
       showManual: true,
       manualMode: 'manual',
+      manualEditingCandidate: false,
       manualLogId: null,
       manualStartTimeEdited: false,
       manualEndTimeEdited: false,
@@ -1129,6 +1131,7 @@ Page({
     this.setData({
       showManual: true,
       manualMode: 'recovery',
+      manualEditingCandidate: false,
       manualLogId: null,
       manualStartDate: start.date,
       manualStartTime: start.time,
@@ -1182,12 +1185,14 @@ Page({
     this.manualTagCandidateQueue = buildTagCandidateQueue(snapshot.timeLogs, item.id);
     this.manualPlanSelectionRange = planSelection.range;
     this.recoveryCandidatePreview = null;
-    this.manualEditingCandidate = item.status === 'candidate';
+    const manualEditingCandidate = item.status === 'candidate';
+    this.manualEditingCandidate = manualEditingCandidate;
     this.manualOriginalStartedAt = item.startedAt;
     this.manualOriginalEndedAt = item.endedAt;
     this.setData({
       showManual: true,
       manualMode: 'edit',
+      manualEditingCandidate,
       manualLogId: item.id,
       manualStartDate: start.date,
       manualStartTime: start.time,
@@ -1235,6 +1240,7 @@ Page({
     this.setData({
       showManual: false,
       manualMode: 'manual',
+      manualEditingCandidate: false,
       manualLogId: null,
       manualStartTimeEdited: false,
       manualEndTimeEdited: false,
@@ -1300,6 +1306,7 @@ Page({
       this.setData({
         showManual: false,
         manualMode: 'manual',
+        manualEditingCandidate: false,
         manualLogId: null,
         manualStartTimeEdited: false,
         manualEndTimeEdited: false,

@@ -597,7 +597,7 @@ test('计时页最近记录展示备注、时间、标签、自动标识与操�
     assert.match(wxml, /wx:for="\{\{item.tags\}\}"/);
     assert.match(wxml, /wx:if="\{\{item\.isCandidate\}\}" class="recent-auto-badge" aria-label="自动生成，待确认">auto<\/text>/);
     assert.match(wxml, /wx:if="\{\{item\.isNew\}\}" class="recent-new-badge" aria-label="新记录">new<\/text>/);
-    assert.match(wxml, /<view class="recent-icon-button recent-edit-button" role="button" aria-label="编辑记录" data-id="\{\{item\.id\}\}" bindtap="openRecentLogEditor"><edit-icon\s*\/><\/view>/);
+    assert.match(wxml, /<view class="recent-icon-button recent-edit-button" role="button" aria-label="\{\{item\.isCandidate \? '编辑并确认候选' : '编辑记录'\}\}" data-id="\{\{item\.id\}\}" bindtap="openRecentLogEditor"><edit-icon\s*\/><\/view>/);
     assert.match(wxml, /<view class="recent-icon-button recent-delete-button" role="button" aria-label="删除记录" data-id="\{\{item\.id\}\}" bindtap="confirmDeleteRecentLog"><delete-icon\s*\/><\/view>/);
     assert.doesNotMatch(wxml, /<button class="recent-icon-button/);
     assert.equal(timerJson.usingComponents['delete-icon'], '/components/delete-icon/index');
@@ -674,6 +674,7 @@ test('计时页可编辑最近记录，并将候选记录确认后保存', () =>
     page.openRecentLogEditor({ currentTarget: { dataset: { id: 'candidate_log' } } });
     assert.equal(page.data.manualMode, 'edit');
     assert.equal(page.data.manualLogId, 'candidate_log');
+    assert.equal(page.data.manualEditingCandidate, true);
     assert.equal(page.data.manualNote, '自动整理会议纪要');
     assert.deepEqual(page.data.manualTags, ['工作']);
 
@@ -686,6 +687,7 @@ test('计时页可编辑最近记录，并将候选记录确认后保存', () =>
     assert.deepEqual(updateCalls[0].input.tags, ['工作']);
     assert.deepEqual(refreshCalls, [{ newLogId: 'candidate_log' }]);
     assert.equal(toasts.at(-1).title, '候选已编辑并确认');
+    assert.equal(page.data.manualEditingCandidate, false);
   } finally {
     global.getApp = originalGetApp;
     global.wx = originalWx;
@@ -1498,6 +1500,9 @@ test('计时页只提交可选标签和计划块，不暴露分类、项目或�
   assert.match(wxml, /<view class="manual-field-label">开始时间<\/view>/);
   assert.match(wxml, /<view class="manual-field-label">结束时间<\/view>/);
   assert.match(wxml, /<view class="manual-field-label">计划块<\/view>/);
+  assert.match(wxml, /title="\{\{manualMode === 'recovery' \? '修正恢复草稿' : \(manualMode === 'edit' \? \(manualEditingCandidate \? '编辑并确认候选' : '编辑记录'\) : '手工补录'\)\}\}"/);
+  assert.match(wxml, /confirm-text="\{\{manualEditingCandidate \? '确认记录' : '确定'\}\}"/);
+  assert.match(wxml, /<view wx:if="\{\{manualEditingCandidate\}\}" class="candidate-confirm-hint" role="note">保存后将转为实际记录，并计入默认统计。<\/view>/);
   assert.match(wxml, /class="manual-date-picker" mode="date" value="\{\{manualStartDate\}\}"[\s\S]*?<second-time-picker[^>]*value="\{\{manualStartTime\}\}"/);
   assert.match(wxml, /class="manual-date-picker" mode="date" value="\{\{manualEndDate\}\}"[\s\S]*?<second-time-picker[^>]*value="\{\{manualEndTime\}\}"/);
   assert.doesNotMatch(wxml, /开始日期：|开始：|结束日期：|结束：|计划块：/);

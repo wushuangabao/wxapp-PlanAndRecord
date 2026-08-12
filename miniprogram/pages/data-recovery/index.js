@@ -45,7 +45,11 @@ Page({
 
   onLoad() {
     const bootstrap = getApp().globalData.bootstrap;
-    const reason = bootstrap && bootstrap.recoveryReason;
+    if (!bootstrap || bootstrap.mode !== 'data-recovery') {
+      wx.reLaunch({ url: '/pages/timer/index' });
+      return;
+    }
+    const reason = bootstrap.recoveryReason;
     const [title, explanation] = RECOVERY_COPY[reason] || DEFAULT_RECOVERY_COPY;
     this.setData({
       title,

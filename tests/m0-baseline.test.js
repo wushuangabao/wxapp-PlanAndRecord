@@ -25,13 +25,29 @@ test('M0：源码保持纯本地架构，不声明云端依赖', () => {
   assert.deepEqual(Object.keys(packageConfig.dependencies || {}), []);
 });
 
-test('M0：sitemap 允许微信搜索收录所有页面', () => {
+test('M0：sitemap 仅收录业务页面，明确禁止收录数据恢复页', () => {
   const sitemap = require('../miniprogram/sitemap.json');
 
   assert.deepEqual(sitemap.rules, [
     {
       action: 'allow',
-      page: '*'
+      page: 'pages/timer/index'
+    },
+    {
+      action: 'disallow',
+      page: 'pages/data-recovery/index'
+    },
+    {
+      action: 'allow',
+      page: 'pages/plans/index'
+    },
+    {
+      action: 'allow',
+      page: 'pages/calendar/index'
+    },
+    {
+      action: 'allow',
+      page: 'pages/profile/index'
     }
   ]);
 });
@@ -45,7 +61,7 @@ test('M0：启动期数据恢复页已注册且不属于 tabBar', () => {
   );
 });
 
-test('M0：公共基础库目标固定且私有高版本配置只提供未跟踪示例', () => {
+test('M0：公共基础库与合法域名校验固定且私有高版本配置只提供未跟踪示例', () => {
   const projectConfig = JSON.parse(fs.readFileSync(
     path.join(__dirname, '../project.config.json'),
     'utf8'
@@ -57,6 +73,7 @@ test('M0：公共基础库目标固定且私有高版本配置只提供未跟踪
   const gitignore = fs.readFileSync(path.join(__dirname, '../.gitignore'), 'utf8');
 
   assert.equal(projectConfig.libVersion, '2.25.4');
+  assert.equal(projectConfig.setting.urlCheck, true);
   assert.deepEqual(privateConfigExample, {
     libVersion: '3.16.2',
     projectname: 'wxapp-PlanAndRecord',

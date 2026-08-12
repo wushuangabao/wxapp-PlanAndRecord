@@ -70,7 +70,8 @@ test('M3：TODO 和项目的右上角新建入口为无底色深灰加号，页�
   const wxml = fs.readFileSync(plansWxmlPath, 'utf8');
   const wxss = fs.readFileSync(plansWxssPath, 'utf8');
   assert.match(wxml, /class="section-add todo-add"[^>]*bindtap="openStandaloneTask"/);
-  assert.match(wxml, /class="section-add project-add" bindtap="openProjectCreate"/);
+  assert.match(wxml, /<view wx:if="\{\{activeProjects\.length < 5\}\}" class="section-add project-add" role="button" aria-label="新建项目" bindtap="openProjectCreate">\+<\/view>/);
+  assert.doesNotMatch(wxml, /<button[^>]*class="section-add project-add"/);
   assert.match(wxml, /section-heading"><view class="section-title">项目（/);
   assert.doesNotMatch(wxml, /todo-fab|右下角 \+/);
   assert.doesNotMatch(wxss, /\.todo-fab\s*\{/);

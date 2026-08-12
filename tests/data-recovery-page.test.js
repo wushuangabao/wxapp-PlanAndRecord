@@ -76,7 +76,7 @@ function createHarness(options = {}) {
   const app = {
     globalData: {
       bootstrap: {
-        mode: 'data-recovery',
+        mode: options.bootstrapMode || 'data-recovery',
         recoveryReason: options.reason || 'DATA_CORRUPTED',
         recoveryService: service
       }
@@ -169,6 +169,16 @@ test('恢复页按故障原因展示不同标题且不依赖应用服务', () =>
       assert.match(harness.page.data.explanation, new RegExp(explanation), reason);
     } finally { harness.restore(); }
   }
+});
+
+test('恢复页在非恢复模式下返回计时页，不加载恢复内容', () => {
+  const harness = createHarness({ bootstrapMode: 'ready' });
+  try {
+    assert.deepEqual(harness.calls.reLaunch, [{ url: '/pages/timer/index' }]);
+    assert.equal(harness.page.data.title, '本地数据损坏');
+    assert.equal(harness.page.data.explanation, '');
+    assert.equal(harness.calls.exportRawData, 0);
+  } finally { harness.restore(); }
 });
 
 test('页面服务访问器严格隔离 ready 与 data-recovery 模式', () => {

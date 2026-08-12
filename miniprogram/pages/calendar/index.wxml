@@ -46,7 +46,7 @@
           wx:for="{{timeline}}"
           wx:key="renderKey"
           id="{{item.domId}}"
-          class="calendar-block {{item.visualType}} {{item.continuesBefore ? 'continues-before' : ''}} {{item.continuesAfter ? 'continues-after' : ''}} {{item.overlapMeta ? 'is-overlapping' : ''}}"
+          class="calendar-block {{item.visualType}} {{item.priorityClass}} {{item.continuesBefore ? 'continues-before' : ''}} {{item.continuesAfter ? 'continues-after' : ''}} {{item.overlapMeta ? 'is-overlapping' : ''}}"
           style="{{item.blockStyle}}"
           role="button"
           aria-label="{{item.ariaLabel}}"
@@ -139,7 +139,6 @@
         <view class="detail-time">{{detailItem.displayTime}}</view>
         <view wx:if="{{detailItem.displayTaskName}}" class="detail-row"><text>任务</text><text>{{detailItem.displayTaskName}}</text></view>
         <view wx:if="{{detailItem.displayProjectName}}" class="detail-row"><text>项目</text><text>{{detailItem.displayProjectName}}</text></view>
-        <view wx:if="{{detailItem.displayPriority}}" class="detail-row"><text>优先级</text><text>{{detailItem.displayPriority}}</text></view>
         <view wx:if="{{detailItem.note}}" class="detail-row detail-row-stack"><text>备注</text><text>{{detailItem.note}}</text></view>
         <view wx:if="{{detailItem.displayTags}}" class="detail-row detail-row-stack"><text>标签</text><text>{{detailItem.displayTags}}</text></view>
         <view wx:if="{{detailItem.displayOverlap}}" class="detail-overlap">{{detailItem.displayOverlap}}</view>

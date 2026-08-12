@@ -3,7 +3,23 @@
   "rules": [
     {
       "action": "allow",
-      "page": "*"
+      "page": "pages/timer/index"
+    },
+    {
+      "action": "disallow",
+      "page": "pages/data-recovery/index"
+    },
+    {
+      "action": "allow",
+      "page": "pages/plans/index"
+    },
+    {
+      "action": "allow",
+      "page": "pages/calendar/index"
+    },
+    {
+      "action": "allow",
+      "page": "pages/profile/index"
     }
   ]
 }

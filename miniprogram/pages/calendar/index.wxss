@@ -289,6 +289,25 @@
 .calendar-block.plan {
   border-left: 7rpx solid #7b918b;
   background: #e7edeb;
+  color: #486455;
+}
+
+.calendar-block.plan.plan-priority-1 {
+  border-left-color: #9fb4a4;
+  background: #e7edeb;
+  color: #486455;
+}
+
+.calendar-block.plan.plan-priority-2 {
+  border-left-color: #78947f;
+  background: #b8c8bc;
+  color: #385846;
+}
+
+.calendar-block.plan.plan-priority-3 {
+  border-left-color: #385846;
+  background: #55725e;
+  color: #faf9f7;
 }
 
 .calendar-block.candidate {

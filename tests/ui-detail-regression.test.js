@@ -55,6 +55,20 @@ test('日历顶部提供当前范围、今天按钮、四种粒度与右对齐�
   assert.doesNotMatch(wxml, /class="nav-button"/);
 });
 
+test('日历计划优先级只用三档绿色呈现，不显示数字或优先级文字', () => {
+  const script = fs.readFileSync(path.join(pagesRoot, 'calendar/index.js'), 'utf8');
+  const wxml = fs.readFileSync(path.join(pagesRoot, 'calendar/index.wxml'), 'utf8');
+  const wxss = fs.readFileSync(path.join(pagesRoot, 'calendar/index.wxss'), 'utf8');
+
+  assert.match(wxml, /class="calendar-block \{\{item\.visualType\}\} \{\{item\.priorityClass\}\}/);
+  assert.doesNotMatch(wxml, /detailItem\.displayPriority/);
+  assert.doesNotMatch(script, /displayPriority:/);
+  assert.match(script, /priorityAriaLabel/);
+  assert.match(wxss, /\.calendar-block\.plan\.plan-priority-1\s*\{/);
+  assert.match(wxss, /\.calendar-block\.plan\.plan-priority-2\s*\{/);
+  assert.match(wxss, /\.calendar-block\.plan\.plan-priority-3\s*\{/);
+});
+
 test('所有自定义底部弹窗复用共享头部组件', () => {
   const expectedModalCounts = { plans: 5, calendar: 4 };
   const calendarModalBindings = [

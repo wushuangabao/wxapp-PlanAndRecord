@@ -15,7 +15,7 @@
               <text wx:if="{{item.isCandidate}}" class="recent-auto-badge" aria-label="自动生成，待确认">auto</text>
               <text wx:if="{{item.isNew}}" class="recent-new-badge" aria-label="新记录">new</text>
               <view class="recent-log-actions">
-                <view class="recent-icon-button recent-edit-button" role="button" aria-label="编辑记录" data-id="{{item.id}}" bindtap="openRecentLogEditor"><edit-icon /></view>
+                <view class="recent-icon-button recent-edit-button" role="button" aria-label="{{item.isCandidate ? '编辑并确认候选' : '编辑记录'}}" data-id="{{item.id}}" bindtap="openRecentLogEditor"><edit-icon /></view>
                 <view class="recent-icon-button recent-delete-button" role="button" aria-label="删除记录" data-id="{{item.id}}" bindtap="confirmDeleteRecentLog"><delete-icon /></view>
               </view>
             </view>
@@ -88,7 +88,8 @@
 
   <view wx:if="{{showManual}}" class="modal-mask" bindtap="closeManual">
     <view class="modal" catchtap="noop">
-      <sheet-header title="{{manualMode === 'recovery' ? '修正恢复草稿' : (manualMode === 'edit' ? '编辑记录' : '手工补录')}}" show-confirm="{{true}}" bind:confirm="onManualSave" bind:cancel="closeManual" />
+      <sheet-header title="{{manualMode === 'recovery' ? '修正恢复草稿' : (manualMode === 'edit' ? (manualEditingCandidate ? '编辑并确认候选' : '编辑记录') : '手工补录')}}" show-confirm="{{true}}" confirm-text="{{manualEditingCandidate ? '确认记录' : '确定'}}" bind:confirm="onManualSave" bind:cancel="closeManual" />
+      <view wx:if="{{manualEditingCandidate}}" class="candidate-confirm-hint" role="note">保存后将转为实际记录，并计入默认统计。</view>
       <view class="manual-time-row">
         <view class="manual-field-label">开始时间</view>
         <picker class="manual-date-picker" mode="date" value="{{manualStartDate}}" data-key="manualStartDate" bindchange="onManualField"><view class="picker-field">{{manualStartDate}}</view></picker>

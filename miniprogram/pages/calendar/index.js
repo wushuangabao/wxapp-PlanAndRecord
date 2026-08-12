@@ -53,6 +53,10 @@ function calendarBlockDomId(id) {
   return `calendar-block-${String(id || '').replace(/[^A-Za-z0-9_-]/g, '-')}`;
 }
 
+function priorityAriaLabel(priority) {
+  return ['', '低优先级', '中优先级', '高优先级'][Number(priority)] || '';
+}
+
 function createdPlanTarget(result) {
   if (!result || typeof result !== 'object') return null;
   if (result.occurrence && typeof result.occurrence === 'object') return result.occurrence;
@@ -379,7 +383,6 @@ Page({
             ? task.derivedProjectName
             : '') || item.projectNameSnapshot || '',
           displayTags: Array.isArray(item.tags) ? item.tags.join('、') : '',
-          displayPriority: item.priority || null,
           priority: item.priority || 1,
           canAssociate,
           canEditPlan: item.type === 'plan'
@@ -400,7 +403,9 @@ Page({
         domId: calendarBlockDomId(item.renderKey || item.id),
         ariaLabel: item.isAggregate
           ? `${item.title}，点击查看被聚合的重叠条目`
-          : `${item.displayKind}，${item.title}，${item.displayTime}`
+          : `${item.displayKind}，${item.title}，${item.displayTime}${item.visualType === 'plan'
+            ? `，${priorityAriaLabel(item.priority)}`
+            : ''}`
       }));
       this.eventById = new Map(snapshot.calendarEvents.map((item) => [item.id, item]));
       this.currentSnapshot = snapshot;

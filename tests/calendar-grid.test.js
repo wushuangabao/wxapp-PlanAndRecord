@@ -81,6 +81,24 @@ test('四种视图生成对应时间刻度', () => {
   assert.equal('terminalLabel' in day, false);
 });
 
+test('计划块按优先级生成三档绿色样式，非计划块不携带优先级样式', () => {
+  const range = rangeForView(new Date(2026, 7, 8, 12, 0).getTime(), 'day');
+  const grid = buildTimeRows(range, 'day');
+  const startedAt = new Date(2026, 7, 8, 9, 0).getTime();
+  const endedAt = new Date(2026, 7, 8, 10, 0).getTime();
+  const blocks = buildCalendarBlocks([
+    { id: 'low', type: 'plan', title: '低优先级', priority: 1, startedAt, endedAt },
+    { id: 'medium', type: 'plan', title: '中优先级', priority: 2, startedAt, endedAt },
+    { id: 'high', type: 'plan', title: '高优先级', priority: 3, startedAt, endedAt },
+    { id: 'actual', type: 'confirmed', title: '实际记录', priority: 3, startedAt, endedAt }
+  ], range, 'day', grid);
+
+  assert.equal(blocks.find((item) => item.id === 'low').priorityClass, 'plan-priority-1');
+  assert.equal(blocks.find((item) => item.id === 'medium').priorityClass, 'plan-priority-2');
+  assert.equal(blocks.find((item) => item.id === 'high').priorityClass, 'plan-priority-3');
+  assert.equal(blocks.find((item) => item.id === 'actual').priorityClass, '');
+});
+
 test('粗粒度按整月或整日排布，日视图按小时精确排布并标记跨范围', () => {
   const yearRange = rangeForView(new Date(2026, 5, 1).getTime(), 'year');
   const yearGrid = buildTimeRows(yearRange, 'year');
