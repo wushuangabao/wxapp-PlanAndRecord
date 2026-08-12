@@ -51,6 +51,7 @@ function createHarness({
   tasks: providedTasks,
   projects: providedProjects,
   wishes: providedWishes,
+  planStates: providedPlanStates,
   storage: providedStorage,
   preferenceStore: providedPreferenceStore,
   profileId: initialProfileId = 'profile_plans'
@@ -76,11 +77,16 @@ function createHarness({
   });
   const calls = {
     createProject: [], createTask: [], updateTask: [], deleteTask: [],
-    createWish: [], updateWish: [], deleteWish: [], convertWishToProject: []
+    createWish: [], updateWish: [], deleteWish: [], convertWishToProject: [],
+    startTaskPlanTimer: [], reopenTaskByRemovingCompletionLog: [],
+    refreshTaskPlanStatuses: []
   };
+  const planStates = providedPlanStates || new Map();
   const wxState = {};
   const service = {
     snapshot() { return { localProfile: { id: profileId }, projects, wishes, tasks }; },
+    taskPlanStates() { return planStates; },
+    refreshTaskPlanStatuses() { calls.refreshTaskPlanStatuses.push(true); return []; },
     createProject(input) {
       calls.createProject.push(input);
       const createdProject = { id: 'project_created', title: input.title, status: 'active', deadlineAt: input.deadlineAt };
@@ -94,6 +100,18 @@ function createHarness({
       if (task) Object.assign(task, input);
     },
     deleteTask(id, confirmed) { calls.deleteTask.push([id, confirmed]); },
+    startTaskPlanTimer(id, candidateId) {
+      calls.startTaskPlanTimer.push([id, candidateId]);
+      return { status: 'running' };
+    },
+    taskCompletionUndoPreview(id) {
+      const state = planStates.get(id);
+      if (!state || !state.completionUndoLog) throw new Error('没有完成证据');
+      return state.completionUndoLog;
+    },
+    reopenTaskByRemovingCompletionLog(id, logId, confirmed) {
+      calls.reopenTaskByRemovingCompletionLog.push([id, logId, confirmed]);
+    },
     createWish(title) {
       calls.createWish.push(title);
       const createdWish = {
@@ -118,6 +136,7 @@ function createHarness({
     showToast(config) { wxState.toast = config; },
     showActionSheet(config) { wxState.actionSheet = config; },
     showModal(config) { wxState.modal = config; },
+    switchTab(config) { wxState.switchTab = config; },
     getStorageSync(key) { return Object.hasOwn(storage, key) ? storage[key] : ''; },
     setStorageSync(key, value) { storage[key] = value; }
   };
@@ -471,7 +490,7 @@ test('计划页：项目内联子任务的勾选与标题编辑入口均提供�
   const wxss = fs.readFileSync(plansWxssPath, 'utf8');
 
   assert.equal(
-    (wxml.match(/class="project-task-check" role="button" aria-label="\{\{task\.status === 'completed' \? '重新打开子任务' : '完成子任务'\}\}" data-id="\{\{task\.id\}\}" data-status="\{\{task\.status\}\}" bindtap="toggleTask"/g) || []).length,
+    (wxml.match(/class="project-task-check" role="button"[^>]*data-id="\{\{task\.id\}\}" data-status="\{\{task\.status\}\}" bindtap="toggleTask"/g) || []).length,
     2
   );
   assert.equal(
@@ -686,6 +705,147 @@ test('计划页：删除任务必须确认', () => {
     assert.equal(harness.calls.deleteTask.length, 0);
     harness.wxState.modal.success({ confirm: true });
     assert.deepEqual(harness.calls.deleteTask, [['task_todo', true]]);
+  } finally {
+    harness.restore();
+  }
+});
+
+test('计划页：顶部 TODO 隐藏今天不发生的纯固定日程，但项目卡仍保留任务', () => {
+  const tasks = [
+    { id: 'task_hidden', title: '周末任务', status: TASK_STATUS.TODO, projectId: 'project_1', updatedAt: 1 },
+    { id: 'task_visible', title: '普通任务', status: TASK_STATUS.TODO, projectId: 'project_1', updatedAt: 2 }
+  ];
+  const planStates = new Map([
+    ['task_hidden', {
+      topVisible: false,
+      controlKind: 'schedule',
+      candidates: [],
+      entityPlans: [],
+      repeatRules: [{ id: 'rule_weekend' }],
+      activeRepeatRules: [{ id: 'rule_weekend' }]
+    }]
+  ]);
+  const harness = createHarness({ tasks, planStates });
+  try {
+    harness.page.refresh();
+    assert.deepEqual(harness.page.data.todoListTasks.map((task) => task.id), ['task_visible']);
+    assert.equal(harness.page.data.projectCards[0].todoTasks.some((task) => task.id === 'task_hidden'), true);
+    assert.equal(harness.page.data.projectCards[0].todoTasks.find((task) => task.id === 'task_hidden').controlKind, 'schedule');
+  } finally {
+    harness.restore();
+  }
+});
+
+test('计划页：保持前台跨过本地零点时刷新计划派生状态并在隐藏时清理定时器', () => {
+  const harness = createHarness();
+  const originalSetTimeout = global.setTimeout;
+  const originalClearTimeout = global.clearTimeout;
+  const originalDateNow = Date.now;
+  const scheduled = [];
+  const cleared = [];
+  let timerId = 0;
+  Date.now = () => new Date(2026, 7, 12, 23, 59, 59, 900).getTime();
+  global.setTimeout = (callback, delay) => {
+    timerId += 1;
+    scheduled.push({ id: timerId, callback, delay });
+    return timerId;
+  };
+  global.clearTimeout = (id) => { cleared.push(id); };
+  try {
+    harness.page.onShow();
+    assert.equal(harness.calls.refreshTaskPlanStatuses.length, 1);
+    assert.equal(scheduled.length, 1);
+    assert.ok(scheduled[0].delay >= 100 && scheduled[0].delay <= 200);
+
+    scheduled[0].callback();
+    assert.equal(harness.calls.refreshTaskPlanStatuses.length, 2);
+    assert.equal(scheduled.length, 2);
+
+    harness.page.onHide();
+    assert.equal(cleared.includes(scheduled[1].id), true);
+  } finally {
+    harness.page.clearNextLocalDayRefresh();
+    Date.now = originalDateNow;
+    global.setTimeout = originalSetTimeout;
+    global.clearTimeout = originalClearTimeout;
+    harness.restore();
+  }
+});
+
+test('计划页：计划任务单候选直接计时，多候选先选择，同一任务计时中直接前往计时页', () => {
+  const tasks = [{ id: 'task_plan', title: '计划任务', status: TASK_STATUS.TODO, projectId: null, updatedAt: 1 }];
+  const state = {
+    topVisible: true,
+    controlKind: 'timer',
+    timerMatchesTask: false,
+    timerStatus: 'idle',
+    candidates: [{ id: 'event:event_1', title: '上午计划', startedAt: 1, endedAt: 2 }],
+    entityPlans: [{ id: 'event_1' }],
+    repeatRules: [],
+    activeRepeatRules: []
+  };
+  const planStates = new Map([['task_plan', state]]);
+  const harness = createHarness({ tasks, planStates });
+  try {
+    harness.page.refresh();
+    harness.page.toggleTask(event('task_plan', TASK_STATUS.TODO));
+    assert.deepEqual(harness.calls.startTaskPlanTimer, [['task_plan', 'event:event_1']]);
+    assert.deepEqual(harness.wxState.switchTab, { url: '/pages/timer/index' });
+
+    state.candidates = [
+      { id: 'event:event_1', title: '上午计划', startedAt: 1, endedAt: 2 },
+      { id: 'event:event_2', title: '下午计划', startedAt: 3, endedAt: 4 }
+    ];
+    harness.page.refresh();
+    harness.page.toggleTask(event('task_plan', TASK_STATUS.TODO));
+    assert.deepEqual(harness.wxState.actionSheet.itemList, ['上午计划', '下午计划']);
+    harness.wxState.actionSheet.success({ tapIndex: 1 });
+    assert.deepEqual(harness.calls.startTaskPlanTimer.at(-1), ['task_plan', 'event:event_2']);
+
+    state.timerMatchesTask = true;
+    state.timerStatus = 'paused';
+    harness.page.refresh();
+    harness.calls.startTaskPlanTimer.length = 0;
+    harness.page.toggleTask(event('task_plan', TASK_STATUS.TODO));
+    assert.equal(harness.calls.startTaskPlanTimer.length, 0);
+    assert.deepEqual(harness.wxState.switchTab, { url: '/pages/timer/index' });
+  } finally {
+    harness.restore();
+  }
+});
+
+test('计划页：自动完成任务取消勾选前确认删除完成证据，删除提示汇总全部计划关联', () => {
+  const undoLog = {
+    id: 'log_trigger',
+    taskNameSnapshot: '完成任务',
+    note: '收尾复盘',
+    startedAt: new Date(2026, 7, 12, 9, 5).getTime(),
+    endedAt: new Date(2026, 7, 12, 9, 35).getTime()
+  };
+  const tasks = [{ id: 'task_done_plan', title: '完成任务', status: TASK_STATUS.COMPLETED, projectId: null, updatedAt: 1 }];
+  const planStates = new Map([['task_done_plan', {
+    topVisible: true,
+    controlKind: 'checkbox',
+    candidates: [],
+    entityPlans: [{ id: 'event_1' }, { id: 'event_2' }],
+    repeatRules: [{ id: 'rule_1' }],
+    activeRepeatRules: [],
+    completionUndoLog: undoLog
+  }]]);
+  const harness = createHarness({ tasks, planStates });
+  try {
+    harness.page.refresh();
+    harness.page.toggleTask(event('task_done_plan', TASK_STATUS.COMPLETED));
+    assert.equal(
+      harness.wxState.modal.content,
+      '重新打开会删除以下时间记录：\n完成任务\n2026-08-12 09:05 – 2026-08-12 09:35\n是否继续？'
+    );
+    harness.wxState.modal.success({ confirm: true });
+    assert.deepEqual(harness.calls.reopenTaskByRemovingCompletionLog, [['task_done_plan', 'log_trigger', true]]);
+
+    harness.page.confirmDeleteTask(event('task_done_plan'));
+    assert.match(harness.wxState.modal.content, /2 个实体计划/);
+    assert.match(harness.wxState.modal.content, /1 个固定日程/);
   } finally {
     harness.restore();
   }

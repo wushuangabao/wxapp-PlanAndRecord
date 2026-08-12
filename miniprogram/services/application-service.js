@@ -45,6 +45,7 @@ const {
 } = require('../repository/json-import');
 const { normalizeJsonSnapshot, parseJsonSnapshot, persistedValueEquals } = require('../repository/json-snapshot');
 const { exportJson } = require('./export-service');
+const { buildTaskPlanStates } = require('./task-plan-state');
 
 function firstRuleOccurrence(rule) {
   const revision = rule.revisions[0];
@@ -75,6 +76,144 @@ class ApplicationService {
 
   snapshot() {
     return this.repository.read();
+  }
+
+  taskPlanStates(at = this.now()) {
+    return buildTaskPlanStates(this.snapshot(), at);
+  }
+
+  resolvedTaskPlanStatus(task, state) {
+    if (!state) return task.status;
+    if (state.canAutoComplete) return TASK_STATUS.COMPLETED;
+    if (state.entityPlans.length > 0 || state.activeRepeatRules.length > 0) {
+      return TASK_STATUS.TODO;
+    }
+    return task.status;
+  }
+
+  reconcileTaskPlanStatuses(database, now, taskIds = null) {
+    const restrictedTaskIds = taskIds ? new Set(taskIds.filter(Boolean)) : null;
+    const states = buildTaskPlanStates(database, now);
+    database.tasks.forEach((task) => {
+      if (restrictedTaskIds && !restrictedTaskIds.has(task.id)) return;
+      const state = states.get(task.id);
+      if (!state) return;
+      const nextStatus = this.resolvedTaskPlanStatus(task, state);
+      if (nextStatus === task.status) return;
+      task.status = nextStatus;
+      task.completedAt = nextStatus === TASK_STATUS.COMPLETED ? now : null;
+      task.updatedAt = now;
+    });
+  }
+
+  refreshTaskPlanStatuses(at = this.now()) {
+    const snapshot = this.snapshot();
+    const states = buildTaskPlanStates(snapshot, at);
+    const changedTaskIds = snapshot.tasks
+      .filter((task) => this.resolvedTaskPlanStatus(task, states.get(task.id)) !== task.status)
+      .map((task) => task.id);
+    if (!changedTaskIds.length) return [];
+    return this.repository.transaction((database) => {
+      this.reconcileTaskPlanStatuses(database, at, changedTaskIds);
+      return changedTaskIds;
+    }, { updatedAt: at }).result;
+  }
+
+  taskIdsForRecord(database, record) {
+    const taskIds = new Set();
+    if (record && record.taskId) taskIds.add(record.taskId);
+    if (record && record.calendarEventId) {
+      const event = database.calendarEvents.find((item) => item.id === record.calendarEventId);
+      if (event && event.taskId) taskIds.add(event.taskId);
+    }
+    if (record && record.originRuleId) {
+      const rule = database.repeatRules.find((item) => item.id === record.originRuleId);
+      (rule && rule.revisions || []).forEach((revision) => {
+        if (revision.taskId) taskIds.add(revision.taskId);
+      });
+    }
+    return Array.from(taskIds);
+  }
+
+  startTimerInDatabase(database, input, now) {
+    if (database.recoveryDraft) {
+      throw new DomainError('RECOVERY_DRAFT_PENDING', '有一条待修正的恢复草稿，请先处理');
+    }
+    if (database.timer.status !== TIMER_STATUS.IDLE) {
+      throw new DomainError('TIMER_ALREADY_ACTIVE', '已有进行中的计时，请先结束当前计时');
+    }
+    const association = this.resolveNewRecordAssociations(database, input);
+    database.timer = {
+      status: TIMER_STATUS.RUNNING,
+      startedAt: now,
+      pausedAt: null,
+      pauses: [],
+      draft: {
+        ...association,
+        note: input.note || '',
+        tags: normalizeTags(input.tags === undefined ? [] : input.tags)
+      }
+    };
+    return database.timer;
+  }
+
+  startTaskPlanTimer(taskId, candidateId = null) {
+    const now = this.now();
+    return this.repository.transaction((database) => {
+      this.requireEntity(database.tasks, taskId, '任务');
+      const state = buildTaskPlanStates(database, now).get(taskId);
+      if (state.timerMatchesTask) {
+        throw new DomainError('TIMER_ALREADY_ACTIVE', '该任务已在计时，请前往计时页查看');
+      }
+      let candidate = candidateId
+        ? state.candidates.find((item) => item.id === candidateId)
+        : null;
+      if (!candidate && !candidateId && state.candidates.length === 1) {
+        [candidate] = state.candidates;
+      }
+      if (!candidate && !candidateId && state.candidates.length > 1) {
+        throw new DomainError('TASK_PLAN_CANDIDATE_REQUIRED', '该任务关联多个可执行计划，请先选择一个');
+      }
+      if (!candidate) {
+        throw new DomainError('TASK_PLAN_CANDIDATE_UNAVAILABLE', '该计划已记录或不再可执行');
+      }
+      const association = candidate.kind === 'event'
+        ? { calendarEventId: candidate.calendarEventId }
+        : {
+          originRuleId: candidate.originRuleId,
+          originOccurrenceId: candidate.originOccurrenceId
+        };
+      return this.startTimerInDatabase(database, association, now);
+    }, { updatedAt: now }).result;
+  }
+
+  taskCompletionUndoPreview(taskId) {
+    const state = buildTaskPlanStates(this.snapshot(), this.now()).get(taskId);
+    if (!state || !state.completionUndoLog) {
+      throw new DomainError('TASK_COMPLETION_EVIDENCE_NOT_FOUND', '找不到本次自动完成对应的时间记录');
+    }
+    return clone(state.completionUndoLog);
+  }
+
+  reopenTaskByRemovingCompletionLog(taskId, logId, confirmed) {
+    if (confirmed !== true) {
+      throw new DomainError('TASK_REOPEN_CONFIRMATION_REQUIRED', '重新打开任务会删除对应时间记录，需要二次确认');
+    }
+    const now = this.now();
+    return this.repository.transaction((database) => {
+      const task = this.requireEntity(database.tasks, taskId, '任务');
+      const state = buildTaskPlanStates(database, now).get(taskId);
+      const evidence = state && state.completionUndoLog;
+      if (!evidence || evidence.id !== logId) {
+        throw new DomainError('TASK_COMPLETION_EVIDENCE_CHANGED', '任务完成证据已变化，请刷新后重试');
+      }
+      database.timeLogs = database.timeLogs.filter((log) => log.id !== logId);
+      task.status = TASK_STATUS.TODO;
+      task.completedAt = null;
+      task.updatedAt = now;
+      this.reconcileTaskPlanStatuses(database, now, [taskId]);
+      return { task, deletedLogId: logId };
+    }, { updatedAt: now }).result;
   }
 
   storageUsage() {
@@ -949,6 +1088,7 @@ class ApplicationService {
       const association = this.resolvePlanTaskAssociation(database, input.taskId);
       const event = createCalendarEvent({ ...input, ...association, title, startedAt, endedAt, priority: validPriority(input.priority) }, now);
       database.calendarEvents.push(event);
+      this.reconcileTaskPlanStatuses(database, now, [event.taskId]);
       return event;
     }).result;
   }
@@ -973,6 +1113,7 @@ class ApplicationService {
         priority: validPriority(input.priority)
       }, now);
       database.calendarEvents.push(event);
+      this.reconcileTaskPlanStatuses(database, now, [task.id]);
       return { task, event };
     }).result;
   }
@@ -982,6 +1123,7 @@ class ApplicationService {
     this.rejectDirectPlanProject(input);
     return this.repository.transaction((database) => {
       const event = this.requireEntity(database.calendarEvents, id, '计划块');
+      const previousTaskId = event.taskId;
       const eventTaskExists = event.taskId
         && database.tasks.some((task) => task.id === event.taskId);
       if (!eventTaskExists && event.endedAt <= now) {
@@ -1006,6 +1148,7 @@ class ApplicationService {
       event.taskId = association.taskId;
       event.taskNameSnapshot = association.taskNameSnapshot;
       event.updatedAt = now;
+      this.reconcileTaskPlanStatuses(database, now, [previousTaskId, event.taskId]);
       return event;
     }).result;
   }
@@ -1017,6 +1160,7 @@ class ApplicationService {
     const now = this.now();
     return this.repository.transaction((database) => {
       const event = this.requireEntity(database.calendarEvents, id, '计划块');
+      const affectedTaskId = event.taskId;
       database.calendarEvents = database.calendarEvents.filter((item) => item.id !== id);
       database.timeLogs.forEach((log) => {
         if (log.calendarEventId !== id) return;
@@ -1028,6 +1172,7 @@ class ApplicationService {
       if (database.recoveryDraft && database.recoveryDraft.timer) {
         this.detachCalendarEventReference(database.recoveryDraft.timer.draft, event);
       }
+      this.reconcileTaskPlanStatuses(database, now, [affectedTaskId]);
       return { id };
     }).result;
   }
@@ -1052,6 +1197,7 @@ class ApplicationService {
         ...pattern
       }, now);
       database.repeatRules.push(rule);
+      this.reconcileTaskPlanStatuses(database, now, [association.taskId]);
       return { rule, occurrence: firstRuleOccurrence(rule) };
     }).result;
   }
@@ -1077,6 +1223,7 @@ class ApplicationService {
         ...pattern
       }, now);
       database.repeatRules.push(rule);
+      this.reconcileTaskPlanStatuses(database, now, [task.id]);
       return { task, rule, occurrence: firstRuleOccurrence(rule) };
     }).result;
   }
@@ -1117,6 +1264,7 @@ class ApplicationService {
     const now = this.now();
     return this.repository.transaction((database) => {
       const rule = this.requireEntity(database.repeatRules, ruleId, '重复规则');
+      const affectedTaskIds = (rule.revisions || []).map((revision) => revision.taskId);
       const occurrence = projectRule(
         rule,
         occurrenceStart,
@@ -1161,6 +1309,7 @@ class ApplicationService {
       detachActiveDraft(database.recoveryDraft && database.recoveryDraft.timer
         && database.recoveryDraft.timer.draft);
 
+      this.reconcileTaskPlanStatuses(database, now, affectedTaskIds);
       return { ruleId, occurrenceStart, removedRule: !hasPastOccurrence };
     }).result;
   }
@@ -1266,6 +1415,7 @@ class ApplicationService {
         tags: input.tags
       }, now);
       database.timeLogs.push(log);
+      this.reconcileTaskPlanStatuses(database, now, this.taskIdsForRecord(database, log));
       return log;
     }).result;
   }
@@ -1290,6 +1440,7 @@ class ApplicationService {
         source: LOG_SOURCE.MANUAL
       }, now);
       database.timeLogs.push(log);
+      this.reconcileTaskPlanStatuses(database, now, this.taskIdsForRecord(database, log));
       return { log };
     }).result;
   }
@@ -1298,6 +1449,7 @@ class ApplicationService {
     const now = this.now();
     return this.repository.transaction((database) => {
       const log = this.requireEntity(database.timeLogs, id, '时间记录');
+      const affectedTaskIds = new Set(this.taskIdsForRecord(database, log));
       const startedAt = input.startedAt === undefined ? log.startedAt : Number(input.startedAt);
       const endedAt = input.endedAt === undefined ? log.endedAt : Number(input.endedAt);
       validTimeRange(startedAt, endedAt, '记录时间', { allowSameTime: true });
@@ -1317,6 +1469,8 @@ class ApplicationService {
         status: log.status === LOG_STATUS.CANDIDATE ? LOG_STATUS.CONFIRMED : log.status,
         updatedAt: now
       });
+      this.taskIdsForRecord(database, log).forEach((taskId) => affectedTaskIds.add(taskId));
+      this.reconcileTaskPlanStatuses(database, now, Array.from(affectedTaskIds));
       return { log };
     }).result;
   }
@@ -1336,6 +1490,7 @@ class ApplicationService {
         status: LOG_STATUS.CONFIRMED,
         updatedAt: now
       });
+      this.reconcileTaskPlanStatuses(database, now, this.taskIdsForRecord(database, log));
       return log;
     }).result;
   }
@@ -1344,36 +1499,22 @@ class ApplicationService {
     if (!confirmed) {
       throw new DomainError('DELETE_CONFIRMATION_REQUIRED', '删除时间记录需要二次确认');
     }
+    const now = this.now();
     return this.repository.transaction((database) => {
-      this.requireEntity(database.timeLogs, id, '时间记录');
+      const log = this.requireEntity(database.timeLogs, id, '时间记录');
+      const affectedTaskIds = this.taskIdsForRecord(database, log);
       database.timeLogs = database.timeLogs.filter((item) => item.id !== id);
+      this.reconcileTaskPlanStatuses(database, now, affectedTaskIds);
       return { id };
-    }).result;
+    }, { updatedAt: now }).result;
   }
 
   startTimer(input = {}) {
     const now = this.now();
-    return this.repository.transaction((database) => {
-      if (database.recoveryDraft) {
-        throw new DomainError('RECOVERY_DRAFT_PENDING', '有一条待修正的恢复草稿，请先处理');
-      }
-      if (database.timer.status !== TIMER_STATUS.IDLE) {
-        throw new DomainError('TIMER_ALREADY_ACTIVE', '已有进行中的计时，请先结束当前计时');
-      }
-      const association = this.resolveNewRecordAssociations(database, input);
-      database.timer = {
-        status: TIMER_STATUS.RUNNING,
-        startedAt: now,
-        pausedAt: null,
-        pauses: [],
-        draft: {
-          ...association,
-          note: input.note || '',
-          tags: normalizeTags(input.tags === undefined ? [] : input.tags)
-        }
-      };
-      return database.timer;
-    }).result;
+    return this.repository.transaction(
+      (database) => this.startTimerInDatabase(database, input, now),
+      { updatedAt: now }
+    ).result;
   }
 
   updateTimerDraft(input) {
@@ -1468,6 +1609,7 @@ class ApplicationService {
       }, capturedNow, { enforceTagLimits: false });
       database.timeLogs.push(log);
       database.timer = createIdleTimer();
+      this.reconcileTaskPlanStatuses(database, capturedNow, this.taskIdsForRecord(database, log));
       return { log };
     }, { updatedAt: capturedNow }).result;
   }
@@ -1505,6 +1647,7 @@ class ApplicationService {
       }, now, { enforceTagLimits: false });
       database.timeLogs.push(log);
       database.recoveryDraft = null;
+      this.reconcileTaskPlanStatuses(database, now, this.taskIdsForRecord(database, log));
       return log;
     }).result;
   }

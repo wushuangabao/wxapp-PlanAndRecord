@@ -1841,7 +1841,14 @@ test('M3：放弃项目删除未来对象但保留已确认历史和快照', () 
   service.updateTask(completedTask.id, { status: TASK_STATUS.COMPLETED });
   const activeTask = service.createTask({ title: '未来任务', projectId: project.id });
   const historicalEvent = createCalendarEventForTask(service, { title: '历史计划', startedAt: now() - 3_600_000, endedAt: now() - 1_800_000, taskId: completedTask.id });
+  service.createManualLog({
+    startedAt: now() - 3_500_000,
+    endedAt: now() - 3_000_000,
+    calendarEventId: historicalEvent.id,
+    note: '历史任务完成证据'
+  });
   const futureEvent = createCalendarEventForTask(service, { title: '未来计划', startedAt: now() + 3_600_000, endedAt: now() + 7_200_000, taskId: activeTask.id });
+  createCalendarEventForTask(service, { title: '仍未执行的未来计划', startedAt: now() + 8_000_000, endedAt: now() + 9_000_000, taskId: activeTask.id });
   const confirmed = service.createManualLog({
     startedAt: now() - 3_000_000,
     endedAt: now() - 2_700_000,
@@ -1953,6 +1960,8 @@ test('放弃项目沿全部项目任务的计划链删除未来计划、规则�
     directOnly.taskId = completedTask.id;
     database.calendarEvents.find((event) => event.id === foreignEvent.id).projectId = project.id;
   });
+  // 本用例只验证放弃项目对“进入事务时已完成任务”的旧有清理边界。
+  service.updateTask(completedTask.id, { status: TASK_STATUS.COMPLETED });
 
   service.abandonProject(project.id, true);
   const snapshot = service.snapshot();
@@ -2283,6 +2292,112 @@ test('新关系链：计划创建和更新只能关联有效任务', () => {
     (error) => error.code === 'OCCURRENCE_TASK_UNAVAILABLE'
   );
   assert.equal(service.snapshot().occurrenceExceptions.length, exceptionCount);
+});
+
+test('TODO 计划计时：实体计划全部形成 confirmed 记录后自动完成，撤销会删除推断证据', () => {
+  const { service, setNow, now } = createHarness();
+  const task = service.createTask({ title: '实体计划任务' });
+  const first = service.createCalendarEvent({
+    title: '已经结束的计划',
+    taskId: task.id,
+    startedAt: now() - 2 * 60 * 60 * 1000,
+    endedAt: now() - 60 * 60 * 1000,
+    priority: 1
+  });
+  const second = service.createCalendarEvent({
+    title: '未来计划',
+    taskId: task.id,
+    startedAt: now() + 60 * 60 * 1000,
+    endedAt: now() + 2 * 60 * 60 * 1000,
+    priority: 1
+  });
+
+  service.startTaskPlanTimer(task.id, `event:${first.id}`);
+  setNow(now() + 10 * 60 * 1000);
+  const firstLog = service.finishTimer().log;
+  assert.equal(service.snapshot().tasks.find((item) => item.id === task.id).status, TASK_STATUS.TODO);
+
+  service.startTaskPlanTimer(task.id, `event:${second.id}`);
+  setNow(now() + 10 * 60 * 1000);
+  const triggerLog = service.finishTimer().log;
+  assert.equal(service.snapshot().tasks.find((item) => item.id === task.id).status, TASK_STATUS.COMPLETED);
+  assert.equal(service.taskCompletionUndoPreview(task.id).id, triggerLog.id);
+  assert.throws(
+    () => service.reopenTaskByRemovingCompletionLog(task.id, triggerLog.id, false),
+    (error) => error.code === 'TASK_REOPEN_CONFIRMATION_REQUIRED'
+  );
+
+  const reopened = service.reopenTaskByRemovingCompletionLog(task.id, triggerLog.id, true);
+  assert.equal(reopened.deletedLogId, triggerLog.id);
+  const snapshot = service.snapshot();
+  assert.equal(snapshot.timeLogs.some((item) => item.id === firstLog.id), true);
+  assert.equal(snapshot.timeLogs.some((item) => item.id === triggerLog.id), false);
+  assert.equal(snapshot.tasks.find((item) => item.id === task.id).status, TASK_STATUS.TODO);
+});
+
+test('TODO 计划计时：固定日程今天记录后保持未完成并进入已记录显示态', () => {
+  const start = new Date(2026, 7, 12, 12, 0, 0, 0).getTime();
+  const { service, setNow } = createHarness(start);
+  const task = service.createTask({ title: '固定日程任务' });
+  const { rule } = service.createRecurringPlan({
+    title: '每天练习',
+    taskId: task.id,
+    startedAt: new Date(2026, 7, 10, 9, 0, 0, 0).getTime(),
+    endedAt: new Date(2026, 7, 10, 10, 0, 0, 0).getTime(),
+    priority: 1,
+    frequency: 'daily',
+    interval: 1
+  });
+  const before = service.taskPlanStates(start).get(task.id);
+  assert.equal(before.candidates.length, 1);
+
+  service.startTaskPlanTimer(task.id, before.candidates[0].id);
+  setNow(start + 10 * 60 * 1000);
+  const log = service.finishTimer().log;
+  const after = service.taskPlanStates(start + 10 * 60 * 1000).get(task.id);
+
+  assert.equal(log.originRuleId, rule.id);
+  assert.equal(service.snapshot().tasks.find((item) => item.id === task.id).status, TASK_STATUS.TODO);
+  assert.equal(after.recordedToday, true);
+  assert.equal(after.controlKind, 'recorded');
+  assert.equal(after.topVisible, true);
+});
+
+test('TODO 自动完成：有限固定日程随时间失效后在计划页刷新时收敛状态', () => {
+  const start = new Date(2026, 7, 12, 8, 0, 0, 0).getTime();
+  const { service, setNow } = createHarness(start);
+  const task = service.createTask({ title: '等待固定日程结束' });
+  const event = service.createCalendarEvent({
+    title: '实体计划',
+    taskId: task.id,
+    startedAt: start - 2 * 60 * 60 * 1000,
+    endedAt: start - 60 * 60 * 1000,
+    priority: 1
+  });
+  service.createManualLog({
+    startedAt: start - 30 * 60 * 1000,
+    endedAt: start - 20 * 60 * 1000,
+    calendarEventId: event.id
+  });
+  const repeatStart = new Date(2026, 7, 12, 9, 0, 0, 0).getTime();
+  const { rule } = service.createRecurringPlan({
+    title: '短期固定日程',
+    taskId: task.id,
+    startedAt: repeatStart,
+    endedAt: repeatStart + 30 * 60 * 1000,
+    priority: 1,
+    frequency: 'daily',
+    interval: 1
+  });
+  const tomorrow = repeatStart + 24 * 60 * 60 * 1000;
+  service.deleteRuleFollowing(rule.id, tomorrow, true);
+  assert.equal(service.snapshot().tasks.find((item) => item.id === task.id).status, TASK_STATUS.TODO);
+
+  const afterRule = tomorrow + 24 * 60 * 60 * 1000;
+  setNow(afterRule);
+  assert.deepEqual(service.refreshTaskPlanStatuses(), [task.id]);
+  assert.equal(service.snapshot().tasks.find((item) => item.id === task.id).status, TASK_STATUS.COMPLETED);
+  assert.deepEqual(service.refreshTaskPlanStatuses(), []);
 });
 
 test('新关系链：日志和计时只写计划关联，direct task/project 始终为空', () => {

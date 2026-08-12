@@ -21,7 +21,20 @@
 .todo-scroll-tail { flex: 0 0 20%; }
 .todo-row { display: flex; flex: 0 0 calc(33.333333% - 12rpx); align-items: center; box-sizing: border-box; min-width: 0; min-height: 0; gap: 12rpx; }
 .todo-list.is-one-row .todo-row, .todo-list.is-two-rows .todo-row { flex-basis: 80rpx; }
+.todo-control { display: flex; flex: 0 0 36rpx; align-items: center; justify-content: center; box-sizing: border-box; width: 36rpx; height: 56rpx; border-radius: 12rpx; }
+.todo-control:active { background: #e6ece7; }
 .todo-check { display: flex; flex: 0 0 36rpx; align-items: center; justify-content: center; box-sizing: border-box; width: 36rpx; height: 36rpx; border: 2rpx solid #a9bdae; border-radius: 10rpx; color: #17251d; font-size: 24rpx; }
+.todo-timer-icon { position: relative; box-sizing: border-box; width: 32rpx; height: 32rpx; border: 3rpx solid #ad6a3f; border-radius: 50%; color: #ad6a3f; }
+.todo-timer-crown { position: absolute; top: -8rpx; left: 9rpx; box-sizing: border-box; width: 9rpx; height: 6rpx; border: 2rpx solid currentColor; border-bottom: 0; border-radius: 2rpx 2rpx 0 0; }
+.todo-timer-hand { position: absolute; top: 5rpx; left: 12rpx; width: 3rpx; height: 11rpx; border-radius: 2rpx; background: currentColor; transform-origin: 50% 9rpx; }
+.todo-timer-icon.is-running .todo-timer-hand { animation: todo-timer-tick 1.2s linear infinite; }
+.todo-timer-icon.is-paused { border-color: #ad6a3f; }
+.todo-timer-pause { position: absolute; right: -10rpx; bottom: -8rpx; min-width: 18rpx; border-radius: 9rpx; background: #faf9f7; color: #ad6a3f; font-size: 13rpx; font-weight: 700; line-height: 18rpx; text-align: center; }
+.todo-timer-icon.is-schedule { border-color: #78947f; color: #78947f; }
+.todo-timer-icon.is-recorded { border-color: #aab1ac; color: #aab1ac; }
+.is-timer-active .todo-title, .is-timer-active .todo-project { color: #965c38; }
+.is-recorded-today .todo-title, .is-recorded-today .todo-project { color: #969d98; }
+@keyframes todo-timer-tick { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 .todo-main { display: flex; flex: 1; flex-direction: column; justify-content: center; min-width: 0; overflow: hidden; }
 .todo-title, .todo-project { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .todo-title { color: #343a36; font-size: 28rpx; font-weight: 400; }

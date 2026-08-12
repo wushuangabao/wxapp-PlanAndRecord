@@ -33,6 +33,15 @@ const TODO_SORT_FIELD_OPTIONS = Object.freeze([
 ]);
 const DEFAULT_TODO_SORT_CRITERIA = Object.freeze([{ field: 'createdAt', direction: 'desc' }]);
 
+function completionUndoLogTitle(log) {
+  return log.taskNameSnapshot || log.note || '时间记录';
+}
+
+function completionUndoModalContent(log) {
+  const timeRange = `${formatDateTime(log.startedAt)} – ${formatDateTime(log.endedAt)}`;
+  return `重新打开会删除以下时间记录：\n${completionUndoLogTitle(log)}\n${timeRange}\n是否继续？`;
+}
+
 const HORIZONTAL_LIST_CONFIGS = Object.freeze({
   todo: {
     columnsKey: 'todoListColumns',
@@ -192,19 +201,32 @@ function todoSortAvailableFields(criteria) {
   return TODO_SORT_FIELD_OPTIONS.filter((option) => !usedFields.has(option.field)).map((option) => ({ ...option }));
 }
 
-function buildTaskViewModels(tasks, projects) {
+function buildTaskViewModels(tasks, projects, planStates = new Map()) {
   const projectsById = new Map(projects.map((project) => [project.id, project]));
   return tasks.map((task) => {
     const currentProject = task.projectId ? projectsById.get(task.projectId) : null;
     const historicalProjectName = typeof task.projectNameSnapshot === 'string'
       ? task.projectNameSnapshot
       : '';
+    const planState = planStates.get(task.id) || null;
     return {
       ...task,
       hasCurrentProject: Boolean(currentProject),
       projectDisplayName: currentProject
         ? currentProject.title
-        : (historicalProjectName ? `原项目：${historicalProjectName}` : '')
+        : (historicalProjectName ? `原项目：${historicalProjectName}` : ''),
+      topVisible: planState ? planState.topVisible : true,
+      controlKind: planState ? planState.controlKind : 'checkbox',
+      timerMatchesTask: Boolean(planState && planState.timerMatchesTask),
+      timerStatus: planState ? planState.timerStatus : 'idle',
+      recordedToday: Boolean(planState && planState.recordedToday),
+      planCandidates: planState ? planState.candidates : [],
+      entityPlanCount: planState ? planState.entityPlans.length : 0,
+      repeatRuleCount: planState ? planState.repeatRules.length : 0,
+      hasPlanAssociations: Boolean(planState && planState.hasPlanAssociations),
+      completionUndoLogId: planState && planState.completionUndoLog
+        ? planState.completionUndoLog.id
+        : ''
     };
   });
 }
@@ -273,6 +295,12 @@ function toggleId(ids, id) {
 
 function sameIdList(left, right) {
   return left.length === right.length && left.every((id, index) => id === right[index]);
+}
+
+function millisecondsUntilNextLocalDay(now = Date.now()) {
+  const nextDay = new Date(now);
+  nextDay.setHours(24, 0, 0, 0);
+  return Math.max(1, nextDay.getTime() - now + 50);
 }
 
 function buildProjectCards(activeProjects, tasks, expandedProjectIds, expandedCompletedProjectIds, collapsedProjectIds, projectDeadlineScrollIds) {
@@ -392,7 +420,41 @@ Page({
   },
 
   onShow() {
+    this.refreshStatusesForCurrentDay();
     this.refresh();
+    this.scheduleNextLocalDayRefresh();
+  },
+
+  refreshStatusesForCurrentDay() {
+    try {
+      const service = getService();
+      if (typeof service.refreshTaskPlanStatuses === 'function') {
+        service.refreshTaskPlanStatuses();
+      }
+    } catch (error) {
+      showError(error);
+    }
+  },
+
+  scheduleNextLocalDayRefresh() {
+    this.clearNextLocalDayRefresh();
+    this.nextLocalDayRefreshTimer = setTimeout(() => {
+      this.nextLocalDayRefreshTimer = null;
+      this.refreshStatusesForCurrentDay();
+      this.refresh();
+      this.scheduleNextLocalDayRefresh();
+    }, millisecondsUntilNextLocalDay());
+  },
+
+  clearNextLocalDayRefresh() {
+    if (this.nextLocalDayRefreshTimer !== null && this.nextLocalDayRefreshTimer !== undefined) {
+      clearTimeout(this.nextLocalDayRefreshTimer);
+    }
+    this.nextLocalDayRefreshTimer = null;
+  },
+
+  onHide() {
+    this.clearNextLocalDayRefresh();
   },
 
   onReady() {
@@ -405,7 +467,8 @@ Page({
   refresh({ resetTodoColumn = false, focusLatestWish = false } = {}) {
     try {
       if (focusLatestWish) this.clearWishScrollAnimation();
-      const snapshot = getService().snapshot();
+      const service = getService();
+      const snapshot = service.snapshot();
       const profileId = localProfileId(snapshot);
       let todoSortCriteria = this.data.todoSortCriteria;
       let storedCollapsedProjectIds = this.data.collapsedProjectIds;
@@ -418,9 +481,12 @@ Page({
         this.preferenceProfileId = profileId;
       }
       const projects = snapshot.projects.map((project) => ({ ...project, deadlineText: formatDateTime(project.deadlineAt) }));
-      const tasks = buildTaskViewModels(snapshot.tasks, projects);
+      const planStates = typeof service.taskPlanStates === 'function'
+        ? service.taskPlanStates()
+        : new Map();
+      const tasks = buildTaskViewModels(snapshot.tasks, projects, planStates);
       const wishes = snapshot.wishes.slice();
-      const todoListTasks = sortTodoTasks(tasks, todoSortCriteria);
+      const todoListTasks = sortTodoTasks(tasks.filter((task) => task.topVisible), todoSortCriteria);
       const todoListColumns = buildTodoColumns(todoListTasks);
       const wishListColumns = buildWishColumns(wishes);
       const activeProjects = projects.filter((project) => project.status === 'active');
@@ -1019,11 +1085,84 @@ Page({
   },
 
   toggleTask(event) {
+    const id = event.currentTarget.dataset.id;
+    const task = this.data.tasks.find((item) => item.id === id);
+    if (!task) return;
+    if (task.status === TASK_STATUS.COMPLETED && task.completionUndoLogId) {
+      let undoLog;
+      try {
+        undoLog = getService().taskCompletionUndoPreview(task.id);
+      } catch (error) {
+        showError(error);
+        return;
+      }
+      wx.showModal({
+        title: '重新打开任务',
+        content: completionUndoModalContent(undoLog),
+        confirmColor: '#9a5550',
+        success: (result) => {
+          if (!result.confirm) return;
+          try {
+            getService().reopenTaskByRemovingCompletionLog(task.id, undoLog.id, true);
+            showSaved('任务已重新打开');
+            this.refresh();
+          } catch (error) {
+            showError(error);
+          }
+        }
+      });
+      return;
+    }
+    if (task.status !== TASK_STATUS.COMPLETED && task.controlKind === 'timer') {
+      this.startTimerForTask(task);
+      return;
+    }
+    if (task.status !== TASK_STATUS.COMPLETED && task.controlKind === 'recorded') {
+      wx.showToast({ title: '今天的固定日程已记录', icon: 'none' });
+      return;
+    }
+    if (task.status !== TASK_STATUS.COMPLETED && task.controlKind === 'schedule') {
+      wx.showToast({ title: '今天没有这项固定日程', icon: 'none' });
+      return;
+    }
     try {
-      const status = event.currentTarget.dataset.status === TASK_STATUS.COMPLETED ? TASK_STATUS.TODO : TASK_STATUS.COMPLETED;
-      getService().updateTask(event.currentTarget.dataset.id, { status });
+      const status = task.status === TASK_STATUS.COMPLETED ? TASK_STATUS.TODO : TASK_STATUS.COMPLETED;
+      getService().updateTask(task.id, { status });
       showSaved(status === TASK_STATUS.COMPLETED ? '任务已完成' : '任务已重新打开');
       this.refresh();
+    } catch (error) {
+      showError(error);
+    }
+  },
+
+  startTimerForTask(task) {
+    if (task.timerMatchesTask) {
+      wx.switchTab({ url: '/pages/timer/index' });
+      return;
+    }
+    const candidates = task.planCandidates || [];
+    if (candidates.length === 1) {
+      this.startTimerForTaskCandidate(task.id, candidates[0].id);
+      return;
+    }
+    if (!candidates.length) {
+      wx.showToast({ title: '当前没有可执行的关联计划', icon: 'none' });
+      return;
+    }
+    wx.showActionSheet({
+      itemList: candidates.map((candidate) => candidate.title || '未命名计划'),
+      success: (result) => {
+        const candidate = candidates[result.tapIndex];
+        if (candidate) this.startTimerForTaskCandidate(task.id, candidate.id);
+      }
+    });
+  },
+
+  startTimerForTaskCandidate(taskId, candidateId) {
+    try {
+      getService().startTaskPlanTimer(taskId, candidateId);
+      showSaved('已从计划开始计时');
+      wx.switchTab({ url: '/pages/timer/index' });
     } catch (error) {
       showError(error);
     }
@@ -1122,9 +1261,14 @@ Page({
 
   confirmDeleteTask(event) {
     const id = event.currentTarget.dataset.id;
+    const task = this.data.tasks.find((item) => item.id === id);
+    const hasPlanAssociations = Boolean(task && (task.entityPlanCount || task.repeatRuleCount));
+    const content = hasPlanAssociations
+      ? `该任务关联 ${task.entityPlanCount} 个实体计划和 ${task.repeatRuleCount} 个固定日程。确认后会删除任务、未结束实体计划及全部固定日程；已结束计划和时间记录会保留并解除关联。`
+      : '未结束的关联计划会一并删除；已结束计划和计时记录会保留。';
     wx.showModal({
       title: '删除任务',
-      content: '未结束的关联计划会一并删除；已结束计划和计时记录会保留。',
+      content,
       confirmColor: '#9a5550',
       success: (result) => {
         if (!result.confirm) return;
@@ -1335,6 +1479,7 @@ Page({
   },
 
   onUnload() {
+    this.clearNextLocalDayRefresh();
     this.clearTodoScrollAnimation();
     this.clearWishScrollAnimation();
   },
