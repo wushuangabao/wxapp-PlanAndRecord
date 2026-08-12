@@ -121,7 +121,6 @@ function inspectTimerAt(timer, capturedNow) {
 }
 
 function moveTimerToRecoveryDraft(database, timer, capturedNow, reason) {
-  const originalTimer = JSON.parse(JSON.stringify(timer));
   database.timer = {
     status: TIMER_STATUS.IDLE,
     startedAt: null,
@@ -129,6 +128,14 @@ function moveTimerToRecoveryDraft(database, timer, capturedNow, reason) {
     pauses: [],
     draft: {}
   };
+  if (database.recoveryDraft) {
+    return {
+      state: 'draft',
+      recoveryDraft: database.recoveryDraft,
+      timerDiscarded: true
+    };
+  }
+  const originalTimer = JSON.parse(JSON.stringify(timer));
   database.recoveryDraft = {
     reason,
     timer: originalTimer,

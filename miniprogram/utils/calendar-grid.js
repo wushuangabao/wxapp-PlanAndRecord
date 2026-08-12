@@ -150,7 +150,7 @@ function rawBlock(item, range, view, grid) {
   };
 }
 
-function assignLanes(blocks) {
+function assignLanes(blocks, { protectedItemId } = {}) {
   if (!blocks.length) return [];
   const sources = blocks.map((block, sourceIndex) => ({
     ...block,
@@ -174,6 +174,73 @@ function assignLanes(blocks) {
 
   function overlaps(left, right) {
     return left.blockTop < right.blockBottom && left.blockBottom > right.blockTop;
+  }
+
+  function hiddenPresentation(hidden, groupIndex) {
+    const ordinaryPieces = [];
+    const aggregates = [];
+    if (!hidden.length) return { ordinaryPieces, aggregates };
+
+    const components = [];
+    let component = [];
+    let componentBottom = -Infinity;
+    hidden
+      .slice()
+      .sort((left, right) => (
+        left.blockTop - right.blockTop
+          || right.blockBottom - left.blockBottom
+          || left.sourceIndex - right.sourceIndex
+      ))
+      .forEach((block) => {
+        if (component.length && block.blockTop >= componentBottom) {
+          components.push(component);
+          component = [];
+          componentBottom = -Infinity;
+        }
+        component.push(block);
+        componentBottom = Math.max(componentBottom, block.blockBottom);
+      });
+    if (component.length) components.push(component);
+
+    // 最后一轨按重叠连通分量呈现：单项仍是普通块；两项以上合成一个覆盖
+    // 成员区间并集的 +N 块。每个可操作入口都至少继承一个原块的最小高度。
+    components.forEach((connected, componentIndex) => {
+      const aggregateItems = connected
+        .slice()
+        .sort((left, right) => left.sourceIndex - right.sourceIndex);
+      if (aggregateItems.length === 1) {
+        const block = aggregateItems[0];
+        ordinaryPieces.push({
+          ...block,
+          lane: MAX_VISIBLE_LANES - 1,
+          isSegmented: false
+        });
+        return;
+      }
+      const blockTop = Math.min(...aggregateItems.map((block) => block.blockTop));
+      const blockBottom = Math.max(
+        blockTop + MIN_BLOCK_HEIGHT,
+        ...aggregateItems.map((block) => block.blockBottom)
+      );
+      aggregates.push({
+        id: `aggregate_${groupIndex}_${componentIndex}_${Math.round(blockTop)}`,
+        type: 'aggregate',
+        title: `+${aggregateItems.length}`,
+        displayKind: '重叠条目',
+        displayTime: '',
+        visualType: 'aggregate',
+        isAggregate: true,
+        isSegmented: false,
+        aggregateItems,
+        hiddenCount: aggregateItems.length,
+        continuesBefore: false,
+        continuesAfter: false,
+        blockTop,
+        blockBottom,
+        lane: MAX_VISIBLE_LANES - 1
+      });
+    });
+    return { ordinaryPieces, aggregates };
   }
 
   sources
@@ -220,73 +287,43 @@ function assignLanes(blocks) {
     const visibleLaneLimit = lanes.length > MAX_VISIBLE_LANES
       ? MAX_VISIBLE_LANES - 1
       : MAX_VISIBLE_LANES;
-    const ordinary = withLanes.filter((block) => block.lane < visibleLaneLimit);
-    const hidden = withLanes.filter((block) => block.lane >= visibleLaneLimit);
-    const soloHiddenKeys = new Set();
-    const aggregates = [];
+    let ordinary = withLanes.filter((block) => block.lane < visibleLaneLimit);
+    let hidden = withLanes.filter((block) => block.lane >= visibleLaneLimit);
+    let presentation = hiddenPresentation(hidden, groupIndex);
+    const protectedBlock = hidden.find((block) => block.id === protectedItemId);
+    const protectedIsAggregated = protectedBlock && presentation.aggregates.some((aggregate) => (
+      aggregate.aggregateItems.some((block) => block.sourceKey === protectedBlock.sourceKey)
+    ));
 
-    if (hidden.length) {
-      const boundaries = Array.from(new Set(hidden.flatMap((block) => [
-        block.blockTop,
-        block.blockBottom
-      ]))).sort((left, right) => left - right);
-      let openAggregate = null;
-      for (let boundaryIndex = 0; boundaryIndex < boundaries.length - 1; boundaryIndex += 1) {
-        const segmentTop = boundaries[boundaryIndex];
-        const segmentBottom = boundaries[boundaryIndex + 1];
-        if (segmentBottom <= segmentTop) continue;
-        const activeHidden = hidden.filter((block) => (
-          block.blockTop < segmentBottom && block.blockBottom > segmentTop
+    if (protectedIsAggregated) {
+      const replacement = Array.from({ length: visibleLaneLimit }, (_, lane) => ({
+        lane,
+        conflicts: ordinary.filter((block) => block.lane === lane && overlaps(block, protectedBlock))
+      }))
+        .filter((candidate) => candidate.conflicts.length > 0)
+        .sort((left, right) => (
+          left.conflicts.length - right.conflicts.length || right.lane - left.lane
+        ))[0];
+      if (replacement) {
+        const displacedKeys = new Set(replacement.conflicts.map((block) => block.sourceKey));
+        ordinary = ordinary
+          .filter((block) => !displacedKeys.has(block.sourceKey))
+          .concat({ ...protectedBlock, lane: replacement.lane });
+        hidden = withLanes.filter((block) => (
+          block.sourceKey !== protectedBlock.sourceKey
+            && (block.lane >= visibleLaneLimit || displacedKeys.has(block.sourceKey))
         ));
-        if (activeHidden.length === 1) {
-          soloHiddenKeys.add(activeHidden[0].sourceKey);
-          openAggregate = null;
-          continue;
-        }
-        if (activeHidden.length < 2) {
-          openAggregate = null;
-          continue;
-        }
-        const hiddenKey = activeHidden.map((block) => block.sourceKey).sort().join('|');
-        if (openAggregate && openAggregate.hiddenKey === hiddenKey
-          && openAggregate.blockBottom === segmentTop) {
-          openAggregate.blockBottom = segmentBottom;
-          continue;
-        }
-        openAggregate = {
-          id: `aggregate_${groupIndex}_${aggregates.length}_${Math.round(segmentTop)}`,
-          type: 'aggregate',
-          title: `+${activeHidden.length}`,
-          displayKind: '重叠条目',
-          displayTime: '',
-          visualType: 'aggregate',
-          isAggregate: true,
-          isSegmented: true,
-          aggregateItems: activeHidden,
-          hiddenCount: activeHidden.length,
-          continuesBefore: false,
-          continuesAfter: false,
-          blockTop: segmentTop,
-          blockBottom: segmentBottom,
-          lane: MAX_VISIBLE_LANES - 1,
-          hiddenKey
-        };
-        aggregates.push(openAggregate);
+        presentation = hiddenPresentation(hidden, groupIndex);
       }
     }
 
-    hidden.forEach((block) => {
-      if (soloHiddenKeys.has(block.sourceKey)) {
-        ordinary.push({ ...block, lane: MAX_VISIBLE_LANES - 1 });
-      }
-    });
-    ordinary.forEach((block) => rendered.push({
+    ordinary.concat(presentation.ordinaryPieces).forEach((block) => rendered.push({
       ...block,
-      isSegmented: false,
-      renderKey: block.id,
+      isSegmented: Boolean(block.isSegmented),
+      renderKey: block.renderKey || block.id,
       blockStyle: blockStyle(block, block.lane, renderedLaneCount)
     }));
-    aggregates.forEach((aggregate) => {
+    presentation.aggregates.forEach((aggregate) => {
       const { hiddenKey, ...cleanAggregate } = aggregate;
       rendered.push({
         ...cleanAggregate,
@@ -317,10 +354,10 @@ function assignLanes(blocks) {
       return cleanPiece;
     });
 }
-function buildCalendarBlocks(items, range, view, grid = buildTimeRows(range, view)) {
+function buildCalendarBlocks(items, range, view, grid = buildTimeRows(range, view), options = {}) {
   return assignLanes((items || [])
     .map((item) => rawBlock(item, range, view, grid))
-    .filter(Boolean));
+    .filter(Boolean), options);
 }
 
 function defaultPlanDate(anchor, now = Date.now()) {

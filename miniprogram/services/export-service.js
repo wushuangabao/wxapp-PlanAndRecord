@@ -1,7 +1,11 @@
 const { normalizeJsonSnapshot } = require('../repository/json-snapshot');
+const { createIdleTimer } = require('../domain/entities');
 
 function exportJson(database) {
-  return JSON.stringify(normalizeJsonSnapshot(database), null, 2);
+  const exported = normalizeJsonSnapshot(database);
+  exported.timer = createIdleTimer();
+  exported.recoveryDraft = null;
+  return JSON.stringify(exported, null, 2);
 }
 
 module.exports = {

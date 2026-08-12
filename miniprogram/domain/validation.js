@@ -44,13 +44,6 @@ function normalizeSnapshotTitles(database) {
   if (Array.isArray(normalized.tasks)) normalized.tasks.forEach(trimProvidedTitle);
   if (Array.isArray(normalized.calendarEvents)) normalized.calendarEvents.forEach(trimProvidedTitle);
   if (Array.isArray(normalized.repeatRules)) normalized.repeatRules.forEach(trimProvidedTitle);
-  if (Array.isArray(normalized.occurrenceExceptions)) {
-    normalized.occurrenceExceptions.forEach((exception) => {
-      if (exception && exception.override && typeof exception.override === 'object') {
-        trimProvidedTitle(exception.override);
-      }
-    });
-  }
   return normalized;
 }
 
@@ -67,7 +60,7 @@ function validPriority(value) {
 
 function validInterval(value) {
   const interval = Number(value || 1);
-  if (!Number.isInteger(interval) || interval < 1) {
+  if (!Number.isSafeInteger(interval) || interval < 1) {
     throw new DomainError('REPEAT_INTERVAL_INVALID', '重复间隔必须是正整数');
   }
   return interval;
@@ -110,12 +103,12 @@ function validNullableString(value, label = '可选字段') {
 function canonicalizeRepeatPattern(input) {
   const frequency = validRepeatFrequency(input && input.frequency);
   const interval = input && input.interval;
-  if (!Number.isInteger(interval) || interval < 1) {
+  if (!Number.isSafeInteger(interval) || interval < 1) {
     throw new DomainError('REPEAT_INTERVAL_INVALID', '重复间隔必须是正整数');
   }
 
   if (frequency === REPEAT_FREQUENCY.DAILY) {
-    return { frequency, interval, weekdays: [], monthDay: null };
+    return { frequency, interval, weekdays: [], monthDays: [] };
   }
 
   if (frequency === REPEAT_FREQUENCY.WEEKLY) {
@@ -130,15 +123,23 @@ function canonicalizeRepeatPattern(input) {
       frequency,
       interval,
       weekdays: weekdays.slice().sort((first, second) => first - second),
-      monthDay: null
+      monthDays: []
     };
   }
 
-  const monthDay = input && input.monthDay;
-  if (!Number.isInteger(monthDay) || monthDay < 1 || monthDay > 31) {
-    throw new DomainError('REPEAT_MONTH_DAY_INVALID', '每月重复日期必须是 1 到 31 的整数');
+  const monthDays = input && input.monthDays;
+  if (!Array.isArray(monthDays)
+    || monthDays.length === 0
+    || !monthDays.every((monthDay) => Number.isInteger(monthDay) && monthDay >= 1 && monthDay <= 31)
+    || new Set(monthDays).size !== monthDays.length) {
+    throw new DomainError('REPEAT_MONTH_DAYS_INVALID', '每月重复必须选择不重复的 1 到 31 号日期');
   }
-  return { frequency, interval, weekdays: [], monthDay };
+  return {
+    frequency,
+    interval,
+    weekdays: [],
+    monthDays: monthDays.slice().sort((first, second) => first - second)
+  };
 }
 
 module.exports = {

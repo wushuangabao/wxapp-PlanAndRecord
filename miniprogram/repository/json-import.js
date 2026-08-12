@@ -6,8 +6,7 @@ const { DomainError } = require('../domain/errors');
 const { logicalOccurrenceStart, projectRule } = require('../domain/recurrence');
 const {
   persistedValueEquals,
-  validateJsonSnapshot,
-  validateOccurrenceOverrideRules
+  validateJsonSnapshot
 } = require('./json-snapshot');
 
 const ENTITY_COLLECTIONS = [
@@ -186,7 +185,6 @@ function repairFinalReferences(database) {
 
   database.calendarEvents.forEach((item) => {
     clearMissing(item, 'taskId', taskIds);
-    clearMissing(item, 'repeatRuleId', ruleIds);
   });
 
   database.repeatRules.forEach((rule) => {
@@ -197,15 +195,9 @@ function repairFinalReferences(database) {
 
   database.occurrenceExceptions = database.occurrenceExceptions.filter((item) => {
     if (!ruleIds.has(item.ruleId)) {
-      if (item.kind === 'override') {
-        throw new DomainError('IMPORT_SCHEMA_INVALID', '导入文件的数据结构无效');
-      }
       repairedReferenceCount += 1;
       discardedExceptionCount += 1;
       return false;
-    }
-    if (item.override) {
-      clearMissing(item.override, 'taskId', taskIds);
     }
     return true;
   });
@@ -233,7 +225,6 @@ function resolveImportAnalysis(analysis, conflictPolicy) {
 
   const database = clone(analysis.baseDatabase);
   const replacedCounts = mergeImportedEntities(database, analysis.importedDatabase, conflictPolicy);
-  validateOccurrenceOverrideRules(database);
   const repairs = repairFinalReferences(database);
   database.updatedAt = analysis.now;
   validateJsonSnapshot(database);

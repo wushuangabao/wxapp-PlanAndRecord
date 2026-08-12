@@ -17,7 +17,6 @@ const {
   calculateTimerDurationMinutes,
   isFiniteTimestamp
 } = require('../domain/time');
-const { materializeOccurrenceOverride } = require('../domain/recurrence');
 const {
   canonicalizeRepeatPattern,
   normalizeSnapshotTitles,
@@ -147,17 +146,17 @@ function normalizeTask(task) {
 function normalizeCalendarEvent(event) {
   return pickKnownFields(event, [
     'id', 'title', 'startedAt', 'endedAt', 'priority', 'projectId', 'projectNameSnapshot',
-    'taskId', 'taskNameSnapshot', 'repeatRuleId', 'repeatRuleSummarySnapshot', 'createdAt', 'updatedAt'
+    'taskId', 'taskNameSnapshot', 'createdAt', 'updatedAt'
   ]);
 }
 
 function normalizeRevision(revision) {
   const normalized = pickKnownFields(revision, [
     'id', 'revision', 'effectiveFrom', 'effectiveUntil', 'frequency', 'interval', 'weekdays',
-    'monthDay', 'startedAt', 'endedAt', 'priority', 'projectId', 'projectNameSnapshot', 'taskId', 'taskNameSnapshot'
+    'monthDays', 'startedAt', 'endedAt', 'priority', 'projectId', 'projectNameSnapshot', 'taskId', 'taskNameSnapshot'
   ]);
   if (isPlainObject(normalized)
-    && ['frequency', 'interval', 'weekdays', 'monthDay'].every((field) => hasOwn(normalized, field))) {
+    && ['frequency', 'interval', 'weekdays', 'monthDays'].every((field) => hasOwn(normalized, field))) {
     try {
       Object.assign(normalized, canonicalizeRepeatPattern(normalized));
     } catch (error) {
@@ -175,18 +174,10 @@ function normalizeRepeatRule(rule) {
   return normalized;
 }
 
-function normalizeOverride(override) {
-  return pickKnownFields(override, [
-    'title', 'projectId', 'projectNameSnapshot', 'taskId', 'taskNameSnapshot', 'startedAt', 'endedAt', 'priority'
-  ]);
-}
-
 function normalizeOccurrenceException(exception) {
-  const normalized = pickKnownFields(exception, ['id', 'ruleId', 'occurrenceStart', 'kind', 'override', 'createdAt', 'updatedAt']);
-  if (isPlainObject(normalized) && hasOwn(normalized, 'override')) {
-    normalized.override = normalizeOverride(normalized.override);
-  }
-  return normalized;
+  return pickKnownFields(exception, [
+    'id', 'ruleId', 'occurrenceStart', 'kind', 'createdAt', 'updatedAt'
+  ]);
 }
 
 function normalizeTimeLog(log) {
@@ -395,16 +386,6 @@ function normalizeJsonSnapshot(database) {
       normalized[collection] = normalizeCollection(normalized[collection], COLLECTION_NORMALIZERS[collection]);
     }
   });
-  if (Array.isArray(normalized.repeatRules) && Array.isArray(normalized.occurrenceExceptions)) {
-    normalized.occurrenceExceptions.forEach((exception) => {
-      if (!isPlainObject(exception) || exception.kind !== 'override') return;
-      const rules = normalized.repeatRules.filter((rule) => (
-        isPlainObject(rule) && rule.id === exception.ruleId
-      ));
-      if (rules.length !== 1) invalidSchema();
-      exception.override = materializeOccurrenceOverride(rules[0], exception);
-    });
-  }
   if (hasOwn(normalized, 'timer')) normalized.timer = normalizeTimer(normalized.timer);
   if (hasOwn(normalized, 'recoveryDraft') && normalized.recoveryDraft !== null) {
     normalized.recoveryDraft = normalizeRecoveryDraft(normalized.recoveryDraft);
@@ -451,7 +432,7 @@ function validateTask(task, ids) {
 }
 
 function validateCalendarEvent(event, ids) {
-  const references = ['projectId', 'projectNameSnapshot', 'taskId', 'taskNameSnapshot', 'repeatRuleId', 'repeatRuleSummarySnapshot'];
+  const references = ['projectId', 'projectNameSnapshot', 'taskId', 'taskNameSnapshot'];
   if (!requireFields(event, ['id', 'title', 'startedAt', 'endedAt', 'priority', ...references, 'createdAt', 'updatedAt'])
     || !requiredString(event.id) || !validTitle(event.title) || !validTimeRange(event.startedAt, event.endedAt)
     || !validPriority(event.priority) || !references.every((field) => nullableString(event[field])) || !validateTimestamps(event)) invalidSchema();
@@ -468,9 +449,9 @@ function validateRevision(revision, ids, revisions) {
   }
   const patternIsCanonical = canonicalPattern.frequency === revision.frequency
     && canonicalPattern.interval === revision.interval
-    && canonicalPattern.monthDay === revision.monthDay
-    && persistedValueEquals(canonicalPattern.weekdays, revision.weekdays);
-  if (!requireFields(revision, ['id', 'revision', 'effectiveFrom', 'effectiveUntil', 'frequency', 'interval', 'weekdays', 'monthDay', 'startedAt', 'endedAt', 'priority', ...references])
+    && persistedValueEquals(canonicalPattern.weekdays, revision.weekdays)
+    && persistedValueEquals(canonicalPattern.monthDays, revision.monthDays);
+  if (!requireFields(revision, ['id', 'revision', 'effectiveFrom', 'effectiveUntil', 'frequency', 'interval', 'weekdays', 'monthDays', 'startedAt', 'endedAt', 'priority', ...references])
     || !requiredString(revision.id) || !Number.isInteger(revision.revision) || revision.revision < 1
     || revisions.has(revision.revision) || !isFiniteTimestamp(revision.effectiveFrom)
     || !nullableTimestamp(revision.effectiveUntil) || (revision.effectiveUntil !== null && revision.effectiveUntil < revision.effectiveFrom)
@@ -483,50 +464,17 @@ function validateRevision(revision, ids, revisions) {
 
 function validateRepeatRule(rule, ids) {
   if (!requireFields(rule, ['id', 'title', 'revisions', 'createdAt', 'updatedAt'])
-    || !requiredString(rule.id) || !validTitle(rule.title) || !Array.isArray(rule.revisions) || !rule.revisions.length
+    || !requiredString(rule.id) || !validTitle(rule.title) || !Array.isArray(rule.revisions) || rule.revisions.length !== 1
     || !validateTimestamps(rule)) invalidSchema();
   collectId(ids, rule.id);
-  const revisions = new Set();
-  rule.revisions.forEach((revision) => validateRevision(revision, ids, revisions));
-  rule.revisions.forEach((first, firstIndex) => {
-    rule.revisions.slice(firstIndex + 1).forEach((second) => {
-      const firstUntil = first.effectiveUntil === null ? Number.POSITIVE_INFINITY : first.effectiveUntil;
-      const secondUntil = second.effectiveUntil === null ? Number.POSITIVE_INFINITY : second.effectiveUntil;
-      if (first.effectiveFrom <= secondUntil && second.effectiveFrom <= firstUntil) invalidSchema();
-    });
-  });
-}
-
-function validateOverride(override) {
-  const fields = [
-    'title', 'startedAt', 'endedAt', 'priority',
-    'projectId', 'projectNameSnapshot', 'taskId', 'taskNameSnapshot'
-  ];
-  const nullableFields = ['projectId', 'projectNameSnapshot', 'taskId', 'taskNameSnapshot'];
-  if (!requireFields(override, fields)
-    || !validTitle(override.title)
-    || !validTimeRange(override.startedAt, override.endedAt)
-    || !validPriority(override.priority)
-    || !nullableFields.every((field) => nullableString(override[field]))) invalidSchema();
+  validateRevision(rule.revisions[0], ids, new Set());
 }
 
 function validateOccurrenceException(exception, ids) {
-  if (!requireFields(exception, ['id', 'ruleId', 'occurrenceStart', 'kind', 'override', 'createdAt', 'updatedAt'])
+  if (!requireFields(exception, ['id', 'ruleId', 'occurrenceStart', 'kind', 'createdAt', 'updatedAt'])
     || !requiredString(exception.id) || !requiredString(exception.ruleId) || !isFiniteTimestamp(exception.occurrenceStart)
-    || !['skip', 'override'].includes(exception.kind) || !validateTimestamps(exception)) invalidSchema();
-  if (exception.kind === 'skip' && exception.override !== null) invalidSchema();
-  if (exception.kind === 'override') validateOverride(exception.override);
+    || exception.kind !== 'skip' || !validateTimestamps(exception)) invalidSchema();
   collectId(ids, exception.id);
-}
-
-function validateOccurrenceOverrideRules(database) {
-  database.occurrenceExceptions.forEach((exception) => {
-    if (exception.kind !== 'override') return;
-    const rules = database.repeatRules.filter((rule) => rule.id === exception.ruleId);
-    if (rules.length !== 1) invalidSchema();
-    const materialized = materializeOccurrenceOverride(rules[0], exception);
-    if (!persistedValueEquals(exception.override, materialized)) invalidSchema();
-  });
 }
 
 function validateTimeLog(log, ids) {
@@ -711,7 +659,6 @@ function validateJsonSnapshot(database) {
   database.calendarEvents.forEach((event) => validateCalendarEvent(event, ids));
   database.repeatRules.forEach((rule) => validateRepeatRule(rule, ids));
   database.occurrenceExceptions.forEach((exception) => validateOccurrenceException(exception, ids));
-  validateOccurrenceOverrideRules(database);
   database.timeLogs.forEach((log) => validateTimeLog(log, ids));
   validateTimer(database.timer);
   validateRecoveryDraft(database.recoveryDraft);
@@ -754,6 +701,5 @@ module.exports = {
   normalizeJsonSnapshot,
   parseJsonSnapshot,
   validateJsonSnapshot,
-  validateOccurrenceOverrideRules,
   persistedValueEquals
 };

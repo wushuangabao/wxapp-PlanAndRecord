@@ -166,6 +166,102 @@ test('重叠条目超过可见轨道上限时用最后一条轨道聚合为 +N',
   assert.equal(boundaryBlocks.some((item) => item.isAggregate), false);
 });
 
+test('创建定位目标发生聚合时保持独立可见，并将原可见计划移入集合块', () => {
+  const range = rangeForView(new Date(2026, 7, 8).getTime(), 'day');
+  const grid = buildTimeRows(range, 'day');
+  const protectedItemId = 'rule_created:1:1786179600000';
+  const overlappingItems = Array.from({ length: 9 }, (_, index) => ({
+    id: index === 8 ? protectedItemId : `existing-${index + 1}`,
+    type: 'plan',
+    virtual: index === 8,
+    title: `重叠计划 ${index + 1}`,
+    startedAt: new Date(2026, 7, 8, 9, 0).getTime(),
+    endedAt: new Date(2026, 7, 8, 10, 0).getTime()
+  }));
+
+  const blocks = buildCalendarBlocks(overlappingItems, range, 'day', grid, { protectedItemId });
+  const ordinary = blocks.filter((item) => !item.isAggregate);
+  const aggregate = blocks.find((item) => item.isAggregate);
+
+  assert.deepEqual(
+    ordinary.map((item) => item.id),
+    ['existing-1', 'existing-2', 'existing-3', 'existing-4', protectedItemId]
+  );
+  assert.equal(ordinary.find((item) => item.id === protectedItemId).lane, MAX_VISIBLE_LANES - 2);
+  assert.equal(aggregate.title, '+4');
+  assert.deepEqual(
+    aggregate.aggregateItems.map((item) => item.id),
+    ['existing-5', 'existing-6', 'existing-7', 'existing-8']
+  );
+  assert.equal(
+    blocks.some((item) => item.isAggregate
+      && item.aggregateItems.some((aggregateItem) => aggregateItem.id === protectedItemId)),
+    false
+  );
+});
+
+test('本来已可见的创建定位目标不会改变既有分轨和聚合结果', () => {
+  const range = rangeForView(new Date(2026, 7, 8).getTime(), 'day');
+  const grid = buildTimeRows(range, 'day');
+  const items = Array.from({ length: 9 }, (_, index) => ({
+    id: `visible-${index + 1}`,
+    type: 'plan',
+    title: `计划 ${index + 1}`,
+    startedAt: new Date(2026, 7, 8, 9, 0).getTime(),
+    endedAt: new Date(2026, 7, 8, 10, 0).getTime()
+  }));
+
+  assert.deepEqual(
+    buildCalendarBlocks(items, range, 'day', grid, { protectedItemId: 'visible-2' }),
+    buildCalendarBlocks(items, range, 'day', grid)
+  );
+});
+
+test('保护传递重叠中的新计划时只折叠同轨冲突块，不影响后续非重叠计划', () => {
+  const range = rangeForView(new Date(2026, 7, 8, 12, 0).getTime(), 'day');
+  const grid = buildTimeRows(range, 'day');
+  const timestamp = (hour) => new Date(2026, 7, 8, hour, 0).getTime();
+  const items = [{
+    id: 'bridge-protected-case',
+    type: 'plan',
+    title: '连接两个拥挤时段的长计划',
+    startedAt: timestamp(9),
+    endedAt: timestamp(12)
+  }];
+  for (let index = 1; index <= 6; index += 1) {
+    items.push({
+      id: `protected-early-${index}`,
+      type: 'plan',
+      title: `早间计划 ${index}`,
+      startedAt: timestamp(9),
+      endedAt: timestamp(10)
+    });
+    items.push({
+      id: `protected-late-${index}`,
+      type: 'plan',
+      title: `午间计划 ${index}`,
+      startedAt: timestamp(11),
+      endedAt: timestamp(12)
+    });
+  }
+
+  const blocks = buildCalendarBlocks(items, range, 'day', grid, {
+    protectedItemId: 'protected-early-6'
+  });
+  const aggregates = blocks.filter((item) => item.isAggregate);
+
+  assert.equal(blocks.some((item) => item.id === 'protected-early-6'), true);
+  assert.equal(blocks.some((item) => item.id === 'protected-late-4'), true);
+  assert.equal(blocks.some((item) => item.id === 'protected-early-4'), false);
+  assert.deepEqual(
+    aggregates.map((item) => item.aggregateItems.map((aggregateItem) => aggregateItem.id)),
+    [
+      ['protected-early-4', 'protected-early-5'],
+      ['protected-late-5', 'protected-late-6']
+    ]
+  );
+});
+
 test('传递重叠按实际拥挤区段分别聚合，不隐藏中间独占的长条目', () => {
   const range = rangeForView(new Date(2026, 7, 8, 12, 0).getTime(), 'day');
   const grid = buildTimeRows(range, 'day');
@@ -212,7 +308,7 @@ test('传递重叠按实际拥挤区段分别聚合，不隐藏中间独占的�
   assert.equal(new Set(blocks.map((item) => item.renderKey)).size, blocks.length);
 });
 
-test('错峰开始的重叠计划保持为连续矩形，仅聚合提示按拥挤区段变化', () => {
+test('错峰开始的隐藏计划按重叠连通关系形成可操作集合块', () => {
   const range = rangeForView(new Date(2026, 7, 8, 12, 0).getTime(), 'day');
   const grid = buildTimeRows(range, 'day');
   const plan = (id, hour, minute, endHour, endMinute) => ({
@@ -233,13 +329,124 @@ test('错峰开始的重叠计划保持为连续矩形，仅聚合提示按拥�
   ];
 
   const blocks = buildCalendarBlocks(items, range, 'day', grid);
-  items.forEach((item) => {
-    const itemBlocks = blocks.filter((block) => block.id === item.id);
-    assert.ok(itemBlocks.length <= 1);
-    if (itemBlocks.length) assert.equal(itemBlocks[0].isSegmented, false);
-  });
-  assert.ok(blocks.some((item) => item.isAggregate && item.title === '+2'));
+  const aggregates = blocks.filter((item) => item.isAggregate);
+  assert.ok(aggregates.some((item) => item.title === '+2'));
+  assert.ok(aggregates.every((item) => item.hiddenCount >= 2));
+  assert.ok(blocks.every((item) => item.blockBottom - item.blockTop >= 54));
+  assert.equal(blocks.some((item) => item.isSegmented || item.isDecorativeSegment), false);
+  const ordinaryIds = new Set(
+    blocks.filter((block) => !block.isAggregate).map((block) => block.id)
+  );
+  const aggregateIds = new Set(aggregates.flatMap((block) => (
+    block.aggregateItems.map((item) => item.id)
+  )));
+  assert.deepEqual([...ordinaryIds].filter((id) => aggregateIds.has(id)), []);
+  assert.deepEqual(
+    [...new Set([...ordinaryIds, ...aggregateIds])].sort(),
+    items.map((item) => item.id).sort()
+  );
   assert.equal(new Set(blocks.map((item) => item.renderKey)).size, blocks.length);
+});
+
+test('极短重叠区段合并为至少一行高的连通集合入口', () => {
+  const range = rangeForView(new Date(2026, 7, 8, 12, 0).getTime(), 'day');
+  const grid = buildTimeRows(range, 'day');
+  const timestamp = (hour, minute = 0) => new Date(2026, 7, 8, hour, minute).getTime();
+  const items = Array.from({ length: 5 }, (_, index) => ({
+    id: `long-${index + 1}`,
+    type: 'plan',
+    title: `长计划 ${index + 1}`,
+    startedAt: timestamp(9),
+    endedAt: timestamp(12)
+  })).concat([{
+    id: 'short-a',
+    type: 'plan',
+    title: '短计划 A',
+    startedAt: timestamp(10),
+    endedAt: timestamp(10, 1)
+  }, {
+    id: 'short-b',
+    type: 'plan',
+    title: '短计划 B',
+    startedAt: timestamp(10, 36),
+    endedAt: timestamp(10, 37)
+  }]);
+
+  const blocks = buildCalendarBlocks(items, range, 'day', grid);
+  const aggregate = blocks.find((item) => item.isAggregate);
+
+  assert.ok(aggregate);
+  assert.equal(aggregate.title, '+2');
+  assert.deepEqual(aggregate.aggregateItems.map((item) => item.id), ['short-a', 'short-b']);
+  assert.ok(aggregate.blockBottom - aggregate.blockTop >= 54);
+  assert.ok(blocks.every((item) => item.blockBottom - item.blockTop >= 54));
+  assert.equal(blocks.some((item) => item.isSegmented || item.isDecorativeSegment), false);
+});
+
+test('保护错峰重叠目标时被置换旧计划真正进入集合且所有呈现互斥', () => {
+  const range = rangeForView(new Date(2026, 7, 8, 12, 0).getTime(), 'day');
+  const grid = buildTimeRows(range, 'day');
+  const plan = (id, hour, minute, endHour, endMinute) => ({
+    id,
+    type: 'plan',
+    title: id,
+    startedAt: new Date(2026, 7, 8, hour, minute).getTime(),
+    endedAt: new Date(2026, 7, 8, endHour, endMinute).getTime()
+  });
+  const items = [
+    plan('plan-1', 20, 55, 21, 55),
+    plan('plan-2', 20, 57, 21, 57),
+    plan('plan-3', 21, 0, 22, 0),
+    plan('plan-4', 21, 7, 22, 7),
+    plan('plan-5', 21, 7, 22, 7),
+    plan('plan-6', 21, 20, 22, 20),
+    plan('plan-7', 21, 26, 22, 26)
+  ];
+  const originalItems = structuredClone(items);
+  const baseline = buildCalendarBlocks(items, range, 'day', grid);
+  const baselineOrdinaryIds = new Set(
+    baseline.filter((block) => !block.isAggregate).map((block) => block.id)
+  );
+
+  const protectedBlocks = buildCalendarBlocks(items, range, 'day', grid, {
+    protectedItemId: 'plan-2'
+  });
+  const repeatedBlocks = buildCalendarBlocks(items, range, 'day', grid, {
+    protectedItemId: 'plan-2'
+  });
+  const ordinary = protectedBlocks.filter((block) => !block.isAggregate);
+  const aggregates = protectedBlocks.filter((block) => block.isAggregate);
+  const ordinaryIds = new Set(ordinary.map((block) => block.id));
+  const aggregateIds = new Set(aggregates.flatMap((block) => (
+    block.aggregateItems.map((item) => item.id)
+  )));
+
+  const protectedBlock = ordinary.find((block) => block.id === 'plan-2');
+  assert.equal(ordinary.filter((block) => block.id === 'plan-2').length, 1);
+  assert.equal(protectedBlock.isSegmented, false);
+  assert.equal(protectedBlock.renderKey, 'plan-2');
+  assert.equal(aggregateIds.has('plan-2'), false);
+  assert.ok([...baselineOrdinaryIds].some((id) => id !== 'plan-2' && aggregateIds.has(id)));
+  assert.ok(aggregates.every((aggregate) => aggregate.hiddenCount >= 2));
+  assert.ok(protectedBlocks.every((block) => block.blockBottom - block.blockTop >= 54));
+  assert.deepEqual([...ordinaryIds].filter((id) => aggregateIds.has(id)), []);
+  assert.deepEqual(
+    [...new Set([...ordinaryIds, ...aggregateIds])].sort(),
+    items.map((item) => item.id).sort()
+  );
+
+  ordinary.forEach((left, leftIndex) => {
+    ordinary.slice(leftIndex + 1).forEach((right) => {
+      if (left.lane !== right.lane) return;
+      assert.equal(
+        left.blockTop < right.blockBottom && left.blockBottom > right.blockTop,
+        false,
+        `${left.id} 与 ${right.id} 不应在 lane ${left.lane} 相撞`
+      );
+    });
+  });
+  assert.deepEqual(repeatedBlocks, protectedBlocks);
+  assert.deepEqual(items, originalItems);
 });
 
 test('新增计划在历史范围回填今天，在今天或未来范围保留锚点日期', () => {

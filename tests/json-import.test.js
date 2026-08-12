@@ -41,7 +41,6 @@ function calendarEvent(id, title, references = {}, now = NOW) {
   return {
     id, title, startedAt: now, endedAt: now + 3_600_000, priority: 1,
     projectId: null, projectNameSnapshot: null, taskId: null, taskNameSnapshot: null,
-    repeatRuleId: null, repeatRuleSummarySnapshot: null,
     ...references, createdAt: now, updatedAt: now
   };
 }
@@ -49,7 +48,7 @@ function calendarEvent(id, title, references = {}, now = NOW) {
 function revision(id, references = {}, now = NOW) {
   return {
     id, revision: 1, effectiveFrom: now, effectiveUntil: null,
-    frequency: 'weekly', interval: 1, weekdays: [1], monthDay: null,
+    frequency: 'weekly', interval: 1, weekdays: [1], monthDays: [],
     startedAt: now, endedAt: now + 3_600_000, priority: 1,
     projectId: null, projectNameSnapshot: null, taskId: null, taskNameSnapshot: null,
     ...references
@@ -60,24 +59,10 @@ function repeatRule(id, title, revisions, now = NOW) {
   return { id, title, revisions, createdAt: now, updatedAt: now };
 }
 
-function occurrenceException(id, ruleId, override, now = NOW) {
+function occurrenceException(id, ruleId, now = NOW) {
   return {
-    id, ruleId, occurrenceStart: now, kind: override === null ? 'skip' : 'override', override,
+    id, ruleId, occurrenceStart: now, kind: 'skip',
     createdAt: now, updatedAt: now
-  };
-}
-
-function fullOverride(overrides = {}) {
-  return {
-    title: '单次修改',
-    startedAt: NOW + 60_000,
-    endedAt: NOW + 120_000,
-    priority: 2,
-    projectId: null,
-    projectNameSnapshot: null,
-    taskId: null,
-    taskNameSnapshot: null,
-    ...overrides
   };
 }
 
@@ -208,26 +193,11 @@ test('同 ID 重复规则冲突按统一策略保留或整体替换 revisions', 
   assert.equal(JSON.stringify(usedRule).includes('revision_local_only'), false);
 });
 
-test('缺规则 override 整次拒绝而缺规则 skip 仍按既有策略修复', () => {
-  const invalid = database();
-  invalid.occurrenceExceptions.push(occurrenceException(
-    'exception_orphan_override',
-    'rule_missing',
-    fullOverride()
-  ));
-  assert.throws(
-    () => createImportAnalysis(invalid, database(), {
-      mode: IMPORT_MODE.INCREMENTAL,
-      now: NOW + 1
-    }),
-    (error) => error.code === 'IMPORT_SCHEMA_INVALID'
-  );
-
+test('缺规则 skip 仍按既有策略修复', () => {
   const repairable = database();
   repairable.occurrenceExceptions.push(occurrenceException(
     'exception_orphan_skip',
-    'rule_missing',
-    null
+    'rule_missing'
   ));
   const resolved = resolveImportAnalysis(createImportAnalysis(repairable, database(), {
     mode: IMPORT_MODE.INCREMENTAL,
@@ -237,56 +207,6 @@ test('缺规则 override 整次拒绝而缺规则 skip 仍按既有策略修复'
   assert.equal(resolved.summary.discardedExceptionCount, 1);
 });
 
-test('规则冲突后 override 零有效修订或导入链多有效修订时整次拒绝', () => {
-  function localWithOverride() {
-    const local = database();
-    local.repeatRules.push(repeatRule('rule_conflict_override', '本机规则', [
-      revision('revision_local')
-    ]));
-    local.occurrenceExceptions.push(occurrenceException(
-      'exception_local_override',
-      'rule_conflict_override',
-      fullOverride()
-    ));
-    return local;
-  }
-
-  const noRevision = database();
-  noRevision.repeatRules.push(repeatRule('rule_conflict_override', '导入规则', [{
-    ...revision('revision_imported_future', {}, NOW + 1),
-    effectiveFrom: NOW + 1,
-    startedAt: NOW + 1,
-    endedAt: NOW + 3_600_001
-  }], NOW + 1));
-  const noRevisionAnalysis = createImportAnalysis(localWithOverride(), noRevision, {
-    mode: IMPORT_MODE.INCREMENTAL,
-    now: NOW + 2
-  });
-  assert.throws(
-    () => resolveImportAnalysis(noRevisionAnalysis, CONFLICT_POLICY.USE_IMPORTED),
-    (error) => error.code === 'IMPORT_SCHEMA_INVALID'
-  );
-
-  const multipleRevisions = database();
-  multipleRevisions.repeatRules.push(repeatRule('rule_conflict_override', '导入规则', [
-    {
-      ...revision('revision_imported_1'),
-      effectiveFrom: NOW - 1_000,
-      effectiveUntil: NOW + 1_000,
-      startedAt: NOW - 1_000,
-      endedAt: NOW + 3_599_000
-    },
-    { ...revision('revision_imported_2'), revision: 2 }
-  ], NOW + 1));
-  assert.throws(
-    () => createImportAnalysis(localWithOverride(), multipleRevisions, {
-      mode: IMPORT_MODE.INCREMENTAL,
-      now: NOW + 2
-    }),
-    (error) => error.code === 'IMPORT_SCHEMA_INVALID'
-  );
-});
-
 test('七类顶层聚合均按 ID 合并，规则修订随父实体移动', () => {
   const local = database();
   const imported = database();
@@ -294,13 +214,12 @@ test('七类顶层聚合均按 ID 合并，规则修订随父实体移动', () =
   imported.projects.push(project('project_imported', '项目'));
   imported.tasks.push(task('task_imported', '任务', 'project_imported', '项目'));
   imported.calendarEvents.push(calendarEvent('event_imported', '计划', {
-    projectId: 'project_imported', projectNameSnapshot: '项目', taskId: 'task_imported', taskNameSnapshot: '任务',
-    repeatRuleId: 'rule_imported', repeatRuleSummarySnapshot: '重复计划'
+    projectId: 'project_imported', projectNameSnapshot: '项目', taskId: 'task_imported', taskNameSnapshot: '任务'
   }));
   imported.repeatRules.push(repeatRule('rule_imported', '重复计划', [revision('revision_imported', {
     projectId: 'project_imported', projectNameSnapshot: '项目', taskId: 'task_imported', taskNameSnapshot: '任务'
   })]));
-  imported.occurrenceExceptions.push(occurrenceException('exception_imported', 'rule_imported', null));
+  imported.occurrenceExceptions.push(occurrenceException('exception_imported', 'rule_imported'));
   imported.timeLogs.push(timeLog('log_imported', {
     projectId: 'project_imported', projectNameSnapshot: '项目', taskId: 'task_imported', taskNameSnapshot: '任务',
     calendarEventId: 'event_imported', calendarEventSummarySnapshot: '计划'
@@ -378,19 +297,13 @@ test('最终引用修复忽略旧直接关系字段，并只计数当前有效�
   local.tasks.push(task('task_missing_refs', '任务', 'project_missing', '任务所属项目快照'));
   local.calendarEvents.push(calendarEvent('event_missing_refs', '计划', {
     projectId: 'project_missing', projectNameSnapshot: '计划项目快照',
-    taskId: 'task_missing', taskNameSnapshot: '计划任务快照',
-    repeatRuleId: 'rule_missing', repeatRuleSummarySnapshot: '计划规则快照'
+    taskId: 'task_missing', taskNameSnapshot: '计划任务快照'
   }));
   local.repeatRules.push(repeatRule('rule_with_missing_refs', '保留规则', [revision('revision_missing_refs', {
     projectId: 'project_missing', projectNameSnapshot: '修订项目快照',
     taskId: 'task_missing', taskNameSnapshot: '修订任务快照'
   })]));
-  local.occurrenceExceptions.push(occurrenceException('exception_override_missing_refs', 'rule_with_missing_refs', {
-    title: '单次修改', startedAt: NOW + 60_000, endedAt: NOW + 120_000, priority: 2,
-    projectId: 'project_missing', projectNameSnapshot: '例外项目快照',
-    taskId: 'task_missing', taskNameSnapshot: '例外任务快照'
-  }));
-  local.occurrenceExceptions.push(occurrenceException('exception_orphan', 'rule_missing', null));
+  local.occurrenceExceptions.push(occurrenceException('exception_orphan', 'rule_missing'));
   local.timeLogs.push(timeLog('log_missing_event', {
     projectId: 'project_missing', projectNameSnapshot: '日志项目快照',
     taskId: 'task_missing', taskNameSnapshot: '日志任务快照',
@@ -407,17 +320,16 @@ test('最终引用修复忽略旧直接关系字段，并只计数当前有效�
   const repairedTask = resolved.database.tasks[0];
   const repairedEvent = resolved.database.calendarEvents[0];
   const repairedRevision = resolved.database.repeatRules[0].revisions[0];
-  const repairedOverride = resolved.database.occurrenceExceptions[0].override;
   const repairedEventLog = resolved.database.timeLogs.find((item) => item.id === 'log_missing_event');
   const repairedRuleLog = resolved.database.timeLogs.find((item) => item.id === 'log_missing_rule');
 
   assert.deepEqual(
-    [repairedTask.projectId, repairedEvent.projectId, repairedEvent.taskId, repairedEvent.repeatRuleId],
-    [null, 'project_missing', null, null]
+    [repairedTask.projectId, repairedEvent.projectId, repairedEvent.taskId],
+    [null, 'project_missing', null]
   );
   assert.deepEqual(
-    [repairedRevision.projectId, repairedRevision.taskId, repairedOverride.projectId, repairedOverride.taskId],
-    ['project_missing', null, 'project_missing', null]
+    [repairedRevision.projectId, repairedRevision.taskId],
+    ['project_missing', null]
   );
   assert.deepEqual(
     [
@@ -434,17 +346,14 @@ test('最终引用修复忽略旧直接关系字段，并只计数当前有效�
   assert.equal(repairedTask.projectNameSnapshot, '任务所属项目快照');
   assert.equal(repairedEvent.projectNameSnapshot, '计划项目快照');
   assert.equal(repairedEvent.taskNameSnapshot, '计划任务快照');
-  assert.equal(repairedEvent.repeatRuleSummarySnapshot, '计划规则快照');
   assert.equal(repairedRevision.projectNameSnapshot, '修订项目快照');
   assert.equal(repairedRevision.taskNameSnapshot, '修订任务快照');
-  assert.equal(repairedOverride.projectNameSnapshot, '例外项目快照');
-  assert.equal(repairedOverride.taskNameSnapshot, '例外任务快照');
   assert.equal(repairedEventLog.projectNameSnapshot, '日志项目快照');
   assert.equal(repairedEventLog.taskNameSnapshot, '日志任务快照');
   assert.equal(repairedEventLog.calendarEventSummarySnapshot, '日志计划快照');
   assert.equal(repairedRuleLog.originRuleSummarySnapshot, '日志规则快照');
   assert.equal(resolved.database.occurrenceExceptions.some((item) => item.id === 'exception_orphan'), false);
-  assert.equal(resolved.summary.repairedReferenceCount, 8);
+  assert.equal(resolved.summary.repairedReferenceCount, 6);
   assert.equal(resolved.summary.discardedExceptionCount, 1);
 });
 
@@ -565,52 +474,6 @@ test('规则冲突使本机 origin 草稿命中 taskless 实例时清除完整 p
       resolved.database.timer.draft.originRuleSummarySnapshot
     ],
     [null, null, '本机规则快照']
-  );
-  assert.equal(resolved.summary.repairedReferenceCount, 1);
-});
-
-test('修复失效 override 任务后投影保留 null，不回落到 revision 任务或兼容项目', () => {
-  const local = database();
-  local.projects.push(project('project_source', '规则项目'));
-  local.tasks.push(task('task_source', '规则任务', 'project_source', '规则项目'));
-  local.repeatRules.push(repeatRule('rule_override', '含失效改绑的规则', [{
-    ...revision('revision_override', {
-      projectId: 'project_source',
-      projectNameSnapshot: '规则项目',
-      taskId: 'task_source',
-      taskNameSnapshot: '规则任务'
-    }),
-    frequency: 'daily',
-    weekdays: []
-  }]));
-  local.occurrenceExceptions.push(occurrenceException(
-    'exception_override',
-    'rule_override',
-    {
-      title: '失效改绑',
-      startedAt: NOW,
-      endedAt: NOW + 30 * 60 * 1000,
-      priority: 1,
-      projectId: 'legacy_project',
-      projectNameSnapshot: '旧改绑项目',
-      taskId: 'missing_task',
-      taskNameSnapshot: '已删除改绑任务'
-    }
-  ));
-
-  const resolved = resolveImportAnalysis(createImportAnalysis(local, database(), {
-    mode: IMPORT_MODE.INCREMENTAL,
-    now: NOW + 1
-  }));
-  const rule = resolved.database.repeatRules[0];
-  const exception = resolved.database.occurrenceExceptions[0];
-  const occurrence = projectRule(rule, NOW, NOW, resolved.database.occurrenceExceptions)[0];
-
-  assert.equal(exception.override.taskId, null);
-  assert.equal(exception.override.projectId, 'legacy_project');
-  assert.deepEqual(
-    [occurrence.taskId, occurrence.taskNameSnapshot, occurrence.projectId],
-    [null, '已删除改绑任务', null]
   );
   assert.equal(resolved.summary.repairedReferenceCount, 1);
 });

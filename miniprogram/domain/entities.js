@@ -84,8 +84,6 @@ function createCalendarEvent(input, now = Date.now()) {
     projectNameSnapshot: input.projectNameSnapshot || null,
     taskId: input.taskId || null,
     taskNameSnapshot: input.taskNameSnapshot || null,
-    repeatRuleId: input.repeatRuleId || null,
-    repeatRuleSummarySnapshot: input.repeatRuleSummarySnapshot || null,
     createdAt: now,
     updatedAt: now
   };

@@ -747,6 +747,71 @@
   align-items: center;
 }
 
+.month-day-scroll {
+  box-sizing: border-box;
+  height: 120rpx;
+  overflow: hidden;
+  border-radius: 12rpx;
+  background: #f3f1ed;
+}
+
+.month-day-group {
+  display: flex;
+  flex-wrap: wrap;
+  color: #59635d;
+  font-size: 24rpx;
+}
+
+.month-day-option {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 14.285714%;
+  height: 60rpx;
+}
+
+.month-day-checkbox {
+  margin-right: -4rpx;
+  transform: scale(.72);
+  transform-origin: center;
+}
+
+.repeat-interval-row {
+  display: flex;
+  align-items: center;
+  gap: 12rpx;
+  margin: 14rpx 0;
+  color: #59635d;
+  font-size: 26rpx;
+}
+
+.repeat-interval-input {
+  flex: 0 0 116rpx;
+  width: 116rpx;
+  height: 64rpx;
+  min-height: 64rpx;
+  margin: 0;
+  padding: 0 12rpx;
+  line-height: 64rpx;
+  text-align: center;
+}
+
+.repeat-frequency-picker {
+  flex: 0 0 116rpx;
+  width: 116rpx;
+}
+
+.repeat-frequency-field {
+  box-sizing: border-box;
+  height: 64rpx;
+  min-height: 64rpx;
+  margin: 0;
+  padding: 0 14rpx;
+  line-height: 64rpx;
+  text-align: center;
+}
+
 .modal-mask {
   position: fixed;
   z-index: 20;

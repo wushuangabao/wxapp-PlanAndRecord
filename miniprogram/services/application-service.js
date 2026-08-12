@@ -11,13 +11,11 @@ const { DomainError } = require('../domain/errors');
 const { createId } = require('../domain/id');
 const { clone, createCalendarEvent, createIdleTimer, createRepeatRule, createTimeLog } = require('../domain/entities');
 const {
-  createOccurrenceException,
-  initialRuleOccurrenceStart,
+  createSkipOccurrenceException,
   intervalIntersectsRange,
   logicalOccurrenceKey,
   logicalOccurrenceStart,
   occurrenceKey,
-  projectRevisionStartedAt,
   projectRule,
   projectRuleIntersectingRange
 } = require('../domain/recurrence');
@@ -47,6 +45,16 @@ const {
 } = require('../repository/json-import');
 const { normalizeJsonSnapshot, parseJsonSnapshot, persistedValueEquals } = require('../repository/json-snapshot');
 const { exportJson } = require('./export-service');
+
+function firstRuleOccurrence(rule) {
+  const revision = rule.revisions[0];
+  return projectRule(
+    rule,
+    revision.effectiveFrom,
+    revision.effectiveFrom,
+    []
+  )[0] || null;
+}
 
 class ApplicationService {
   constructor(repository, options = {}) {
@@ -280,58 +288,13 @@ class ApplicationService {
       target.originRuleSummarySnapshot = target.originRuleSummarySnapshot || rule.title;
       changed = true;
     }
-    if (target.repeatRuleId === rule.id) {
-      target.repeatRuleId = null;
-      target.repeatRuleSummarySnapshot = target.repeatRuleSummarySnapshot || rule.title;
-      changed = true;
-    }
     return changed;
   }
 
-  originReferenceMatchesOccurrence(target, ruleId, occurrenceStart) {
-    return Boolean(
-      target
-      && target.originRuleId === ruleId
-      && logicalOccurrenceStart(ruleId, target.originOccurrenceId) === occurrenceStart
-    );
-  }
-
-  detachOccurrenceReference(target, rule, occurrenceStart, options = {}) {
-    if (!this.originReferenceMatchesOccurrence(target, rule.id, occurrenceStart)) {
-      return false;
-    }
-    target.originRuleId = null;
-    if (options.clearOriginOccurrence === true) {
-      target.originOccurrenceId = null;
-    }
-    target.originRuleSummarySnapshot = target.originRuleSummarySnapshot || rule.title;
-    return true;
-  }
-
-  overrideSlotsForTasks(database, taskIds, excludedRuleIds = []) {
-    const taskIdSet = new Set(taskIds);
-    const excludedRuleIdSet = new Set(excludedRuleIds);
-    const rulesById = new Map(database.repeatRules.map((rule) => [rule.id, rule]));
-    return database.occurrenceExceptions
-      .filter((exception) => (
-        exception.kind === 'override'
-        && exception.override
-        && taskIdSet.has(exception.override.taskId)
-        && !excludedRuleIdSet.has(exception.ruleId)
-      ))
-      .map((exception) => ({
-        exception,
-        rule: rulesById.get(exception.ruleId)
-      }))
-      .filter((slot) => slot.rule);
-  }
-
-  convertOverrideSlotsToSkips(slots, now) {
-    slots.forEach(({ exception }) => {
-      exception.kind = 'skip';
-      exception.override = null;
-      exception.updatedAt = now;
-    });
+  originReferenceStartsAtOrAfter(target, ruleId, occurrenceStart) {
+    if (!target || target.originRuleId !== ruleId) return false;
+    const targetStart = logicalOccurrenceStart(ruleId, target.originOccurrenceId);
+    return targetStart !== null && targetStart >= occurrenceStart;
   }
 
   detachAbandonedProjectDraftReferences(target, project, deletingTasks, invalidatedEvents, deletedRules) {
@@ -762,12 +725,6 @@ class ApplicationService {
           (revision) => projectTaskIds.includes(revision.taskId)
         ));
       const deletedRuleIds = deletedRules.map((rule) => rule.id);
-      const overrideSlots = this.overrideSlotsForTasks(
-        database,
-        projectTaskIds,
-        deletedRuleIds
-      );
-      this.convertOverrideSlotsToSkips(overrideSlots, now);
       const invalidatedDraftEvents = relatedEvents.filter((event) => (
         deletedEventIds.includes(event.id)
         || deletingTaskIds.includes(event.taskId)
@@ -780,12 +737,6 @@ class ApplicationService {
         invalidatedDraftEvents,
         deletedRules
       );
-      overrideSlots.forEach(({ exception, rule }) => this.detachOccurrenceReference(
-        database.timer && database.timer.draft,
-        rule,
-        exception.occurrenceStart,
-        { clearOriginOccurrence: true }
-      ));
       if (database.recoveryDraft && database.recoveryDraft.timer) {
         this.detachAbandonedProjectDraftReferences(
           database.recoveryDraft.timer.draft,
@@ -794,12 +745,6 @@ class ApplicationService {
           invalidatedDraftEvents,
           deletedRules
         );
-        overrideSlots.forEach(({ exception, rule }) => this.detachOccurrenceReference(
-          database.recoveryDraft.timer.draft,
-          rule,
-          exception.occurrenceStart,
-          { clearOriginOccurrence: true }
-        ));
       }
 
       database.projects = database.projects.filter((item) => item.id !== id);
@@ -836,13 +781,6 @@ class ApplicationService {
             changed = true;
           }
         }
-        if (event.repeatRuleId && deletedRuleIds.includes(event.repeatRuleId)) {
-          const rule = deletedRules.find((item) => item.id === event.repeatRuleId);
-          event.repeatRuleSummarySnapshot = event.repeatRuleSummarySnapshot
-            || (rule ? rule.title : '已删除重复规则');
-          event.repeatRuleId = null;
-          changed = true;
-        }
         if (changed) event.updatedAt = now;
         return true;
       });
@@ -860,21 +798,9 @@ class ApplicationService {
       });
       database.occurrenceExceptions = database.occurrenceExceptions
         .filter((item) => !deletedRuleIds.includes(item.ruleId));
-      database.occurrenceExceptions.forEach((exception) => {
-        if (exception.override && exception.override.projectId === id) {
-          exception.override.projectNameSnapshot = exception.override.projectNameSnapshot
-            || project.title;
-          exception.override.projectId = null;
-          exception.updatedAt = now;
-        }
-      });
       database.timeLogs = database.timeLogs.filter((log) => {
-        const overrideSlot = overrideSlots.find(({ exception, rule }) => (
-          this.originReferenceMatchesOccurrence(log, rule.id, exception.occurrenceStart)
-        ));
         const related = relatedEventIds.includes(log.calendarEventId)
-          || deletedRuleIds.includes(log.originRuleId)
-          || Boolean(overrideSlot);
+          || deletedRuleIds.includes(log.originRuleId);
         if (related && log.status === LOG_STATUS.CANDIDATE) {
           return false;
         }
@@ -897,13 +823,6 @@ class ApplicationService {
         if (deletedRuleIds.includes(log.originRuleId)) {
           const rule = deletedRules.find((item) => item.id === log.originRuleId);
           changed = this.detachRepeatRuleReference(log, rule) || changed;
-        }
-        if (overrideSlot) {
-          changed = this.detachOccurrenceReference(
-            log,
-            overrideSlot.rule,
-            overrideSlot.exception.occurrenceStart
-          ) || changed;
         }
         if (changed) log.updatedAt = now;
         return true;
@@ -965,17 +884,9 @@ class ApplicationService {
       const deletedRules = database.repeatRules
         .filter((rule) => rule.revisions.some((revision) => revision.taskId === id));
       const deletedRuleIds = deletedRules.map((rule) => rule.id);
-      const overrideSlots = this.overrideSlotsForTasks(database, [id], deletedRuleIds);
-      this.convertOverrideSlotsToSkips(overrideSlots, now);
-
       database.calendarEvents = database.calendarEvents.filter((event) => {
         if (deletedEventIds.includes(event.id)) return false;
         let changed = this.detachTaskReference(event, task);
-        if (event.repeatRuleId && deletedRuleIds.includes(event.repeatRuleId)) {
-          event.repeatRuleSummarySnapshot = event.repeatRuleSummarySnapshot || '已删除重复规则';
-          event.repeatRuleId = null;
-          changed = true;
-        }
         if (changed) event.updatedAt = now;
         return true;
       });
@@ -993,13 +904,6 @@ class ApplicationService {
           log.originRuleId = null;
           changed = true;
         }
-        overrideSlots.forEach(({ exception, rule }) => {
-          changed = this.detachOccurrenceReference(
-            log,
-            rule,
-            exception.occurrenceStart
-          ) || changed;
-        });
         if (changed) log.updatedAt = now;
       });
       this.detachTaskReference(database.timer.draft, task);
@@ -1009,24 +913,12 @@ class ApplicationService {
         rule,
         { clearOriginOccurrence: true }
       ));
-      overrideSlots.forEach(({ exception, rule }) => this.detachOccurrenceReference(
-        database.timer.draft,
-        rule,
-        exception.occurrenceStart,
-        { clearOriginOccurrence: true }
-      ));
       if (database.recoveryDraft && database.recoveryDraft.timer) {
         this.detachTaskReference(database.recoveryDraft.timer.draft, task);
         taskEvents.forEach((event) => this.detachCalendarEventReference(database.recoveryDraft.timer.draft, event));
         deletedRules.forEach((rule) => this.detachRepeatRuleReference(
           database.recoveryDraft.timer.draft,
           rule,
-          { clearOriginOccurrence: true }
-        ));
-        overrideSlots.forEach(({ exception, rule }) => this.detachOccurrenceReference(
-          database.recoveryDraft.timer.draft,
-          rule,
-          exception.occurrenceStart,
           { clearOriginOccurrence: true }
         ));
       }
@@ -1147,18 +1039,8 @@ class ApplicationService {
         priority: validPriority(input.priority),
         ...pattern
       }, now);
-      const event = createCalendarEvent({
-        ...association,
-        title,
-        startedAt,
-        endedAt,
-        priority: validPriority(input.priority),
-        repeatRuleId: rule.id,
-        repeatRuleSummarySnapshot: title
-      }, now);
       database.repeatRules.push(rule);
-      database.calendarEvents.push(event);
-      return { rule, event };
+      return { rule, occurrence: firstRuleOccurrence(rule) };
     }).result;
   }
 
@@ -1182,67 +1064,8 @@ class ApplicationService {
         priority: validPriority(input.priority),
         ...pattern
       }, now);
-      const event = createCalendarEvent({
-        ...association,
-        title,
-        startedAt,
-        endedAt,
-        priority: validPriority(input.priority),
-        repeatRuleId: rule.id,
-        repeatRuleSummarySnapshot: title
-      }, now);
       database.repeatRules.push(rule);
-      database.calendarEvents.push(event);
-      return { task, rule, event };
-    }).result;
-  }
-
-  reviseRuleFollowing(ruleId, occurrenceStart, input) {
-    const now = this.now();
-    this.rejectDirectPlanProject(input);
-    return this.repository.transaction((database) => {
-      const rule = this.requireEntity(database.repeatRules, ruleId, '重复规则');
-      const activeRevision = rule.revisions.find((revision) => revision.effectiveFrom <= occurrenceStart && (!revision.effectiveUntil || revision.effectiveUntil >= occurrenceStart));
-      if (!activeRevision) {
-        throw new DomainError('OCCURRENCE_NOT_FOUND', '找不到需要修订的重复实例');
-      }
-      const startedAt = input.startedAt === undefined
-        ? projectRevisionStartedAt(activeRevision, occurrenceStart)
-        : Number(input.startedAt);
-      const originalDuration = activeRevision.endedAt - activeRevision.startedAt;
-      const endedAt = input.endedAt === undefined ? startedAt + originalDuration : Number(input.endedAt);
-      validTimeRange(startedAt, endedAt, '重复规则时间');
-      const replaceActiveRevision = occurrenceStart === activeRevision.effectiveFrom;
-      const nextRevision = Math.max(...rule.revisions.map((item) => item.revision)) + 1;
-      const pattern = canonicalizeRepeatPattern({
-        frequency: input.frequency === undefined ? activeRevision.frequency : input.frequency,
-        interval: input.interval === undefined ? activeRevision.interval : input.interval,
-        weekdays: input.weekdays === undefined ? activeRevision.weekdays : input.weekdays,
-        monthDay: input.monthDay === undefined ? activeRevision.monthDay : input.monthDay
-      });
-      if (replaceActiveRevision) {
-        rule.revisions = rule.revisions.filter((item) => item.id !== activeRevision.id);
-      } else {
-        activeRevision.effectiveUntil = occurrenceStart - 1;
-      }
-      const revision = {
-        ...activeRevision,
-        ...this.resolvePlanTaskAssociation(
-          database,
-          input.taskId === undefined ? activeRevision.taskId : input.taskId
-        ),
-        id: createId('revision', now),
-        revision: nextRevision,
-        effectiveFrom: occurrenceStart,
-        effectiveUntil: null,
-        ...pattern,
-        startedAt,
-        endedAt,
-        priority: input.priority === undefined ? activeRevision.priority : validPriority(input.priority)
-      };
-      rule.revisions.push(revision);
-      rule.updatedAt = now;
-      return revision;
+      return { task, rule, occurrence: firstRuleOccurrence(rule) };
     }).result;
   }
 
@@ -1266,19 +1089,19 @@ class ApplicationService {
         );
       }
       database.occurrenceExceptions = database.occurrenceExceptions.filter((item) => !(item.ruleId === ruleId && item.occurrenceStart === occurrenceStart));
-      const exception = createOccurrenceException(ruleId, occurrenceStart, 'skip', null, now);
+      const exception = createSkipOccurrenceException(ruleId, occurrenceStart, now);
       database.occurrenceExceptions.push(exception);
       return exception;
     }).result;
   }
 
-  overrideOccurrence(ruleId, occurrenceStart, input) {
-    this.rejectDirectPlanProject(input);
-    const startedAt = Number(input.startedAt);
-    const endedAt = Number(input.endedAt);
-    validTimeRange(startedAt, endedAt, '单次修改时间');
-    const title = requiredTitle(input.title, '计划标题');
-    const priority = validPriority(input.priority);
+  deleteRuleFollowing(ruleId, occurrenceStart, confirmed) {
+    if (confirmed !== true) {
+      throw new DomainError(
+        'RULE_DELETE_CONFIRMATION_REQUIRED',
+        '删除本次及后续需要二次确认'
+      );
+    }
     const now = this.now();
     return this.repository.transaction((database) => {
       const rule = this.requireEntity(database.repeatRules, ruleId, '重复规则');
@@ -1289,78 +1112,50 @@ class ApplicationService {
         database.occurrenceExceptions
       ).find((item) => item.occurrenceStart === occurrenceStart);
       if (!occurrence) {
-        throw new DomainError('OCCURRENCE_NOT_FOUND', '找不到需要修改的重复实例');
+        throw new DomainError('OCCURRENCE_NOT_FOUND', '找不到需要删除的重复实例');
       }
-      const occurrenceLogicalKey = occurrenceKey(rule.id, occurrence.occurrenceStart);
-      if (database.timeLogs.some((log) => (
-        log.originRuleId === rule.id
-        && (
-          log.originOccurrenceId === occurrence.originOccurrenceId
-          || logicalOccurrenceKey(log.originRuleId, log.originOccurrenceId) === occurrenceLogicalKey
-        )
-      ))) {
-        throw new DomainError('OCCURRENCE_ALREADY_CONFIRMED', '该重复实例已确认，不能重复生成记录');
-      }
-      const taskAssociation = this.resolvePlanTaskAssociation(
-        database,
-        input.taskId === undefined ? occurrence.taskId : input.taskId
-      );
-      database.occurrenceExceptions = database.occurrenceExceptions.filter(
-        (item) => !(item.ruleId === ruleId && item.occurrenceStart === occurrenceStart)
-      );
-      const exception = createOccurrenceException(ruleId, occurrenceStart, 'override', {
-        title,
-        startedAt,
-        endedAt,
-        priority,
-        ...taskAssociation
-      }, now);
-      database.occurrenceExceptions.push(exception);
-      const overriddenOccurrence = projectRule(
+
+      const revision = rule.revisions[0];
+      const hasPastOccurrence = projectRule(
         rule,
-        occurrenceStart,
-        occurrenceStart,
-        database.occurrenceExceptions
-      ).find((item) => item.occurrenceStart === occurrenceStart);
-      if (!overriddenOccurrence) {
-        throw new DomainError('OCCURRENCE_NOT_FOUND', '单次修改后无法重新定位重复实例');
+        revision.effectiveFrom,
+        occurrenceStart - 1,
+        []
+      ).length > 0;
+
+      if (hasPastOccurrence) {
+        revision.effectiveUntil = occurrenceStart - 1;
+        rule.updatedAt = now;
+      } else {
+        database.repeatRules = database.repeatRules.filter((item) => item.id !== rule.id);
       }
-      const association = this.resolveNewRecordAssociations(database, {
-        originRuleId: rule.id,
-        originOccurrenceId: overriddenOccurrence.originOccurrenceId
+
+      database.occurrenceExceptions = database.occurrenceExceptions.filter((item) => (
+        item.ruleId !== rule.id
+        || (hasPastOccurrence && item.occurrenceStart < occurrenceStart)
+      ));
+
+      database.timeLogs.forEach((log) => {
+        if (!this.originReferenceStartsAtOrAfter(log, rule.id, occurrenceStart)) return;
+        this.detachRepeatRuleReference(log, rule);
+        log.updatedAt = now;
       });
-      const log = createTimeLog({
-        ...association,
-        startedAt: overriddenOccurrence.startedAt,
-        endedAt: overriddenOccurrence.endedAt,
-        note: overriddenOccurrence.title,
-        status: LOG_STATUS.CONFIRMED,
-        source: LOG_SOURCE.RULE,
-        originRuleId: rule.id,
-        originOccurrenceId: overriddenOccurrence.originOccurrenceId,
-        originRuleSummarySnapshot: rule.title,
-        tags: []
-      }, now);
-      database.timeLogs.push(log);
-      return { exception, log };
+
+      const detachActiveDraft = (draft) => {
+        if (!this.originReferenceStartsAtOrAfter(draft, rule.id, occurrenceStart)) return;
+        this.detachRepeatRuleReference(draft, rule, { clearOriginOccurrence: true });
+      };
+      detachActiveDraft(database.timer && database.timer.draft);
+      detachActiveDraft(database.recoveryDraft && database.recoveryDraft.timer
+        && database.recoveryDraft.timer.draft);
+
+      return { ruleId, occurrenceStart, removedRule: !hasPastOccurrence };
     }).result;
   }
 
   planAssociationCandidates(rangeStart, rangeEnd) {
     const database = this.snapshot();
     const validTaskIds = new Set(database.tasks.map((task) => task.id));
-    const repeatRulesById = new Map(database.repeatRules.map((rule) => [rule.id, rule]));
-    const materializedEventOccurrences = new Set(database.calendarEvents
-      .filter((event) => event.repeatRuleId)
-      .map((event) => {
-        const occurrenceStart = initialRuleOccurrenceStart(
-          repeatRulesById.get(event.repeatRuleId)
-        );
-        return occurrenceStart === null
-          ? null
-          : occurrenceKey(event.repeatRuleId, occurrenceStart);
-      })
-      .filter(Boolean));
     const concreteEvents = database.calendarEvents
       .filter((event) => event.taskId && validTaskIds.has(event.taskId))
       .filter((event) => intervalIntersectsRange(event, rangeStart, rangeEnd))
@@ -1372,11 +1167,7 @@ class ApplicationService {
         rangeEnd,
         database.occurrenceExceptions
       ))
-      .filter((item) => item.taskId && validTaskIds.has(item.taskId))
-      .filter((item) => !materializedEventOccurrences.has(occurrenceKey(
-        item.ruleId,
-        item.occurrenceStart
-      )));
+      .filter((item) => item.taskId && validTaskIds.has(item.taskId));
     return concreteEvents
       .concat(recurringOccurrences)
       .sort((first, second) => first.startedAt - second.startedAt);
@@ -1385,17 +1176,6 @@ class ApplicationService {
   timeline(rangeStart, rangeEnd) {
     const database = this.snapshot();
     const validTaskIds = new Set(database.tasks.map((task) => task.id));
-    const repeatRulesById = new Map(database.repeatRules.map((rule) => [rule.id, rule]));
-    const materializedEventOccurrences = new Set(database.calendarEvents
-      .filter((event) => event.repeatRuleId)
-      .map((event) => {
-        const rule = repeatRulesById.get(event.repeatRuleId);
-        const occurrenceStart = initialRuleOccurrenceStart(rule);
-        return occurrenceStart === null
-          ? null
-          : occurrenceKey(event.repeatRuleId, occurrenceStart);
-      })
-      .filter(Boolean));
     const materializedLogicalOccurrences = new Set(database.timeLogs
       .map((log) => logicalOccurrenceKey(log.originRuleId, log.originOccurrenceId))
       .filter(Boolean));
@@ -1423,10 +1203,6 @@ class ApplicationService {
         database.occurrenceExceptions
       ))
       .filter((item) => item.taskId && validTaskIds.has(item.taskId))
-      .filter((item) => !materializedEventOccurrences.has(occurrenceKey(
-        item.ruleId,
-        item.occurrenceStart
-      )))
       .filter((item) => !database.timeLogs.some((log) => (
         log.originRuleId === item.ruleId
         && log.originOccurrenceId === item.originOccurrenceId
@@ -1817,6 +1593,7 @@ class ApplicationService {
         capturedNow,
         '计时超过恢复时间窗口，系统已生成候选，请核实后确认记录'
       );
+      if (result.timerDiscarded) return result;
       result.recoveryDraft.candidatePreview = {
         startedAt: timer.startedAt,
         endedAt,

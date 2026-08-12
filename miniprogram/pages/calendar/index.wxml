@@ -46,7 +46,7 @@
           wx:for="{{timeline}}"
           wx:key="renderKey"
           id="{{item.domId}}"
-          class="calendar-block {{item.visualType}} {{item.isSegmented ? 'is-segmented' : ''}} {{item.continuesBefore ? 'continues-before' : ''}} {{item.continuesAfter ? 'continues-after' : ''}} {{item.overlapMeta ? 'is-overlapping' : ''}}"
+          class="calendar-block {{item.visualType}} {{item.continuesBefore ? 'continues-before' : ''}} {{item.continuesAfter ? 'continues-after' : ''}} {{item.overlapMeta ? 'is-overlapping' : ''}}"
           style="{{item.blockStyle}}"
           role="button"
           aria-label="{{item.ariaLabel}}"
@@ -76,7 +76,17 @@
       <view wx:if="{{!planEditor && hasAnyTasks && planFormTasks[planFormTaskIndex].optionType === 'create'}}" class="derived-field create-task-hint">确认后将创建同名、未关联项目的 TODO。</view>
       <view class="priority-row"><view>优先级</view><view class="priority-choices"><view class="priority-choice priority-1 {{priority === 1 ? 'selected' : ''}}" role="button" aria-label="低优先级" data-priority="1" bindtap="choosePriority"></view><view class="priority-choice priority-2 {{priority === 2 ? 'selected' : ''}}" role="button" aria-label="中优先级" data-priority="2" bindtap="choosePriority"></view><view class="priority-choice priority-3 {{priority === 3 ? 'selected' : ''}}" role="button" aria-label="高优先级" data-priority="3" bindtap="choosePriority"></view></view></view>
       <view wx:if="{{!planEditor}}" class="switch-row"><view>固定日程</view><switch checked="{{repeatEnabled}}" color="#55725e" data-key="repeatEnabled" bindchange="onSwitch" /></view>
-      <view wx:if="{{!planEditor && repeatEnabled}}" class="repeat-options"><picker range="{{frequencyLabels}}" value="{{frequencyIndex}}" data-key="frequencyIndex" bindchange="onPicker"><view class="picker">{{frequencyLabels[frequencyIndex]}}</view></picker><checkbox-group wx:if="{{frequencyIndex === 1}}" class="weekday-group" bindchange="onWeekdaysChange"><label wx:for="{{weekdayLabels}}" wx:key="*this" class="weekday"><checkbox value="{{index}}" checked="{{repeatWeekdays.indexOf(index) !== -1}}" color="#55725e" />{{item}}</label></checkbox-group><input class="input" type="number" placeholder="重复间隔，例如 1" value="{{interval}}" data-key="interval" bindinput="onField" /></view>
+      <view wx:if="{{!planEditor && repeatEnabled}}" class="repeat-options">
+        <view class="repeat-interval-row"><text>每隔</text><input class="input repeat-interval-input" type="number" value="{{repeatGap}}" aria-label="重复间隔，只能输入非负整数" bindinput="onRepeatGapInput" /><picker class="repeat-frequency-picker" range="{{frequencyUnits}}" value="{{frequencyIndex}}" data-key="frequencyIndex" aria-label="选择重复周期单位" bindchange="onPicker"><view class="picker repeat-frequency-field">{{frequencyUnits[frequencyIndex]}}</view></picker><text>{{repeatOccurrenceText}}</text></view>
+        <checkbox-group wx:if="{{frequencyIndex === 1}}" class="weekday-group" bindchange="onWeekdaysChange"><label wx:for="{{weekdayOptions}}" wx:key="value" class="weekday"><checkbox value="{{item.value}}" checked="{{item.checked}}" color="#55725e" />{{item.label}}</label></checkbox-group>
+        <scroll-view wx:if="{{frequencyIndex === 2}}" class="month-day-scroll" scroll-y="{{true}}" enhanced="{{true}}" show-scrollbar="{{false}}">
+          <checkbox-group class="month-day-group" bindchange="onMonthDaysChange">
+            <label wx:for="{{monthDayOptions}}" wx:key="value" class="month-day-option" aria-label="{{item.value}}号">
+              <checkbox class="month-day-checkbox" value="{{item.value}}" checked="{{item.checked}}" color="#55725e" />{{item.label}}
+            </label>
+          </checkbox-group>
+        </scroll-view>
+      </view>
     </view>
   </view>
 
@@ -138,8 +148,7 @@
           <view wx:if="{{detailItem.type === 'plan' && !detailItem.virtual && detailItem.canEditPlan}}" class="detail-action" role="button" data-item="{{detailItem}}" bindtap="openPlanEditor">编辑计划</view>
           <view wx:if="{{detailItem.type === 'plan' && !detailItem.virtual}}" class="detail-action danger-action" role="button" data-item="{{detailItem}}" bindtap="deletePlan">删除计划</view>
           <view wx:if="{{detailItem.virtual}}" class="detail-action primary-action" role="button" data-item="{{detailItem}}" bindtap="confirmItem">确认</view>
-          <view wx:if="{{detailItem.virtual}}" class="detail-action" role="button" data-item="{{detailItem}}" bindtap="openOccurrenceEditor">修改本次</view>
-          <view wx:if="{{detailItem.virtual}}" class="detail-action" role="button" data-item="{{detailItem}}" bindtap="openRuleFollowingEditor">修改本次及后续</view>
+          <view wx:if="{{detailItem.virtual}}" class="detail-action danger-action" role="button" aria-label="删除本次及后续" data-item="{{detailItem}}" bindtap="deleteRuleFollowing">删除本次及后续</view>
           <view wx:if="{{detailItem.virtual}}" class="detail-action danger-action" role="button" data-item="{{detailItem}}" bindtap="skipVirtualOccurrence">跳过</view>
           <view wx:if="{{detailItem.type === 'candidate' && !detailItem.virtual}}" class="detail-action primary-action" role="button" data-item="{{detailItem}}" bindtap="confirmItem">确认</view>
           <view wx:if="{{detailItem.type === 'candidate' && !detailItem.virtual}}" class="detail-action" role="button" data-item="{{detailItem}}" bindtap="openLogEditor">编辑确认</view>
@@ -150,8 +159,6 @@
       </block>
     </view>
   </view>
-
-  <view wx:if="{{editor}}" class="modal-mask" bindtap="closeOccurrenceEditor"><view class="modal" catchtap="noop"><sheet-header title="{{editorMode === 'following' ? '修改本次及后续' : '修改重复实例'}}" show-confirm="{{true}}" bind:confirm="submitOccurrenceEditor" bind:cancel="closeOccurrenceEditor" /><input class="input" maxlength="-1" value="{{editorTitle}}" data-key="editorTitle" bindinput="onTitleField" /><picker mode="date" value="{{editorDate}}" data-key="editorDate" bindchange="onEditorField"><view class="picker">{{editorDate}}</view></picker><view class="datetime-row"><picker mode="time" value="{{editorStart}}" data-key="editorStart" bindchange="onEditorField"><view>{{editorStart}}</view></picker><picker mode="time" value="{{editorEnd}}" data-key="editorEnd" bindchange="onEditorField"><view>{{editorEnd}}</view></picker></view><view class="priority-choices"><view class="priority-choice priority-1 {{editorPriority === 1 ? 'selected' : ''}}" data-priority="1" bindtap="chooseEditorPriority"></view><view class="priority-choice priority-2 {{editorPriority === 2 ? 'selected' : ''}}" data-priority="2" bindtap="chooseEditorPriority"></view><view class="priority-choice priority-3 {{editorPriority === 3 ? 'selected' : ''}}" data-priority="3" bindtap="chooseEditorPriority"></view></view></view></view>
 
   <view wx:if="{{logEditor}}" class="modal-mask" bindtap="closeLogEditor">
     <view class="modal" catchtap="noop">

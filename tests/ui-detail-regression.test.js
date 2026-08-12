@@ -56,7 +56,13 @@ test('日历顶部提供当前范围、今天按钮、四种粒度与右对齐�
 });
 
 test('所有自定义底部弹窗复用共享头部组件', () => {
-  const expectedModalCounts = { plans: 5, calendar: 5 };
+  const expectedModalCounts = { plans: 5, calendar: 4 };
+  const calendarModalBindings = [
+    'closeCreatePlan',
+    'closeTaskPicker',
+    'closeItemDetail',
+    'closeLogEditor'
+  ];
 
   for (const page of ['timer', ...Object.keys(expectedModalCounts)]) {
     const pageDirectory = path.join(pagesRoot, page);
@@ -67,6 +73,12 @@ test('所有自定义底部弹窗复用共享头部组件', () => {
 
     assert.equal(config.usingComponents['sheet-header'], '/components/sheet-header/index', page);
     if (expectedModalCounts[page] !== undefined) assert.equal(modalCount, expectedModalCounts[page], page);
+    if (page === 'calendar') {
+      assert.deepEqual(
+        calendarModalBindings.filter((binding) => wxml.includes(`bindtap="${binding}"`)),
+        calendarModalBindings
+      );
+    }
     assert.equal(sheetHeaderCount, modalCount, page);
     assert.doesNotMatch(wxml, /class="modal-title"/, page);
   }

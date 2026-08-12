@@ -21,7 +21,20 @@ const {
 } = require('../../utils/page');
 
 const FREQUENCY_VALUES = ['daily', 'weekly', 'monthly'];
-const FREQUENCY_LABELS = ['每日', '每周', '每月'];
+const FREQUENCY_UNITS = ['天', '周', '月'];
+const WEEKDAY_OPTIONS = [
+  { label: '一', value: 1 },
+  { label: '二', value: 2 },
+  { label: '三', value: 3 },
+  { label: '四', value: 4 },
+  { label: '五', value: 5 },
+  { label: '六', value: 6 },
+  { label: '日', value: 0 }
+];
+const MONTH_DAY_OPTIONS = Array.from({ length: 31 }, (_, index) => ({
+  label: String(index + 1),
+  value: index + 1
+}));
 const DAY_MS = 24 * 60 * 60 * 1_000;
 const PLAN_WINDOW_PADDING_MS = DAY_MS;
 const MAX_PLAN_WINDOW_MS = 3 * DAY_MS;
@@ -40,8 +53,9 @@ function calendarBlockDomId(id) {
   return `calendar-block-${String(id || '').replace(/[^A-Za-z0-9_-]/g, '-')}`;
 }
 
-function createdPlanEvent(result) {
+function createdPlanTarget(result) {
   if (!result || typeof result !== 'object') return null;
+  if (result.occurrence && typeof result.occurrence === 'object') return result.occurrence;
   if (result.event && typeof result.event === 'object') return result.event;
   return Number.isFinite(result.startedAt) && Number.isFinite(result.endedAt)
     ? result
@@ -187,6 +201,48 @@ function secondTimeValue(value) {
   return /^\d{2}:\d{2}$/.test(value || '') ? `${value}:00` : value;
 }
 
+function repeatIntervalFromGap(value) {
+  if (typeof value === 'string' && !value.trim()) {
+    throw new Error('重复间隔必须是非负整数');
+  }
+  const gap = Number(value);
+  if (!Number.isSafeInteger(gap) || gap < 0 || !Number.isSafeInteger(gap + 1)) {
+    throw new Error('重复间隔必须是非负整数');
+  }
+  return gap + 1;
+}
+
+function defaultRepeatWeekdays(now = Date.now()) {
+  return [new Date(now).getDay()];
+}
+
+function defaultRepeatMonthDays(now = Date.now()) {
+  return [new Date(now).getDate()];
+}
+
+function weekdayOptionsWithSelection(weekdays) {
+  return WEEKDAY_OPTIONS.map((option) => ({
+    ...option,
+    checked: weekdays.includes(option.value)
+  }));
+}
+
+function monthDayOptionsWithSelection(monthDays) {
+  return MONTH_DAY_OPTIONS.map((option) => ({
+    ...option,
+    checked: monthDays.includes(option.value)
+  }));
+}
+
+function repeatOccurrenceText(frequencyIndex, weekdays, monthDays) {
+  const selectedCount = frequencyIndex === 1
+    ? weekdays.length
+    : frequencyIndex === 2
+      ? monthDays.length
+      : 1;
+  return selectedCount === 1 ? '一次' : `${selectedCount}次`;
+}
+
 function resolveLogTimestamp(originalTimestamp, edited, date, time) {
   return resolveEditedTimestamp({
     originalTimestamp,
@@ -203,6 +259,9 @@ function overlapLabel(overlapMeta) {
   if (overlapMeta.candidateCount > 0) counts.push(`候选 ${overlapMeta.candidateCount} 条`);
   return counts.length ? `与其他记录重叠：${counts.join('、')}` : '';
 }
+
+const INITIAL_REPEAT_WEEKDAYS = defaultRepeatWeekdays();
+const INITIAL_REPEAT_MONTH_DAYS = defaultRepeatMonthDays();
 
 Page({
   data: {
@@ -229,9 +288,10 @@ Page({
     priority: 1,
     repeatEnabled: false,
     frequencyIndex: 0,
-    interval: '1',
-    repeatWeekdays: [],
-    editorMode: 'occurrence',
+    repeatGap: '0',
+    repeatWeekdays: INITIAL_REPEAT_WEEKDAYS,
+    repeatMonthDays: INITIAL_REPEAT_MONTH_DAYS,
+    repeatOccurrenceText: '一次',
     tasks: [],
     hasAnyTasks: false,
     hasTaskOptions: false,
@@ -240,12 +300,6 @@ Page({
     planFormTaskIndex: 0,
     isTaskPickerOpen: false,
     taskPickerListHeight: 0,
-    editor: null,
-    editorTitle: '',
-    editorDate: '',
-    editorStart: '',
-    editorEnd: '',
-    editorPriority: 1,
     logEditor: null,
     logStartDate: '',
     logStartTimeValue: '',
@@ -262,8 +316,9 @@ Page({
     logEvents: [],
     logEventIndex: 0,
     views: ['year', 'month', 'week', 'day'],
-    frequencyLabels: FREQUENCY_LABELS,
-    weekdayLabels: ['日', '一', '二', '三', '四', '五', '六']
+    frequencyUnits: FREQUENCY_UNITS,
+    weekdayOptions: weekdayOptionsWithSelection(INITIAL_REPEAT_WEEKDAYS),
+    monthDayOptions: monthDayOptionsWithSelection(INITIAL_REPEAT_MONTH_DAYS)
   },
 
   onLoad() {
@@ -288,7 +343,7 @@ Page({
     this.stopCurrentTimeTicker();
   },
 
-  refresh(afterRefresh) {
+  refresh(afterRefresh, layoutOptions = {}) {
     try {
       const service = getService();
       const snapshot = service.snapshot();
@@ -334,7 +389,13 @@ Page({
       });
       const grid = buildTimeRows(range, this.data.view);
       const currentTimeTop = currentTimeLinePosition(now, range, grid);
-      const timeline = buildCalendarBlocks(rawTimeline, range, this.data.view, grid).map((item) => ({
+      const timeline = buildCalendarBlocks(
+        rawTimeline,
+        range,
+        this.data.view,
+        grid,
+        layoutOptions
+      ).map((item) => ({
         ...item,
         domId: calendarBlockDomId(item.renderKey || item.id),
         ariaLabel: item.isAggregate
@@ -533,7 +594,7 @@ Page({
       }
     };
     if (isInCurrentRange) {
-      this.refresh(revealAfterRefresh);
+      this.refresh(revealAfterRefresh, { protectedItemId: event.id });
       return;
     }
 
@@ -546,7 +607,7 @@ Page({
       calendarScrollTop: 0,
       calendarScrollWithAnimation: false,
       scrollIntoView: ''
-    }, () => this.refresh(revealAfterRefresh));
+    }, () => this.refresh(revealAfterRefresh, { protectedItemId: event.id }));
   },
 
   onCanvasTouchStart(event) {
@@ -617,6 +678,8 @@ Page({
     const end = defaultDateTime(now + 2 * 60 * 60 * 1000);
     const date = defaultPlanDate(this.data.anchor, now);
     const wrapsDay = end.time <= start.time;
+    const repeatWeekdays = defaultRepeatWeekdays(now);
+    const repeatMonthDays = defaultRepeatMonthDays(now);
     this.setData({
       isCreateOpen: true,
       planEditor: null,
@@ -631,8 +694,12 @@ Page({
       priority: 1,
       repeatEnabled: false,
       frequencyIndex: 0,
-      interval: '1',
-      repeatWeekdays: []
+      repeatGap: '0',
+      repeatWeekdays,
+      repeatMonthDays,
+      repeatOccurrenceText: '一次',
+      weekdayOptions: weekdayOptionsWithSelection(repeatWeekdays),
+      monthDayOptions: monthDayOptionsWithSelection(repeatMonthDays)
     });
   },
 
@@ -664,12 +731,34 @@ Page({
     this.setData({ [event.currentTarget.dataset.key]: event.detail.value });
   },
 
+  onRepeatGapInput(event) {
+    const rawValue = event.detail.value;
+    const repeatGap = String(rawValue === undefined || rawValue === null ? '' : rawValue);
+    if (!/^\d*$/.test(repeatGap)) {
+      return String(this.data.repeatGap === undefined || this.data.repeatGap === null
+        ? ''
+        : this.data.repeatGap);
+    }
+    this.setData({ repeatGap });
+    return repeatGap;
+  },
+
   onTitleField(event) {
     this.setData({ [event.currentTarget.dataset.key]: limitTitleCodePoints(event.detail.value) });
   },
 
   onPicker(event) {
-    this.setData({ [event.currentTarget.dataset.key]: Number(event.detail.value) });
+    const key = event.currentTarget.dataset.key;
+    const value = Number(event.detail.value);
+    const updates = { [key]: value };
+    if (key === 'frequencyIndex') {
+      updates.repeatOccurrenceText = repeatOccurrenceText(
+        value,
+        this.data.repeatWeekdays,
+        this.data.repeatMonthDays
+      );
+    }
+    this.setData(updates);
   },
 
   onSwitch(event) {
@@ -677,7 +766,29 @@ Page({
   },
 
   onWeekdaysChange(event) {
-    this.setData({ repeatWeekdays: event.detail.value.map(Number) });
+    const repeatWeekdays = event.detail.value.map(Number);
+    this.setData({
+      repeatWeekdays,
+      repeatOccurrenceText: repeatOccurrenceText(
+        this.data.frequencyIndex,
+        repeatWeekdays,
+        this.data.repeatMonthDays
+      ),
+      weekdayOptions: weekdayOptionsWithSelection(repeatWeekdays)
+    });
+  },
+
+  onMonthDaysChange(event) {
+    const repeatMonthDays = event.detail.value.map(Number).sort((left, right) => left - right);
+    this.setData({
+      repeatMonthDays,
+      repeatOccurrenceText: repeatOccurrenceText(
+        this.data.frequencyIndex,
+        this.data.repeatWeekdays,
+        repeatMonthDays
+      ),
+      monthDayOptions: monthDayOptionsWithSelection(repeatMonthDays)
+    });
   },
 
   choosePriority(event) {
@@ -715,9 +826,9 @@ Page({
       let result;
       if (this.data.repeatEnabled) {
         input.frequency = FREQUENCY_VALUES[this.data.frequencyIndex];
-        input.interval = Number(this.data.interval);
-        input.weekdays = this.data.repeatWeekdays.length ? this.data.repeatWeekdays : [new Date(startedAt).getDay()];
-        input.monthDay = new Date(startedAt).getDate();
+        input.interval = repeatIntervalFromGap(this.data.repeatGap);
+        input.weekdays = input.frequency === 'weekly' ? this.data.repeatWeekdays : [];
+        input.monthDays = input.frequency === 'monthly' ? this.data.repeatMonthDays : [];
         if (shouldCreateTask) {
           result = service.createRecurringPlanWithNewTask(input);
         } else {
@@ -732,15 +843,16 @@ Page({
         }
         showSaved('计划块已创建');
       }
-      const event = createdPlanEvent(result);
+      const target = createdPlanTarget(result);
       this.setData({
         title: '',
         repeatEnabled: false,
         repeatWeekdays: [],
+        repeatMonthDays: [],
         isCreateOpen: false,
         isTaskPickerOpen: false,
         planEditor: null
-      }, () => this.revealCreatedPlan(event));
+      }, () => this.revealCreatedPlan(target));
     } catch (error) {
       showError(error);
     }
@@ -871,32 +983,23 @@ Page({
     });
   },
 
-  openOccurrenceEditorWithMode(event, editorMode) {
+  deleteRuleFollowing(event) {
     const item = event.currentTarget.dataset.item;
-    const start = defaultDateTime(item.startedAt);
-    const end = defaultDateTime(item.endedAt);
-    this.setData({
-      detailItem: null,
-      editor: item,
-      editorMode,
-      editorTitle: item.title,
-      editorDate: start.date,
-      editorStart: start.time,
-      editorEnd: end.time,
-      editorPriority: item.priority
+    wx.showModal({
+      title: '删除本次及后续',
+      content: '将删除本次及之后的固定日程。已有时间记录会保留，但会解除计划关联。',
+      confirmText: '删除',
+      confirmColor: '#9a5550',
+      success: (result) => {
+        if (!result.confirm) return;
+        try {
+          getService().deleteRuleFollowing(item.ruleId, item.occurrenceStart, true);
+          this.closeItemDetail();
+          showSaved('本次及后续已删除');
+          this.refresh();
+        } catch (error) { showError(error); }
+      }
     });
-  },
-
-  openOccurrenceEditor(event) {
-    this.openOccurrenceEditorWithMode(event, 'occurrence');
-  },
-
-  openRuleFollowingEditor(event) {
-    this.openOccurrenceEditorWithMode(event, 'following');
-  },
-
-  closeOccurrenceEditor() {
-    this.setData({ editor: null, editorMode: 'occurrence' });
   },
 
   onEditorField(event) {
@@ -938,50 +1041,6 @@ Page({
 
   onLogPausedDurationChange(event) {
     this.setData({ logPausedDurationSeconds: event.detail.value });
-  },
-
-  chooseEditorPriority(event) {
-    this.setData({ editorPriority: Number(event.currentTarget.dataset.priority) });
-  },
-
-  submitOccurrenceEditor() {
-    if (this.data.editorMode === 'following') {
-      this.saveRuleFollowing();
-      return;
-    }
-    this.saveOccurrenceOverride();
-  },
-
-  saveOccurrenceOverride() {
-    try {
-      const item = this.data.editor;
-      const result = getService().overrideOccurrence(item.ruleId, item.occurrenceStart, {
-        title: this.data.editorTitle,
-        startedAt: parseLocalDateTime(this.data.editorDate, this.data.editorStart),
-        endedAt: parseLocalDateTime(this.data.editorDate, this.data.editorEnd),
-        priority: this.data.editorPriority,
-        taskId: item.taskId,
-        taskNameSnapshot: item.taskNameSnapshot
-      });
-      writeRecentLogHighlight(this.currentSnapshot, result && result.log && result.log.id);
-      this.closeOccurrenceEditor();
-      showSaved('本次实例已修改并确认');
-      this.refresh();
-    } catch (error) { showError(error); }
-  },
-
-  saveRuleFollowing() {
-    try {
-      const item = this.data.editor;
-      getService().reviseRuleFollowing(item.ruleId, item.occurrenceStart, {
-        startedAt: parseLocalDateTime(this.data.editorDate, this.data.editorStart),
-        endedAt: parseLocalDateTime(this.data.editorDate, this.data.editorEnd),
-        priority: this.data.editorPriority
-      });
-      this.closeOccurrenceEditor();
-      showSaved('后续重复规则已修订');
-      this.refresh();
-    } catch (error) { showError(error); }
   },
 
   deleteConfirmed(event) {

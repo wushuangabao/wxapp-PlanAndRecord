@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { createInitialDatabase, createIdleTimer } = require('../miniprogram/domain/entities');
+const { createCalendarEvent, createInitialDatabase, createIdleTimer } = require('../miniprogram/domain/entities');
 const { LocalRepository } = require('../miniprogram/repository/local-repository');
 const { MemoryStorageAdapter } = require('../miniprogram/repository/storage-adapter');
 const { ApplicationService } = require('../miniprogram/services/application-service');
@@ -50,14 +50,49 @@ function validEvent() {
   return {
     id: 'event_1', title: '计划', startedAt: NOW, endedAt: NOW + 3_600_000, priority: 1,
     projectId: null, projectNameSnapshot: null, taskId: null, taskNameSnapshot: null,
-    repeatRuleId: null, repeatRuleSummarySnapshot: null, createdAt: NOW, updatedAt: NOW
+    createdAt: NOW, updatedAt: NOW
   };
 }
+
+function assertNoLegacyRepeatSeedFields(event) {
+  assert.ok(event);
+  ['repeatRuleId', 'repeatRuleSummarySnapshot'].forEach((field) => {
+    assert.equal(Object.hasOwn(event, field), false);
+  });
+}
+
+test('CalendarEvent 首版契约不包含重复规则种子字段', () => {
+  const event = createCalendarEvent({
+    title: '普通计划',
+    startedAt: NOW,
+    endedAt: NOW + 3_600_000,
+    priority: 1
+  }, NOW);
+
+  assert.equal(Object.hasOwn(event, 'repeatRuleId'), false);
+  assert.equal(Object.hasOwn(event, 'repeatRuleSummarySnapshot'), false);
+});
+
+test('旧 CalendarEvent 重复规则种子字段按未知字段丢弃且不迁移', () => {
+  const database = copySnapshot();
+  database.calendarEvents.push({
+    ...validEvent(),
+    repeatRuleId: 'rule_1',
+    repeatRuleSummarySnapshot: '旧固定日程'
+  });
+  database.repeatRules.push(validRule());
+
+  const parsed = parseJsonSnapshot(JSON.stringify(database));
+  const event = parsed.calendarEvents.find((item) => item.id === 'event_1');
+
+  assert.equal(parsed.schemaVersion, 1);
+  assertNoLegacyRepeatSeedFields(event);
+});
 
 function validRevision() {
   return {
     id: 'revision_1', revision: 1, effectiveFrom: NOW, effectiveUntil: null,
-    frequency: 'weekly', interval: 1, weekdays: [1], monthDay: null,
+    frequency: 'weekly', interval: 1, weekdays: [1], monthDays: [],
     startedAt: NOW, endedAt: NOW + 3_600_000, priority: 1,
     projectId: null, projectNameSnapshot: null, taskId: null, taskNameSnapshot: null
   };
@@ -68,26 +103,11 @@ function validRule() {
 }
 
 function validException() {
-  return { id: 'exception_1', ruleId: 'rule_1', occurrenceStart: NOW, kind: 'skip', override: null, createdAt: NOW, updatedAt: NOW };
-}
-
-function validOverrideException(override = {}) {
   return {
-    id: 'exception_override_1',
+    id: 'exception_skip',
     ruleId: 'rule_1',
     occurrenceStart: NOW,
-    kind: 'override',
-    override: {
-      title: '临时调整',
-      startedAt: NOW + 60_000,
-      endedAt: NOW + 120_000,
-      priority: 2,
-      projectId: null,
-      projectNameSnapshot: null,
-      taskId: null,
-      taskNameSnapshot: null,
-      ...override
-    },
+    kind: 'skip',
     createdAt: NOW,
     updatedAt: NOW
   };
@@ -235,18 +255,14 @@ test('JSON 快照导入时丢弃项目中的 OKR 字段', () => {
   assert.equal(Object.hasOwn(parsed.projects[0], 'objectives'), false);
 });
 
-test('JSON 快照的六类真实标题统一按 Unicode 码点 trim 和校验', () => {
+test('JSON 快照的五类真实标题统一按 Unicode 码点 trim 和校验', () => {
   const emoji = '🙂';
   const titleFields = [
     ['Wish', (database, title) => { database.wishes.push({ id: 'wish_1', title, createdAt: NOW, updatedAt: NOW }); }],
     ['Project', (database, title) => { database.projects.push({ ...validProject(), title }); }],
     ['Task', (database, title) => { database.tasks.push({ ...validTask(), title }); }],
     ['CalendarEvent', (database, title) => { database.calendarEvents.push({ ...validEvent(), title }); }],
-    ['RepeatRule', (database, title) => { database.repeatRules.push({ ...validRule(), title }); }],
-    ['override', (database, title) => {
-      database.repeatRules.push(validRule());
-      database.occurrenceExceptions.push(validOverrideException({ title }));
-    }]
+    ['RepeatRule', (database, title) => { database.repeatRules.push({ ...validRule(), title }); }]
   ];
 
   for (const [label, insert] of titleFields) {
@@ -267,25 +283,7 @@ test('JSON 快照的六类真实标题统一按 Unicode 码点 trim 和校验', 
   }
 });
 
-test('JSON 稀疏 override 缺失 title 时从规则物化，显式 null 拒绝整次导入', () => {
-  const missing = copySnapshot();
-  missing.repeatRules.push(validRule());
-  const missingTitle = validOverrideException();
-  delete missingTitle.override.title;
-  missing.occurrenceExceptions.push(missingTitle);
-  const parsed = parseJsonSnapshot(JSON.stringify(missing));
-  assert.equal(parsed.occurrenceExceptions[0].override.title, '重复计划');
-
-  const explicitNull = copySnapshot();
-  explicitNull.repeatRules.push(validRule());
-  explicitNull.occurrenceExceptions.push(validOverrideException({ title: null }));
-  assert.throws(
-    () => parseJsonSnapshot(JSON.stringify(explicitNull)),
-    (error) => error.code === 'IMPORT_SCHEMA_INVALID'
-  );
-});
-
-test('JSON 修订 pattern 按频率规范无关字段且每周排序', () => {
+test('JSON 修订 pattern 按频率规范无关字段并排序多选值', () => {
   const daily = copySnapshot();
   daily.repeatRules.push({
     ...validRule(),
@@ -293,22 +291,22 @@ test('JSON 修订 pattern 按频率规范无关字段且每周排序', () => {
       ...validRevision(),
       frequency: 'daily',
       weekdays: [6, 1],
-      monthDay: 18
+      monthDays: [18]
     }]
   });
   const parsedDaily = parseJsonSnapshot(JSON.stringify(daily)).repeatRules[0].revisions[0];
   assert.deepEqual(
-    [parsedDaily.frequency, parsedDaily.weekdays, parsedDaily.monthDay],
-    ['daily', [], null]
+    [parsedDaily.frequency, parsedDaily.weekdays, parsedDaily.monthDays],
+    ['daily', [], []]
   );
 
   const weekly = copySnapshot();
   weekly.repeatRules.push({
     ...validRule(),
-    revisions: [{ ...validRevision(), weekdays: [6, 1, 4], monthDay: 18 }]
+    revisions: [{ ...validRevision(), weekdays: [6, 1, 4], monthDays: [18] }]
   });
   const parsedWeekly = parseJsonSnapshot(JSON.stringify(weekly)).repeatRules[0].revisions[0];
-  assert.deepEqual([parsedWeekly.weekdays, parsedWeekly.monthDay], [[1, 4, 6], null]);
+  assert.deepEqual([parsedWeekly.weekdays, parsedWeekly.monthDays], [[1, 4, 6], []]);
 
   const monthly = copySnapshot();
   monthly.repeatRules.push({
@@ -317,159 +315,44 @@ test('JSON 修订 pattern 按频率规范无关字段且每周排序', () => {
       ...validRevision(),
       frequency: 'monthly',
       weekdays: [6, 1],
-      monthDay: 31
+      monthDays: [31, 1, 15],
+      monthDay: 20
     }]
   });
   const parsedMonthly = parseJsonSnapshot(JSON.stringify(monthly)).repeatRules[0].revisions[0];
-  assert.deepEqual([parsedMonthly.weekdays, parsedMonthly.monthDay], [[], 31]);
+  assert.deepEqual([parsedMonthly.weekdays, parsedMonthly.monthDays], [[], [1, 15, 31]]);
+  assert.equal(Object.hasOwn(parsedMonthly, 'monthDay'), false);
 });
 
-test('JSON 重复规则修订链的有效区间不得重叠', () => {
-  const database = copySnapshot();
-  database.repeatRules.push({
-    ...validRule(),
-    revisions: [
-      { ...validRevision(), effectiveUntil: NOW + 60_000 },
-      {
-        ...validRevision(),
-        id: 'revision_2',
-        revision: 2,
-        effectiveFrom: NOW + 60_000,
-        startedAt: NOW + 60_000,
-        endedAt: NOW + 3_660_000
-      }
-    ]
-  });
-
-  assert.throws(
-    () => parseJsonSnapshot(JSON.stringify(database)),
-    (error) => error.code === 'IMPORT_SCHEMA_INVALID'
-  );
-});
-
-test('JSON 稀疏 override 依次继承八个字段并持久化完整对象', () => {
-  const inherited = {
-    title: '重复计划',
-    startedAt: NOW,
-    endedAt: NOW + 3_600_000,
-    priority: 1,
-    projectId: 'project_from_revision',
-    projectNameSnapshot: '修订项目',
-    taskId: 'task_from_revision',
-    taskNameSnapshot: '修订任务'
-  };
-
-  Object.keys(inherited).forEach((field) => {
-    const database = copySnapshot();
-    database.repeatRules.push({
-      ...validRule(),
-      revisions: [{
-        ...validRevision(),
-        projectId: inherited.projectId,
-        projectNameSnapshot: inherited.projectNameSnapshot,
-        taskId: inherited.taskId,
-        taskNameSnapshot: inherited.taskNameSnapshot
-      }]
-    });
-    const exception = validOverrideException();
-    delete exception.override[field];
-    database.occurrenceExceptions.push(exception);
-
-    const override = parseJsonSnapshot(JSON.stringify(database)).occurrenceExceptions[0].override;
-    assert.equal(override[field], inherited[field], `${field} 应从有效修订继承`);
-    assert.deepEqual(Object.keys(override).sort(), Object.keys(inherited).sort());
-  });
-});
-
-test('JSON override 显式 nullable 关联 null 不继承修订值', () => {
-  const database = copySnapshot();
-  database.repeatRules.push({
-    ...validRule(),
-    revisions: [{
-      ...validRevision(),
-      projectId: 'project_from_revision',
-      projectNameSnapshot: '修订项目',
-      taskId: 'task_from_revision',
-      taskNameSnapshot: '修订任务'
-    }]
-  });
-  database.occurrenceExceptions.push(validOverrideException({
-    projectId: null,
-    projectNameSnapshot: null,
-    taskId: null,
-    taskNameSnapshot: null
-  }));
-
-  const override = parseJsonSnapshot(JSON.stringify(database)).occurrenceExceptions[0].override;
-  assert.deepEqual(
-    [override.projectId, override.projectNameSnapshot, override.taskId, override.taskNameSnapshot],
-    [null, null, null, null]
-  );
-});
-
-test('JSON override 核心字段 null、缺规则、非唯一修订或非法物化区间整次拒绝', () => {
-  for (const field of ['title', 'startedAt', 'endedAt', 'priority']) {
-    const database = copySnapshot();
-    database.repeatRules.push(validRule());
-    database.occurrenceExceptions.push(validOverrideException({ [field]: null }));
-    assert.throws(
-      () => parseJsonSnapshot(JSON.stringify(database)),
-      (error) => error.code === 'IMPORT_SCHEMA_INVALID',
-      `${field} 显式 null 应拒绝`
-    );
-  }
-
-  const missingRule = copySnapshot();
-  missingRule.occurrenceExceptions.push(validOverrideException());
-  assert.throws(
-    () => parseJsonSnapshot(JSON.stringify(missingRule)),
-    (error) => error.code === 'IMPORT_SCHEMA_INVALID'
-  );
-
-  const noRevision = copySnapshot();
-  noRevision.repeatRules.push(validRule());
-  noRevision.occurrenceExceptions.push({
-    ...validOverrideException(),
-    occurrenceStart: NOW - 1
-  });
-  assert.throws(
-    () => parseJsonSnapshot(JSON.stringify(noRevision)),
-    (error) => error.code === 'IMPORT_SCHEMA_INVALID'
-  );
-
+test('JSON 当前 v1 拒绝多 revision 和 override 例外', () => {
   const multipleRevisions = copySnapshot();
-  multipleRevisions.repeatRules.push({
-    ...validRule(),
-    revisions: [
-      validRevision(),
-      { ...validRevision(), id: 'revision_2', revision: 2 }
-    ]
+  multipleRevisions.repeatRules.push(validRule());
+  multipleRevisions.repeatRules[0].revisions[0].effectiveUntil = NOW - 1;
+  multipleRevisions.repeatRules[0].revisions.push({
+    ...validRevision(),
+    id: 'revision_2',
+    revision: 2
   });
-  multipleRevisions.occurrenceExceptions.push(validOverrideException());
   assert.throws(
     () => parseJsonSnapshot(JSON.stringify(multipleRevisions)),
     (error) => error.code === 'IMPORT_SCHEMA_INVALID'
   );
 
-  const invalidRange = copySnapshot();
-  invalidRange.repeatRules.push(validRule());
-  const sparse = validOverrideException({ startedAt: NOW + 3_600_000 });
-  delete sparse.override.endedAt;
-  invalidRange.occurrenceExceptions.push(sparse);
+  const overrideException = copySnapshot();
+  overrideException.repeatRules.push(validRule());
+  overrideException.occurrenceExceptions.push({
+    id: 'exception_override',
+    ruleId: 'rule_1',
+    occurrenceStart: NOW,
+    kind: 'override',
+    override: {},
+    createdAt: NOW,
+    updatedAt: NOW
+  });
   assert.throws(
-    () => parseJsonSnapshot(JSON.stringify(invalidRange)),
+    () => parseJsonSnapshot(JSON.stringify(overrideException)),
     (error) => error.code === 'IMPORT_SCHEMA_INVALID'
   );
-});
-
-test('完整 override 导出再导入保持语义相等', () => {
-  const database = copySnapshot();
-  database.repeatRules.push(validRule());
-  database.occurrenceExceptions.push(validOverrideException());
-
-  const first = parseJsonSnapshot(JSON.stringify(database));
-  const second = parseJsonSnapshot(exportJson(first));
-  assert.equal(persistedValueEquals(first, second), true);
 });
 
 test('非法项目标题拒绝整快照且不修改输入对象', () => {
@@ -573,13 +456,13 @@ test('JSON 标签非法类型统一报告 IMPORT_SCHEMA_INVALID', () => {
   );
 });
 
-test('导出会移除各层遗留字段，且输出仍可被当前解析器读取', () => {
+test('导出会移除各层遗留字段和计时运行态，且输出仍可被当前解析器读取', () => {
   const database = copySnapshot();
   database.projects.push(validProject());
   database.tasks.push(validTask());
   database.calendarEvents.push(validEvent());
   database.repeatRules.push(validRule());
-  database.occurrenceExceptions.push(validOverrideException());
+  database.occurrenceExceptions.push(validException());
   database.timeLogs.push(validLog());
   database.recoveryDraft = {
     reason: '等待用户修复',
@@ -587,8 +470,10 @@ test('导出会移除各层遗留字段，且输出仍可被当前解析器读�
     createdAt: NOW
   };
   database.projects[0].legacyProjectField = true;
+  database.calendarEvents[0].repeatRuleId = 'rule_1';
+  database.calendarEvents[0].repeatRuleSummarySnapshot = '旧固定日程';
   database.repeatRules[0].revisions[0].legacyRevisionField = true;
-  database.occurrenceExceptions[0].override.legacyOverrideField = true;
+  database.occurrenceExceptions[0].legacyExceptionField = true;
   database.timeLogs[0].legacyLogField = true;
   database.timer.draft.legacyDraftField = true;
   database.recoveryDraft.timer.legacyTimerField = true;
@@ -596,15 +481,17 @@ test('导出会移除各层遗留字段，且输出仍可被当前解析器读�
   const exported = JSON.parse(exportJson(database));
 
   assert.equal(Object.prototype.hasOwnProperty.call(exported.projects[0], 'legacyProjectField'), false);
+  assertNoLegacyRepeatSeedFields(exported.calendarEvents.find((item) => item.id === 'event_1'));
   assert.equal(Object.prototype.hasOwnProperty.call(exported.repeatRules[0].revisions[0], 'legacyRevisionField'), false);
-  assert.equal(Object.prototype.hasOwnProperty.call(exported.occurrenceExceptions[0].override, 'legacyOverrideField'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(exported.occurrenceExceptions[0], 'legacyExceptionField'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(exported.occurrenceExceptions[0], 'override'), false);
   assert.equal(Object.prototype.hasOwnProperty.call(exported.timeLogs[0], 'legacyLogField'), false);
-  assert.equal(Object.prototype.hasOwnProperty.call(exported.timer.draft, 'legacyDraftField'), false);
-  assert.equal(Object.prototype.hasOwnProperty.call(exported.recoveryDraft.timer, 'legacyTimerField'), false);
+  assert.deepEqual(exported.timer, createIdleTimer());
+  assert.equal(exported.recoveryDraft, null);
   assert.doesNotThrow(() => parseJsonSnapshot(JSON.stringify(exported)));
 });
 
-test('重复计划实例关联在计时器、恢复草稿和 JSON 往返中保留', () => {
+test('计时草稿关联可在本地快照解析中保留，但 JSON 导出会清除全部计时数据', () => {
   const originDraft = {
     originRuleId: 'rule_1',
     originOccurrenceId: `rule_1:1:${NOW}`,
@@ -630,8 +517,10 @@ test('重复计划实例关联在计时器、恢复草稿和 JSON 往返中保�
 
   assert.deepEqual(parsed.timer.draft, originDraft);
   assert.deepEqual(parsed.recoveryDraft.timer.draft, originDraft);
-  assert.deepEqual(exported.timer.draft, originDraft);
-  assert.deepEqual(exported.recoveryDraft.timer.draft, originDraft);
+  assert.deepEqual(exported.timer, createIdleTimer());
+  assert.equal(exported.recoveryDraft, null);
+  assert.deepEqual(database.timer.draft, originDraft);
+  assert.deepEqual(database.recoveryDraft.timer.draft, originDraft);
 });
 
 test('日志 JSON 拒绝具体计划与 origin 混用，并区分完整关联和历史实例追溯', () => {
@@ -764,12 +653,19 @@ test('任务、日历事件和重复规则字段类型与枚举严格校验', ()
   expectSchemaInvalid((database) => { database.repeatRules.push({ ...validRule(), revisions: [{ ...validRevision(), frequency: 'yearly' }] }); });
   expectSchemaInvalid((database) => { database.repeatRules.push({ ...validRule(), revisions: [{ ...validRevision(), interval: 0 }] }); });
   expectSchemaInvalid((database) => { database.repeatRules.push({ ...validRule(), revisions: [{ ...validRevision(), weekdays: [7] }] }); });
-  expectSchemaInvalid((database) => { database.repeatRules.push({ ...validRule(), revisions: [{ ...validRevision(), monthDay: 32 }] }); });
+  expectSchemaInvalid((database) => {
+    const revision = validRevision();
+    delete revision.monthDays;
+    database.repeatRules.push({ ...validRule(), revisions: [revision] });
+  });
+  expectSchemaInvalid((database) => { database.repeatRules.push({ ...validRule(), revisions: [{ ...validRevision(), frequency: 'monthly', weekdays: [], monthDays: [] }] }); });
+  expectSchemaInvalid((database) => { database.repeatRules.push({ ...validRule(), revisions: [{ ...validRevision(), frequency: 'monthly', weekdays: [], monthDays: [15, 15] }] }); });
+  expectSchemaInvalid((database) => { database.repeatRules.push({ ...validRule(), revisions: [{ ...validRevision(), frequency: 'monthly', weekdays: [], monthDays: [0] }] }); });
+  expectSchemaInvalid((database) => { database.repeatRules.push({ ...validRule(), revisions: [{ ...validRevision(), frequency: 'monthly', weekdays: [], monthDays: [32] }] }); });
 });
 
 test('例外、日志、计时器和恢复草稿字段类型严格校验', () => {
   expectSchemaInvalid((database) => { database.occurrenceExceptions.push({ ...validException(), kind: 'delete' }); });
-  expectSchemaInvalid((database) => { database.occurrenceExceptions.push({ ...validException(), override: {} }); });
   expectSchemaInvalid((database) => { database.timeLogs.push({ ...validLog(), durationMinutes: '60' }); });
   expectSchemaInvalid((database) => { database.timeLogs.push({ ...validLog(), source: 'remote' }); });
   expectSchemaInvalid((database) => { database.timeLogs.push({ ...validLog(), tags: ['ok', 1] }); });
@@ -795,44 +691,6 @@ test('持久化标签必须已经规范化、非空且唯一，但允许超出�
     tags: ['超过五个字符', ...Array.from({ length: 11 }, (_, index) => `标签${index}`)]
   });
   assert.doesNotThrow(() => validateJsonSnapshot(database));
-});
-
-test('完整合法的 override 例外通过校验', () => {
-  const database = copySnapshot();
-  database.repeatRules.push(validRule());
-  database.occurrenceExceptions.push(validOverrideException());
-  assert.doesNotThrow(() => validateJsonSnapshot(database));
-});
-
-test('override 的 title 类型错误被拒绝', () => {
-  expectSchemaInvalid((database) => { database.occurrenceExceptions.push(validOverrideException({ title: 1 })); });
-});
-
-test('override 的时间类型错误或逆序被拒绝', () => {
-  expectSchemaInvalid((database) => { database.occurrenceExceptions.push(validOverrideException({ startedAt: String(NOW) })); });
-  expectSchemaInvalid((database) => { database.occurrenceExceptions.push(validOverrideException({ endedAt: String(NOW) })); });
-  expectSchemaInvalid((database) => {
-    database.occurrenceExceptions.push(validOverrideException({ startedAt: NOW + 120_000, endedAt: NOW + 60_000 }));
-  });
-});
-
-test('override 的 priority 越界被拒绝', () => {
-  expectSchemaInvalid((database) => { database.occurrenceExceptions.push(validOverrideException({ priority: 4 })); });
-  expectSchemaInvalid((database) => { database.occurrenceExceptions.push(validOverrideException({ priority: '2' })); });
-
-  const parsedInput = copySnapshot();
-  parsedInput.repeatRules.push(validRule());
-  parsedInput.occurrenceExceptions.push(validOverrideException({ priority: '2' }));
-  assert.throws(
-    () => parseJsonSnapshot(JSON.stringify(parsedInput)),
-    (error) => error.code === 'IMPORT_SCHEMA_INVALID'
-  );
-});
-
-test('override 的关联 ID 和名称快照类型错误被拒绝', () => {
-  for (const field of ['projectId', 'projectNameSnapshot', 'taskId', 'taskNameSnapshot']) {
-    expectSchemaInvalid((database) => { database.occurrenceExceptions.push(validOverrideException({ [field]: 1 })); });
-  }
 });
 
 test('真实服务 startTimer 后的 running 快照通过校验', () => {
@@ -1107,7 +965,12 @@ test('recoveryDraft 的候选预览必须是完整且有效的计时器建议', 
 test('重复 ID 包括顶层实体和修订均被拒绝', () => {
   expectDuplicateId((database) => { database.wishes.push({ id: database.localProfile.id, title: '重复', createdAt: NOW, updatedAt: NOW }); });
   expectDuplicateId((database) => { database.projects.push({ ...validProject(), id: database.localProfile.id }); });
-  expectDuplicateId((database) => { database.repeatRules.push({ ...validRule(), revisions: [{ ...validRevision() }, { ...validRevision(), revision: 2 }] }); });
+  expectDuplicateId((database) => {
+    database.repeatRules.push(validRule(), {
+      ...validRule(),
+      id: 'rule_2'
+    });
+  });
 });
 
 test('校验错误信息不泄漏 JSON 中的实体正文', () => {

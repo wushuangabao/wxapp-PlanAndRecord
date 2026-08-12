@@ -1,16 +1,5 @@
 const { REPEAT_FREQUENCY } = require('./constants');
-const { DomainError } = require('./errors');
 const { createId } = require('./id');
-const {
-  requiredTitle,
-  validNullableString,
-  validPriority,
-  validTimeRange
-} = require('./validation');
-
-function hasOwn(object, key) {
-  return Boolean(object) && Object.prototype.hasOwnProperty.call(object, key);
-}
 
 function occurrenceKey(ruleId, occurrenceStart) {
   return `${ruleId}:${occurrenceStart}`;
@@ -46,19 +35,6 @@ function logicalOccurrenceKey(ruleId, originOccurrenceId) {
   return occurrenceStart === null ? null : occurrenceKey(ruleId, occurrenceStart);
 }
 
-function initialRuleOccurrenceStart(rule) {
-  if (!rule || !Array.isArray(rule.revisions)) {
-    return null;
-  }
-  const effectiveStarts = rule.revisions
-    .map((revision) => revision.effectiveFrom)
-    .filter(Number.isFinite);
-  return effectiveStarts.reduce(
-    (earliest, effectiveFrom) => (earliest === null ? effectiveFrom : Math.min(earliest, effectiveFrom)),
-    null
-  );
-}
-
 function localDayStart(timestamp) {
   const date = new Date(timestamp);
   date.setHours(0, 0, 0, 0);
@@ -92,61 +68,6 @@ function isWithinRevision(revision, occurrenceStart) {
     && (revision.effectiveUntil === null || occurrenceStart <= revision.effectiveUntil);
 }
 
-function invalidOccurrenceOverride() {
-  throw new DomainError('IMPORT_SCHEMA_INVALID', '导入文件的数据结构无效');
-}
-
-function findUniqueRevisionAt(revisions, occurrenceStart) {
-  if (!Array.isArray(revisions) || !Number.isFinite(occurrenceStart)) {
-    invalidOccurrenceOverride();
-  }
-  const matches = revisions.filter((revision) => (
-    revision
-    && revision.effectiveFrom <= occurrenceStart
-    && (revision.effectiveUntil === null || occurrenceStart <= revision.effectiveUntil)
-  ));
-  if (matches.length !== 1) invalidOccurrenceOverride();
-  return matches[0];
-}
-
-function materializeOccurrenceOverride(rule, exception) {
-  if (!rule || !Array.isArray(rule.revisions)
-    || !exception || exception.kind !== 'override'
-    || !exception.override || typeof exception.override !== 'object'
-    || Array.isArray(exception.override)) {
-    invalidOccurrenceOverride();
-  }
-  const revision = findUniqueRevisionAt(rule.revisions, exception.occurrenceStart);
-  const projectedStartedAt = projectRevisionStartedAt(revision, exception.occurrenceStart);
-  const projectedEndedAt = projectedStartedAt + (revision.endedAt - revision.startedAt);
-  const sparse = exception.override;
-  const inherit = (field, fallback) => (hasOwn(sparse, field) ? sparse[field] : fallback);
-  const override = {
-    title: inherit('title', rule.title),
-    startedAt: inherit('startedAt', projectedStartedAt),
-    endedAt: inherit('endedAt', projectedEndedAt),
-    priority: inherit('priority', revision.priority),
-    projectId: inherit('projectId', revision.projectId),
-    projectNameSnapshot: inherit('projectNameSnapshot', revision.projectNameSnapshot),
-    taskId: inherit('taskId', revision.taskId),
-    taskNameSnapshot: inherit('taskNameSnapshot', revision.taskNameSnapshot)
-  };
-
-  try {
-    if (!Number.isInteger(override.priority)) {
-      invalidOccurrenceOverride();
-    }
-    override.title = requiredTitle(override.title, '计划标题');
-    validTimeRange(override.startedAt, override.endedAt, '单次修改时间');
-    override.priority = validPriority(override.priority);
-    ['projectId', 'projectNameSnapshot', 'taskId', 'taskNameSnapshot']
-      .forEach((field) => validNullableString(override[field], field));
-  } catch (error) {
-    invalidOccurrenceOverride();
-  }
-  return override;
-}
-
 function isScheduledDate(revision, occurrenceStart) {
   const anchor = new Date(revision.effectiveFrom);
   const candidate = new Date(occurrenceStart);
@@ -165,8 +86,8 @@ function isScheduledDate(revision, occurrenceStart) {
   }
   if (revision.frequency === REPEAT_FREQUENCY.MONTHLY) {
     const difference = monthDifference(revision.effectiveFrom, occurrenceStart);
-    const monthDay = revision.monthDay || anchor.getDate();
-    return difference >= 0 && difference % interval === 0 && candidate.getDate() === monthDay;
+    const monthDays = Array.isArray(revision.monthDays) ? revision.monthDays : [];
+    return difference >= 0 && difference % interval === 0 && monthDays.includes(candidate.getDate());
   }
   return false;
 }
@@ -225,8 +146,7 @@ function projectRule(rule, rangeStart, rangeEnd, exceptions) {
       }
       const key = occurrenceKey(rule.id, occurrenceStart);
       const exception = exceptionsByKey.get(key);
-      const hasOverride = exception && exception.kind === 'override';
-      if (!hasOverride && !isScheduledDate(revision, occurrenceStart)) {
+      if (!isScheduledDate(revision, occurrenceStart)) {
         continue;
       }
       if (seen.has(key)) {
@@ -236,9 +156,6 @@ function projectRule(rule, rangeStart, rangeEnd, exceptions) {
       if (exception && exception.kind === 'skip') {
         continue;
       }
-      const override = exception && exception.kind === 'override'
-        ? materializeOccurrenceOverride(rule, exception)
-        : null;
       projected.push({
         id: occurrenceId(rule.id, revision.revision, occurrenceStart),
         occurrenceKey: key,
@@ -249,18 +166,14 @@ function projectRule(rule, rangeStart, rangeEnd, exceptions) {
         originOccurrenceId: occurrenceId(rule.id, revision.revision, occurrenceStart),
         virtual: true,
         type: 'plan',
-        title: override ? override.title : rule.title,
-        startedAt: override ? override.startedAt : startedAt,
-        endedAt: override ? override.endedAt : endedAt,
-        priority: override ? override.priority : revision.priority,
+        title: rule.title,
+        startedAt,
+        endedAt,
+        priority: revision.priority,
         projectId: null,
-        projectNameSnapshot: hasOwn(override, 'projectNameSnapshot')
-          ? override.projectNameSnapshot
-          : revision.projectNameSnapshot,
-        taskId: hasOwn(override, 'taskId') ? override.taskId : revision.taskId,
-        taskNameSnapshot: hasOwn(override, 'taskNameSnapshot')
-          ? override.taskNameSnapshot
-          : revision.taskNameSnapshot,
+        projectNameSnapshot: revision.projectNameSnapshot,
+        taskId: revision.taskId,
+        taskNameSnapshot: revision.taskNameSnapshot,
         originRuleSummarySnapshot: rule.title
       });
     }
@@ -291,31 +204,17 @@ function projectRuleIntersectingRange(rule, rangeStart, rangeEnd, exceptions) {
     ).forEach(addOccurrence);
   });
 
-  (exceptions || [])
-    .filter((exception) => exception.ruleId === rule.id && exception.kind === 'override')
-    .forEach((exception) => {
-      projectRule(
-        rule,
-        exception.occurrenceStart,
-        exception.occurrenceStart,
-        exceptions
-      )
-        .filter((occurrence) => intervalIntersectsRange(occurrence, rangeStart, rangeEnd))
-        .forEach(addOccurrence);
-    });
-
   return Array.from(occurrences.values())
     .filter((occurrence) => intervalIntersectsRange(occurrence, rangeStart, rangeEnd))
     .sort((first, second) => first.startedAt - second.startedAt);
 }
 
-function createOccurrenceException(ruleId, occurrenceStart, kind, override, now = Date.now()) {
+function createSkipOccurrenceException(ruleId, occurrenceStart, now = Date.now()) {
   return {
     id: createId('exception', now),
     ruleId,
     occurrenceStart,
-    kind,
-    override: override || null,
+    kind: 'skip',
     createdAt: now,
     updatedAt: now
   };
@@ -326,12 +225,9 @@ module.exports = {
   occurrenceId,
   logicalOccurrenceKey,
   logicalOccurrenceStart,
-  initialRuleOccurrenceStart,
   intervalIntersectsRange,
   projectRevisionStartedAt,
-  findUniqueRevisionAt,
-  materializeOccurrenceOverride,
   projectRule,
   projectRuleIntersectingRange,
-  createOccurrenceException
+  createSkipOccurrenceException
 };

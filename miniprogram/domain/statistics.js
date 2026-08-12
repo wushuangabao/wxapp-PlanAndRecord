@@ -1,6 +1,5 @@
 const { LOG_STATUS } = require('./constants');
 const {
-  initialRuleOccurrenceStart,
   intervalIntersectsRange,
   logicalOccurrenceKey,
   logicalOccurrenceStart,
@@ -8,10 +7,6 @@ const {
   projectRuleIntersectingRange
 } = require('./recurrence');
 const { calculateDurationMinutes } = require('./time');
-
-function hasOwn(object, key) {
-  return Object.prototype.hasOwnProperty.call(object, key);
-}
 
 function projectedRuleOccurrences(database, rule, rangeStart, rangeEnd) {
   return projectRuleIntersectingRange(
@@ -90,14 +85,6 @@ function resolveRuleOccurrenceTaskId(database, log) {
 
   const revision = rule.revisions.find((item) => item.revision === revisionNumber);
   if (!revision) return null;
-  const exception = database.occurrenceExceptions.find((item) => (
-    item.ruleId === rule.id
-    && item.occurrenceStart === occurrenceStart
-    && item.kind === 'override'
-  ));
-  if (exception && exception.override && hasOwn(exception.override, 'taskId')) {
-    return exception.override.taskId || null;
-  }
   return revision.taskId || null;
 }
 
@@ -159,24 +146,10 @@ function calculatePlanVariance(database, logs, rangeStart, rangeEnd) {
       };
     });
 
-  const repeatRulesById = new Map(database.repeatRules.map((rule) => [rule.id, rule]));
   const taskIds = new Set(database.tasks.map((task) => task.id));
-  const materializedEventOccurrences = new Set(database.calendarEvents
-    .filter((event) => event.repeatRuleId)
-    .map((event) => {
-      const occurrenceStart = initialRuleOccurrenceStart(repeatRulesById.get(event.repeatRuleId));
-      return occurrenceStart === null || occurrenceStart === undefined
-        ? null
-        : occurrenceKey(event.repeatRuleId, occurrenceStart);
-    })
-    .filter(Boolean));
   const recurringEvents = database.repeatRules
     .flatMap((rule) => projectedRuleOccurrences(database, rule, rangeStart, rangeEnd))
     .filter((occurrence) => occurrence.taskId && taskIds.has(occurrence.taskId))
-    .filter((occurrence) => !materializedEventOccurrences.has(occurrenceKey(
-      occurrence.ruleId,
-      occurrence.occurrenceStart
-    )))
     .map((occurrence) => {
       const plannedMinutes = calculateDurationMinutes(occurrence.startedAt, occurrence.endedAt, []);
       const key = `occurrence:${occurrenceKey(occurrence.ruleId, occurrence.occurrenceStart)}`;
