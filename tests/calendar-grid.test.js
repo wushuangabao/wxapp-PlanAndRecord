@@ -5,7 +5,9 @@ const { rangeForView, shiftAnchor } = require('../miniprogram/utils/date-range')
 const {
   MAX_VISIBLE_LANES,
   buildCalendarBlocks,
+  buildCoarseCalendarRows,
   currentTimeLinePosition,
+  currentTimeLinePlacement,
   buildTimeRows,
   defaultPlanDate,
   formatRangeLabel
@@ -41,6 +43,19 @@ test('当前时间线按所在刻度行的实际时间比例定位，范围外�
   );
   assert.equal(
     currentTimeLinePosition(new Date(2026, 7, 10, 12, 0).getTime(), weekRange, weekGrid),
+    null
+  );
+});
+
+test('粗粒度当前时间线返回动态时间格内的相对位置', () => {
+  const range = rangeForView(new Date(2026, 7, 8, 12, 0).getTime(), 'week');
+  const grid = buildTimeRows(range, 'week');
+  assert.deepEqual(
+    currentTimeLinePlacement(new Date(2026, 7, 4, 12, 0).getTime(), range, grid),
+    { rowIndex: 1, progress: 0.5 }
+  );
+  assert.equal(
+    currentTimeLinePlacement(new Date(2026, 7, 10, 12, 0).getTime(), range, grid),
     null
   );
 });
@@ -81,7 +96,7 @@ test('四种视图生成对应时间刻度', () => {
   assert.equal('terminalLabel' in day, false);
 });
 
-test('计划块按优先级生成三档绿色样式，非计划块不携带优先级样式', () => {
+test('计划块按优先级生成三档灰蓝样式，非计划块不携带优先级样式', () => {
   const range = rangeForView(new Date(2026, 7, 8, 12, 0).getTime(), 'day');
   const grid = buildTimeRows(range, 'day');
   const startedAt = new Date(2026, 7, 8, 9, 0).getTime();
@@ -144,6 +159,89 @@ test('粗粒度按整月或整日排布，日视图按小时精确排布并标�
   assert.equal(shortBlock.blockBottom - shortBlock.blockTop, 54);
   assert.equal(nearEndBlock.blockBottom - nearEndBlock.blockTop, 54);
   assert.equal(nearEndBlock.blockBottom, dayGrid.canvasHeight);
+});
+
+test('粗粒度分段完整保留同格条目并把跨期条目投影到每个相交时间格', () => {
+  const range = rangeForView(new Date(2026, 7, 8, 12, 0).getTime(), 'week');
+  const grid = buildTimeRows(range, 'week');
+  const sameDayItems = Array.from({ length: 8 }, (_, index) => ({
+    id: `same-day-${index + 1}`,
+    type: 'plan',
+    title: `同日计划 ${index + 1}`,
+    priority: (index % 3) + 1,
+    startedAt: new Date(2026, 7, 3, 9, 0).getTime(),
+    endedAt: new Date(2026, 7, 3, 10, 0).getTime()
+  }));
+  const items = sameDayItems.concat({
+    id: 'cross-day',
+    type: 'confirmed',
+    title: '跨日记录',
+    startedAt: new Date(2026, 7, 3, 10, 0).getTime(),
+    endedAt: new Date(2026, 7, 5, 0, 0).getTime()
+  });
+  const originalItems = structuredClone(items);
+
+  const rows = buildCoarseCalendarRows(items, range, 'week', grid);
+  assert.equal(rows[0].blocks.length, 9);
+  assert.equal(rows[1].blocks.length, 1);
+  assert.equal(rows.flatMap((row) => row.blocks).some((block) => block.isAggregate), false);
+  assert.deepEqual(
+    rows[0].blocks.map((block) => block.id),
+    sameDayItems.map((item) => item.id).concat('cross-day')
+  );
+
+  const crossDaySegments = rows
+    .flatMap((row) => row.blocks)
+    .filter((block) => block.id === 'cross-day');
+  assert.deepEqual(crossDaySegments.map((block) => block.rowIndex), [0, 1]);
+  assert.deepEqual(
+    crossDaySegments.map((block) => [
+      block.isFirstVisibleSegment,
+      block.continuesBefore,
+      block.continuesAfter
+    ]),
+    [[true, false, true], [false, true, false]]
+  );
+
+  const renderKeys = rows.flatMap((row) => row.blocks).map((block) => block.renderKey);
+  assert.equal(new Set(renderKeys).size, renderKeys.length);
+  assert.deepEqual(items, originalItems);
+});
+
+test('粗粒度布局允许后续短块回填前序长块留下的行空隙', () => {
+  const range = rangeForView(new Date(2026, 7, 14, 12, 0).getTime(), 'week');
+  const grid = buildTimeRows(range, 'week');
+  const startedAt = new Date(2026, 7, 14, 9, 0).getTime();
+  const endedAt = new Date(2026, 7, 14, 10, 0).getTime();
+  const items = [
+    ['first', '测试计划'],
+    ['digits-1', '1111'],
+    ['digits-2', '2222'],
+    ['digits-3', '3333'],
+    ['long', '这是一个很长的计划名称'],
+    ['backfill', '555']
+  ].map(([id, title]) => ({
+    id,
+    title,
+    type: 'plan',
+    startedAt,
+    endedAt
+  }));
+
+  const rows = buildCoarseCalendarRows(items, range, 'week', grid);
+  const friday = rows.find((row) => row.index === 4);
+
+  assert.deepEqual(
+    friday.blocks.map((block) => block.id),
+    ['first', 'digits-1', 'digits-2', 'digits-3', 'backfill', 'long']
+  );
+  assert.equal(friday.coarseLineCount, 2);
+  assert.deepEqual(
+    friday.blocks.map((block) => block.coarseLineIndex),
+    [0, 0, 0, 0, 0, 1]
+  );
+  assert.equal(friday.blocks.every((block) => Number.isFinite(block.coarseWidth)), true);
+  assert.equal(friday.blocks.find((block) => block.id === 'long').coarseWidth <= 300, true);
 });
 
 test('重叠条目超过可见轨道上限时用最后一条轨道聚合为 +N', () => {

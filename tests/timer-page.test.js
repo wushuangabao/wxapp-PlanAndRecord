@@ -546,6 +546,7 @@ test('计时页最近记录展示备注、时间、标签、自动标识与操�
       id: 'log_candidate',
       startedAt: NOW,
       durationMinutes: 25,
+      taskNameSnapshot: '整理会议任务',
       note: '自动整理会议纪要',
       tags: ['工作', '复盘'],
       status: 'candidate'
@@ -574,21 +575,25 @@ test('计时页最近记录展示备注、时间、标签、自动标识与操�
 
   try {
     page.refresh({ newLogId: 'log_candidate' });
-    assert.equal(page.data.recentLogs[0].displayNote, '自动整理会议纪要');
+    assert.equal(page.data.recentLogs[0].displayTitle, '自动整理会议纪要');
     assert.deepEqual(page.data.recentLogs[0].tags, ['工作', '复盘']);
     assert.equal(page.data.recentLogs[0].isCandidate, true);
     assert.equal(page.data.recentLogs[0].isNew, true);
 
     snapshot.timeLogs[0].note = '\u200B  ';
     page.refresh();
-    assert.equal(page.data.recentLogs[0].displayNote, '未命名记录');
+    assert.equal(page.data.recentLogs[0].displayTitle, '整理会议任务');
+
+    snapshot.timeLogs[0].taskNameSnapshot = null;
+    page.refresh();
+    assert.equal(page.data.recentLogs[0].displayTitle, '时间记录');
 
     const wxml = fs.readFileSync(timerWxmlPath, 'utf8');
     const wxss = fs.readFileSync(timerWxssPath, 'utf8');
     const timerJson = JSON.parse(fs.readFileSync(timerJsonPath, 'utf8'));
     const editIconWxml = fs.readFileSync(editIconWxmlPath, 'utf8');
     const editIconWxss = fs.readFileSync(editIconWxssPath, 'utf8');
-    assert.match(wxml, /\{\{item\.displayNote \|\| '未命名记录'\}\}/);
+    assert.match(wxml, /\{\{item\.displayTitle\}\}/);
     assert.match(wxml, /class="recent-log-note"/);
     assert.match(wxml, /class="recent-log-time muted"/);
     assert.match(wxml, /<view class="recent-log-tags" data-index="\{\{index\}\}" catchtouchstart="onRecentTagTouchStart" catchtouchmove="onRecentTagTouchMove" catchtouchend="onRecentTagTouchEnd" catchtouchcancel="onRecentTagTouchEnd" aria-label="标签">/);

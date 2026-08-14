@@ -4,7 +4,9 @@ const { resolveEditedTimestamp, timePickerState } = require('../../utils/log-tim
 const { rangeForView, shiftAnchor } = require('../../utils/date-range');
 const {
   buildCalendarBlocks,
+  buildCoarseCalendarRows,
   buildTimeRows,
+  currentTimeLinePlacement,
   currentTimeLinePosition,
   formatRangeLabel
 } = require('../../utils/calendar-grid');
@@ -27,6 +29,19 @@ const GESTURE_DIRECTION_THRESHOLD_PX = 12;
 const CREATE_TASK_OPTION_ID = '__create_same_title_task__';
 const CREATED_PLAN_VISIBLE_EDGE_PX = 8;
 const CREATED_PLAN_VISIBLE_BOTTOM_INSET_PX = 72;
+const TIMELINE_FILTERS = [{
+  value: 'all',
+  label: '查看全部',
+  emptyText: '这个范围内还没有计划或记录。'
+}, {
+  value: 'plan',
+  label: '只看计划',
+  emptyText: '这个范围内还没有计划。'
+}, {
+  value: 'record',
+  label: '只看记录',
+  emptyText: '这个范围内还没有记录。'
+}];
 
 function calendarBlockDomId(id) {
   return `calendar-block-${String(id || '').replace(/[^A-Za-z0-9_-]/g, '-')}`;
@@ -34,6 +49,23 @@ function calendarBlockDomId(id) {
 
 function priorityAriaLabel(priority) {
   return ['', '低优先级', '中优先级', '高优先级'][Number(priority)] || '';
+}
+
+function timelineFilterOption(value) {
+  return TIMELINE_FILTERS.find((item) => item.value === value) || TIMELINE_FILTERS[0];
+}
+
+function timelineItemMatchesFilter(item, filter) {
+  if (filter === 'plan') return Boolean(item.virtual) || item.type === 'plan';
+  if (filter === 'record') {
+    if (item.virtual) return false;
+    return item.type === 'candidate' || item.type === 'confirmed';
+  }
+  return true;
+}
+
+function coarseRowCollapseKey(view, row) {
+  return `${view}:${row.start}`;
 }
 
 function findOptionIndex(options, id) {
@@ -194,10 +226,15 @@ Page({
     calendarScrollWithAnimation: false,
     scrollIntoView: '',
     rangeIncludesToday: false,
+    currentTimeLineRowIndex: -1,
     currentTimeLineStyle: '',
     pageTurnClass: '',
     maxTagsPerLog: MAX_TAGS_PER_LOG,
     timeline: [],
+    hasTimelineItems: false,
+    timelineFilter: 'all',
+    timelineFilterLabel: '查看全部',
+    rangeEmptyText: '这个范围内还没有计划或记录。',
     detailItem: null,
     isCreateOpen: false,
     planEditorMode: 'create',
@@ -282,23 +319,62 @@ Page({
             && (canAssociate || item.endedAt > now)
         };
       });
+      const timelineFilter = timelineFilterOption(this.data.timelineFilter);
+      const filteredTimeline = rawTimeline.filter((item) => (
+        timelineItemMatchesFilter(item, timelineFilter.value)
+      ));
       const grid = buildTimeRows(range, this.data.view);
-      const currentTimeTop = currentTimeLinePosition(now, range, grid);
-      const timeline = buildCalendarBlocks(
-        rawTimeline,
-        range,
-        this.data.view,
-        grid,
-        layoutOptions
-      ).map((item) => ({
+      const decorateBlock = (item) => ({
         ...item,
-        domId: calendarBlockDomId(item.renderKey || item.id),
+        domId: calendarBlockDomId(item.isFirstVisibleSegment ? item.id : (item.renderKey || item.id)),
         ariaLabel: item.isAggregate
           ? `${item.title}，点击查看被聚合的重叠条目`
           : `${item.displayKind}，${item.title}，${item.displayTime}${item.visualType === 'plan'
             ? `，${priorityAriaLabel(item.priority)}`
             : ''}`
-      }));
+      });
+      const isDayView = this.data.view === 'day';
+      const currentTimePlacement = currentTimeLinePlacement(now, range, grid);
+      let timeRows = grid.rows;
+      let timeline = [];
+      let currentTimeLineRowIndex = -1;
+      let currentTimeLineStyle = '';
+      if (isDayView) {
+        const currentTimeTop = currentTimeLinePosition(now, range, grid);
+        timeline = buildCalendarBlocks(
+          filteredTimeline,
+          range,
+          this.data.view,
+          grid,
+          layoutOptions
+        ).map(decorateBlock);
+        currentTimeLineStyle = currentTimeTop === null
+          ? ''
+          : `top: ${currentTimeTop.toFixed(2)}rpx;`;
+      } else {
+        if (!this.collapsedCoarseRowKeys) this.collapsedCoarseRowKeys = new Set();
+        timeRows = buildCoarseCalendarRows(
+          filteredTimeline,
+          range,
+          this.data.view,
+          grid
+        ).map((row) => {
+          const collapseKey = coarseRowCollapseKey(this.data.view, row);
+          const isCollapsible = row.coarseLineCount > 1;
+          return {
+            ...row,
+            collapseKey,
+            isCollapsible,
+            isCollapsed: isCollapsible && this.collapsedCoarseRowKeys.has(collapseKey),
+            coarseMinHeight: grid.rowHeight,
+            blocks: row.blocks.map(decorateBlock)
+          };
+        });
+        if (currentTimePlacement) {
+          currentTimeLineRowIndex = currentTimePlacement.rowIndex;
+          currentTimeLineStyle = `top: ${(currentTimePlacement.progress * 100).toFixed(2)}%;`;
+        }
+      }
       this.eventById = new Map(snapshot.calendarEvents.map((item) => [item.id, item]));
       this.currentSnapshot = snapshot;
       this.currentService = service;
@@ -309,11 +385,16 @@ Page({
         hasTaskOptions: planTasks.length > 1,
         taskIndex: findOptionIndex(tasks, selectedTaskId),
         timeline,
-        timeRows: grid.rows,
+        hasTimelineItems: filteredTimeline.length > 0,
+        timelineFilter: timelineFilter.value,
+        timelineFilterLabel: timelineFilter.label,
+        rangeEmptyText: timelineFilter.emptyText,
+        timeRows,
         canvasHeight: grid.canvasHeight,
         rangeLabel: formatRangeLabel(range, this.data.view),
         rangeIncludesToday: now >= range.start && now <= range.end,
-        currentTimeLineStyle: currentTimeTop === null ? '' : `top: ${currentTimeTop.toFixed(2)}rpx;`
+        currentTimeLineRowIndex,
+        currentTimeLineStyle
       }, () => {
         if (typeof afterRefresh === 'function') afterRefresh();
       });
@@ -341,47 +422,96 @@ Page({
     });
   },
 
+  cycleTimelineFilter() {
+    const currentIndex = TIMELINE_FILTERS.findIndex((item) => item.value === this.data.timelineFilter);
+    const next = TIMELINE_FILTERS[(currentIndex + 1) % TIMELINE_FILTERS.length];
+    this.setData({
+      timelineFilter: next.value,
+      timelineFilterLabel: next.label
+    }, () => this.refresh());
+  },
+
+  toggleCoarseRow(event) {
+    if (this.data.view === 'day') return;
+    const collapseKey = event.currentTarget.dataset.collapseKey;
+    const targetRow = this.data.timeRows.find((row) => row.collapseKey === collapseKey);
+    if (!targetRow || !targetRow.isCollapsible) return;
+    if (!this.collapsedCoarseRowKeys) this.collapsedCoarseRowKeys = new Set();
+    const isCollapsed = !targetRow.isCollapsed;
+    if (isCollapsed) this.collapsedCoarseRowKeys.add(collapseKey);
+    else this.collapsedCoarseRowKeys.delete(collapseKey);
+    this.setData({
+      timeRows: this.data.timeRows.map((row) => (
+        row.collapseKey === collapseKey ? { ...row, isCollapsed } : row
+      ))
+    });
+  },
+
   moveRange(event) {
     this.animateRangeChange(Number(event.currentTarget.dataset.offset));
   },
 
   goToday() {
+    const now = Date.now();
     this.cancelPageTurn();
     this.currentCalendarScrollTop = 0;
     if (!this.viewScrollTops) this.viewScrollTops = {};
     this.viewScrollTops[this.data.view] = 0;
     this.setData({
-      anchor: Date.now(),
+      anchor: now,
       calendarScrollTop: 0,
       calendarScrollWithAnimation: false,
       scrollIntoView: ''
     }, () => {
-      this.refresh();
-      this.focusCurrentHour();
+      this.refresh(() => this.focusCurrentTime(now));
     });
   },
 
-  focusCurrentHour() {
-    if (this.data.view !== 'day') return;
-    const now = new Date();
-    const anchor = new Date(this.data.anchor);
-    if (now.getFullYear() !== anchor.getFullYear()
-      || now.getMonth() !== anchor.getMonth()
-      || now.getDate() !== anchor.getDate()) return;
+  focusCurrentTime(now = Date.now()) {
+    const range = rangeForView(this.data.anchor, this.data.view);
+    const grid = buildTimeRows(range, this.data.view);
+    const placement = currentTimeLinePlacement(now, range, grid);
+    if (!placement) return;
+    const targetRowIndex = this.data.view === 'day'
+      ? Math.max(0, placement.rowIndex - 1)
+      : placement.rowIndex;
     this.setData({ scrollIntoView: '' }, () => {
-      this.setData({ scrollIntoView: `calendar-time-row-${Math.max(0, now.getHours() - 1)}` });
+      this.setData({ scrollIntoView: `calendar-time-row-${targetRowIndex}` });
     });
+  },
+
+  focusCurrentHour(now = Date.now()) {
+    if (this.data.view !== 'day') return;
+    this.focusCurrentTime(now);
   },
 
   refreshCurrentTimeLine(now = Date.now()) {
     const range = rangeForView(this.data.anchor, this.data.view);
     const grid = buildTimeRows(range, this.data.view);
+    const rangeIncludesToday = now >= range.start && now <= range.end;
+    if (this.data.view !== 'day') {
+      const placement = currentTimeLinePlacement(now, range, grid);
+      const currentTimeLineRowIndex = placement ? placement.rowIndex : -1;
+      const currentTimeLineStyle = placement
+        ? `top: ${(placement.progress * 100).toFixed(2)}%;`
+        : '';
+      if (currentTimeLineRowIndex !== this.data.currentTimeLineRowIndex
+        || currentTimeLineStyle !== this.data.currentTimeLineStyle
+        || rangeIncludesToday !== this.data.rangeIncludesToday) {
+        this.setData({
+          currentTimeLineRowIndex,
+          currentTimeLineStyle,
+          rangeIncludesToday
+        });
+      }
+      return;
+    }
     const top = currentTimeLinePosition(now, range, grid);
     const currentTimeLineStyle = top === null ? '' : `top: ${top.toFixed(2)}rpx;`;
-    const rangeIncludesToday = now >= range.start && now <= range.end;
     if (currentTimeLineStyle !== this.data.currentTimeLineStyle
+      || this.data.currentTimeLineRowIndex !== -1
       || rangeIncludesToday !== this.data.rangeIncludesToday) {
-      this.setData({ currentTimeLineStyle, rangeIncludesToday });
+      this.setData({ currentTimeLineRowIndex: -1, currentTimeLineStyle, rangeIncludesToday });
     }
   },
 

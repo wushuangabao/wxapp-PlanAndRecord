@@ -108,6 +108,41 @@ test('日历页记住组件任务选择并在取消后重新新增时回填', ()
   assert.equal(page.data.planEditorInitialValue.taskIndex, 2);
 });
 
+test('日历粗粒度多行时间格可由左侧时间文案切换折叠与展开', () => {
+  const page = loadCalendarPage();
+  ['year', 'month', 'week'].forEach((view) => {
+    const collapseKey = `${view}:row-1`;
+    page.data.view = view;
+    page.data.timeRows = [{ collapseKey, isCollapsible: true, isCollapsed: false }];
+
+    page.toggleCoarseRow({ currentTarget: { dataset: { collapseKey } } });
+    assert.equal(page.data.timeRows[0].isCollapsed, true);
+    assert.equal(page.collapsedCoarseRowKeys.has(collapseKey), true);
+
+    page.toggleCoarseRow({ currentTarget: { dataset: { collapseKey } } });
+    assert.equal(page.data.timeRows[0].isCollapsed, false);
+    assert.equal(page.collapsedCoarseRowKeys.has(collapseKey), false);
+  });
+
+  page.data.view = 'month';
+  page.data.timeRows = [{
+    collapseKey: 'month:row-2',
+    isCollapsible: false,
+    isCollapsed: false
+  }];
+  page.toggleCoarseRow({ currentTarget: { dataset: { collapseKey: 'month:row-2' } } });
+  assert.equal(page.data.timeRows[0].isCollapsed, false);
+
+  page.data.view = 'day';
+  page.data.timeRows = [{
+    collapseKey: 'day:row-1',
+    isCollapsible: true,
+    isCollapsed: false
+  }];
+  page.toggleCoarseRow({ currentTarget: { dataset: { collapseKey: 'day:row-1' } } });
+  assert.equal(page.data.timeRows[0].isCollapsed, false);
+});
+
 test('日历新增成功只在关闭弹窗 setData 完成后定位计划', () => {
   const originalWx = global.wx;
   global.wx = { showToast() {} };
@@ -227,9 +262,9 @@ test('M4：日历详情层提供原有操作，画布块不显示状态文字且
   assert.match(script, /item\.virtual\s*\?\s*'重复计划·待确认'/);
   assert.match(script, /item\.type === 'candidate'\s*\?\s*'候选记录'/);
   assert.doesNotMatch(script, /virtual[^\n]*candidate|candidate[^\n]*virtual/);
-  assert.match(wxss, /\.calendar-block\.plan\s*\{[^}]*#7b918b/s);
+  assert.match(wxss, /\.calendar-block\.plan\s*\{[^}]*#7f8ca1/s);
   assert.match(wxml, /bindtap="openItemDetail"/);
-  assert.match(wxml, /class="calendar-legend"[^>]*>[\s\S]*>计划<[\s\S]*>候选<[\s\S]*>实际</);
+  assert.match(wxml, /class="calendar-legend"[^>]*>[\s\S]*>计划<[\s\S]*>记录<[\s\S]*>候选<[\s\S]*bindtap="cycleTimelineFilter">[\s\S]*\{\{timelineFilterLabel\}\}[\s\S]*>↻</);
   assert.match(wxml, /class="block-title">\{\{item\.title\}\}<\/view>/);
   assert.doesNotMatch(wxml, /isDecorativeSegment|is-decorative-segment/);
   assert.doesNotMatch(script, /isDecorativeSegment/);
@@ -243,6 +278,111 @@ test('M4：日历详情层提供原有操作，画布块不显示状态文字且
   assert.equal((wxml.match(/<plan-editor-sheet\b/g) || []).length, 1);
   assert.doesNotMatch(wxml, /修改本次|修改本次及后续|submitOccurrenceEditor/);
   assert.doesNotMatch(script, /overrideOccurrence|reviseRuleFollowing|editorMode|editorTitle|saveOccurrenceOverride|saveRuleFollowing/);
+});
+
+test('日历筛选按钮按全部、计划、记录循环，并将候选归入记录', () => {
+  const originalGetApp = global.getApp;
+  const startedAt = new Date(2026, 7, 14, 9, 0).getTime();
+  const snapshot = {
+    projects: [],
+    tasks: [{ id: 'task_1', title: '测试任务', status: 'todo', projectId: null }],
+    calendarEvents: []
+  };
+  const items = [{
+    id: 'plan_1',
+    type: 'plan',
+    virtual: false,
+    taskId: 'task_1',
+    title: '计划块',
+    startedAt,
+    endedAt: startedAt + 30 * 60 * 1_000
+  }, {
+    id: 'candidate_1',
+    type: 'candidate',
+    virtual: false,
+    title: '候选记录',
+    startedAt: startedAt + 30 * 60 * 1_000,
+    endedAt: startedAt + 60 * 60 * 1_000
+  }, {
+    id: 'confirmed_1',
+    type: 'confirmed',
+    virtual: false,
+    title: '实际记录',
+    startedAt: startedAt + 60 * 60 * 1_000,
+    endedAt: startedAt + 90 * 60 * 1_000
+  }];
+  global.getApp = () => ({
+    globalData: { bootstrap: { applicationService: {
+      snapshot() { return snapshot; },
+      timeline() { return items; }
+    } } }
+  });
+
+  try {
+    const page = loadCalendarPage();
+    page.data.anchor = startedAt;
+    page.refresh();
+    assert.equal(page.data.timelineFilter, 'all');
+    assert.equal(page.data.timelineFilterLabel, '查看全部');
+    assert.deepEqual(page.data.timeline.map((item) => item.id), ['plan_1', 'candidate_1', 'confirmed_1']);
+
+    page.cycleTimelineFilter();
+    assert.equal(page.data.timelineFilter, 'plan');
+    assert.equal(page.data.timelineFilterLabel, '只看计划');
+    assert.deepEqual(page.data.timeline.map((item) => item.id), ['plan_1']);
+
+    page.cycleTimelineFilter();
+    assert.equal(page.data.timelineFilter, 'record');
+    assert.equal(page.data.timelineFilterLabel, '只看记录');
+    assert.deepEqual(page.data.timeline.map((item) => item.id), ['candidate_1', 'confirmed_1']);
+
+    page.cycleTimelineFilter();
+    assert.equal(page.data.timelineFilter, 'all');
+    assert.equal(page.data.timelineFilterLabel, '查看全部');
+    assert.deepEqual(page.data.timeline.map((item) => item.id), ['plan_1', 'candidate_1', 'confirmed_1']);
+  } finally {
+    global.getApp = originalGetApp;
+  }
+});
+
+test('日历粗粒度刷新只在时间行保留块数据并使用独立空态', () => {
+  const originalGetApp = global.getApp;
+  const startedAt = new Date(2026, 7, 14, 9, 0).getTime();
+  let items = [{
+    id: 'plan_1',
+    type: 'plan',
+    virtual: false,
+    title: '计划块',
+    startedAt,
+    endedAt: startedAt + 30 * 60 * 1_000
+  }];
+  global.getApp = () => ({
+    globalData: { bootstrap: { applicationService: {
+      snapshot() {
+        return { projects: [], tasks: [], calendarEvents: [] };
+      },
+      timeline() { return items; }
+    } } }
+  });
+
+  try {
+    const page = loadCalendarPage();
+    page.data.view = 'month';
+    page.data.anchor = startedAt;
+    page.refresh();
+
+    assert.equal(page.data.hasTimelineItems, true);
+    assert.deepEqual(page.data.timeline, []);
+    assert.equal(page.data.timeRows.flatMap((row) => row.blocks).length, 1);
+
+    items = [];
+    page.refresh();
+    assert.equal(page.data.hasTimelineItems, false);
+    assert.deepEqual(page.data.timeline, []);
+    assert.equal(page.data.timeRows.flatMap((row) => row.blocks).length, 0);
+  } finally {
+    global.getApp = originalGetApp;
+  }
 });
 
 test('日历固定日程用完整句式解释重复间隔', () => {
@@ -539,6 +679,47 @@ test('日历切换粒度恢复已有滚动位置，仅首次进入日视图定�
   assert.equal(focusCount, 1);
 });
 
+test('日历点击今天会在刷新完成后定位各粒度的当前时间行', () => {
+  const now = new Date(2026, 7, 14, 17, 20).getTime();
+  const page = loadCalendarPage();
+  const targets = {
+    year: 'calendar-time-row-7',
+    month: 'calendar-time-row-13',
+    week: 'calendar-time-row-4',
+    day: 'calendar-time-row-16'
+  };
+
+  Object.entries(targets).forEach(([view, target]) => {
+    page.data.view = view;
+    page.data.anchor = now;
+    page.data.scrollIntoView = 'old-target';
+    page.focusCurrentTime(now);
+    assert.equal(page.data.scrollIntoView, target);
+  });
+
+  page.data.view = 'month';
+  page.data.anchor = new Date(2026, 5, 1).getTime();
+  page.viewScrollTops = { month: 640 };
+  let afterRefresh;
+  const focusedAt = [];
+  page.refresh = (callback) => { afterRefresh = callback; };
+  page.focusCurrentTime = (timestamp) => focusedAt.push(timestamp);
+  const originalNow = Date.now;
+  Date.now = () => now;
+  try {
+    page.goToday();
+    assert.equal(page.data.anchor, now);
+    assert.equal(page.data.calendarScrollTop, 0);
+    assert.equal(page.viewScrollTops.month, 0);
+    assert.deepEqual(focusedAt, []);
+    assert.equal(typeof afterRefresh, 'function');
+    afterRefresh();
+    assert.deepEqual(focusedAt, [now]);
+  } finally {
+    Date.now = originalNow;
+  }
+});
+
 test('日历画布以首次有效移动锁定手势方向', () => {
   const page = loadCalendarPage();
   const offsets = [];
@@ -681,6 +862,34 @@ test('日历当前时间线与今天范围状态可随本地时间刷新', () =>
   page.refreshCurrentTimeLine(new Date(2026, 7, 9, 8, 30).getTime());
   assert.equal(page.data.currentTimeLineStyle, '');
   assert.equal(page.data.rangeIncludesToday, false);
+});
+
+test('日历粗粒度当前时间线刷新只更新轻量定位状态', () => {
+  const page = loadCalendarPage();
+  page.data.view = 'month';
+  page.data.anchor = new Date(2026, 7, 8, 12, 0).getTime();
+  page.data.timeRows = Array.from({ length: 31 }, (_, index) => ({
+    index,
+    blocks: [{ id: `block_${index}`, title: '测试块' }]
+  }));
+  const originalTimeRows = page.data.timeRows;
+  let updates;
+  page.setData = (next) => {
+    updates = next;
+    Object.assign(page.data, next);
+  };
+
+  page.refreshCurrentTimeLine(new Date(2026, 7, 8, 8, 30).getTime());
+
+  assert.equal(page.data.currentTimeLineRowIndex, 7);
+  assert.equal(page.data.currentTimeLineStyle, 'top: 35.42%;');
+  assert.strictEqual(page.data.timeRows, originalTimeRows);
+  assert.equal(Object.hasOwn(updates, 'timeRows'), false);
+  assert.deepEqual(Object.keys(updates).sort(), [
+    'currentTimeLineRowIndex',
+    'currentTimeLineStyle',
+    'rangeIncludesToday'
+  ]);
 });
 
 test('日历计划块按资料库任务状态显示关联入口，日志编辑只选择标签和计划块', () => {

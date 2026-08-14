@@ -12,6 +12,11 @@ const WEEKDAY_NAMES = ['周日', '周一', '周二', '周三', '周四', '周五
 const MIN_BLOCK_HEIGHT = 54;
 const MAX_VISIBLE_LANES = 6;
 const LANE_GAP_PERCENT = 2;
+// 750rpx 视口扣除页面横向留白、画布边框、138rpx 时间轴和块列表内边距。
+const COARSE_BLOCK_LIST_WIDTH_RPX = 538;
+const COARSE_BLOCK_MAX_WIDTH_RPX = 300;
+const COARSE_BLOCK_GAP_RPX = 8;
+const COARSE_BLOCK_TITLE_HORIZONTAL_PADDING_RPX = 24;
 
 function formatDateParts(timestamp) {
   const date = new Date(timestamp);
@@ -98,7 +103,7 @@ function buildTimeRows(range, view) {
   };
 }
 
-function currentTimeLinePosition(timestamp, range, grid) {
+function currentTimeLinePlacement(timestamp, range, grid) {
   if (!Number.isFinite(timestamp) || timestamp < range.start || timestamp > range.end) {
     return null;
   }
@@ -107,7 +112,17 @@ function currentTimeLinePosition(timestamp, range, grid) {
   const row = grid.rows[rowIndex];
   const duration = row.end - row.start;
   const progress = duration > 0 ? (timestamp - row.start) / duration : 0;
-  return (rowIndex + Math.max(0, Math.min(1, progress))) * grid.rowHeight;
+  return {
+    rowIndex,
+    progress: Math.max(0, Math.min(1, progress))
+  };
+}
+
+function currentTimeLinePosition(timestamp, range, grid) {
+  const placement = currentTimeLinePlacement(timestamp, range, grid);
+  if (!placement) return null;
+  const row = grid.rows[placement.rowIndex];
+  return row.top + placement.progress * grid.rowHeight;
 }
 
 function visualType(item) {
@@ -127,6 +142,88 @@ function planPriorityClass(item, type = visualType(item)) {
 function rowIndexForTimestamp(rows, timestamp) {
   const index = rows.findIndex((row) => timestamp >= row.start && timestamp < row.end);
   return index < 0 ? rows.length - 1 : index;
+}
+
+function coarseCharacterWidthRpx(character) {
+  const codePoint = character.codePointAt(0);
+  if (/\s/.test(character)) return 8;
+  if ((codePoint >= 0x2e80 && codePoint <= 0x9fff)
+    || (codePoint >= 0xac00 && codePoint <= 0xd7af)
+    || (codePoint >= 0xf900 && codePoint <= 0xfaff)
+    || codePoint > 0xffff) return 24;
+  if (/[A-Z]/.test(character)) return 16;
+  if (/[a-z0-9]/.test(character)) return 14;
+  return 12;
+}
+
+function coarseBlockWidthRpx(block) {
+  const borderWidth = visualType(block) === 'candidate' ? 4 : 7;
+  const titleWidth = Array.from(String(block.title || '')).reduce(
+    (width, character) => width + coarseCharacterWidthRpx(character),
+    0
+  );
+  return Math.min(
+    COARSE_BLOCK_MAX_WIDTH_RPX,
+    COARSE_BLOCK_TITLE_HORIZONTAL_PADDING_RPX + borderWidth + titleWidth
+  );
+}
+
+function packCoarseBlocks(blocks) {
+  const lines = [];
+  blocks.forEach((block) => {
+    const blockWidth = coarseBlockWidthRpx(block);
+    const sizedBlock = { ...block, coarseWidth: blockWidth };
+    let targetLine = lines.find((line) => (
+      line.width + COARSE_BLOCK_GAP_RPX + blockWidth <= COARSE_BLOCK_LIST_WIDTH_RPX
+    ));
+    if (!targetLine) {
+      targetLine = { width: 0, blocks: [] };
+      lines.push(targetLine);
+    }
+    targetLine.width += (targetLine.blocks.length ? COARSE_BLOCK_GAP_RPX : 0) + blockWidth;
+    targetLine.blocks.push(sizedBlock);
+  });
+  return {
+    blocks: lines.flatMap((line, coarseLineIndex) => line.blocks.map((block) => ({
+      ...block,
+      coarseLineIndex
+    }))),
+    lineCount: lines.length
+  };
+}
+
+function buildCoarseCalendarRows(items, range, view, grid = buildTimeRows(range, view)) {
+  if (view === 'day') return grid.rows.map((row) => ({ ...row, blocks: [] }));
+  const rows = grid.rows.map((row) => ({ ...row, blocks: [] }));
+  (items || []).forEach((item, sourceIndex) => {
+    if (!Number.isFinite(item.startedAt)
+      || !Number.isFinite(item.endedAt)
+      || item.endedAt <= item.startedAt) return;
+    let segmentIndex = 0;
+    rows.forEach((row) => {
+      if (item.endedAt <= row.start || item.startedAt >= row.end) return;
+      const type = visualType(item);
+      row.blocks.push({
+        ...item,
+        visualType: type,
+        priorityClass: planPriorityClass(item, type),
+        rowIndex: row.index,
+        renderKey: `${item.id || 'calendar-item'}:coarse:${row.index}:${sourceIndex}`,
+        isFirstVisibleSegment: segmentIndex === 0,
+        continuesBefore: item.startedAt < row.start,
+        continuesAfter: item.endedAt > row.end
+      });
+      segmentIndex += 1;
+    });
+  });
+  return rows.map((row) => {
+    const packed = packCoarseBlocks(row.blocks);
+    return {
+      ...row,
+      blocks: packed.blocks,
+      coarseLineCount: packed.lineCount
+    };
+  });
 }
 
 function rawBlock(item, range, view, grid) {
@@ -381,7 +478,9 @@ module.exports = {
   MAX_VISIBLE_LANES,
   ROW_HEIGHTS,
   buildCalendarBlocks,
+  buildCoarseCalendarRows,
   buildTimeRows,
+  currentTimeLinePlacement,
   currentTimeLinePosition,
   defaultPlanDate,
   formatRangeLabel

@@ -2,7 +2,7 @@
   <view class="calendar-toolbar">
     <view class="toolbar-left">
       <view class="range-label">{{rangeLabel}}</view>
-      <view wx:if="{{!timeline.length}}" class="range-empty">这个范围内还没有计划或记录。</view>
+      <view wx:if="{{!hasTimelineItems}}" class="range-empty">{{rangeEmptyText}}</view>
     </view>
     <view class="toolbar-right">
       <view class="toolbar-controls">
@@ -13,8 +13,12 @@
       </view>
       <view class="calendar-legend" aria-label="日历状态图例">
         <view class="legend-item"><view class="legend-dot plan"></view><text>计划</text></view>
+        <view class="legend-item"><view class="legend-dot actual"></view><text>记录</text></view>
         <view class="legend-item"><view class="legend-dot candidate"></view><text>候选</text></view>
-        <view class="legend-item"><view class="legend-dot actual"></view><text>实际</text></view>
+        <view class="calendar-filter-button" role="button" aria-label="切换日历显示内容，当前{{timelineFilterLabel}}，点击查看下一种" bindtap="cycleTimelineFilter">
+          <text class="calendar-filter-label">{{timelineFilterLabel}}</text>
+          <text class="calendar-filter-switch-icon" aria-hidden="true">↻</text>
+        </view>
       </view>
     </view>
   </view>
@@ -33,7 +37,7 @@
     bindtouchend="onCanvasTouchEnd"
     bindtouchcancel="onCanvasTouchCancel"
   >
-    <view class="calendar-grid" style="height: {{canvasHeight}}rpx;">
+    <view wx:if="{{view === 'day'}}" class="calendar-grid day-calendar-grid" style="height: {{canvasHeight}}rpx;">
       <view class="time-axis" style="height: {{canvasHeight}}rpx;">
         <view wx:for="{{timeRows}}" wx:key="key" id="calendar-time-row-{{index}}" class="time-row" style="{{item.style}}">
           <text>{{item.label}}</text>
@@ -59,6 +63,53 @@
         </view>
       </view>
       <view class="calendar-grid-bottom-line" aria-hidden="true"></view>
+    </view>
+    <view wx:else class="calendar-grid coarse-calendar-grid">
+      <view
+        wx:for="{{timeRows}}"
+        wx:key="key"
+        wx:for-item="row"
+        id="calendar-time-row-{{row.index}}"
+        class="coarse-calendar-row"
+        style="min-height: {{row.coarseMinHeight}}rpx;"
+      >
+        <view
+          wx:if="{{row.isCollapsible}}"
+          class="coarse-time-label is-collapsible {{row.isCollapsed ? 'is-collapsed' : ''}} {{view === 'week' ? 'is-week' : ''}}"
+          role="button"
+          aria-label="{{row.label}}，{{row.isCollapsed ? '已折叠，点击展开' : '已展开，点击折叠'}}"
+          data-collapse-key="{{row.collapseKey}}"
+          bindtap="toggleCoarseRow"
+        >
+          <view class="coarse-time-label-content">
+            <text class="coarse-time-label-text">{{row.label}}</text>
+            <view class="coarse-collapse-indicator" aria-hidden="true"></view>
+          </view>
+        </view>
+        <view wx:else class="coarse-time-label"><text>{{row.label}}</text></view>
+        <view class="coarse-schedule-cell">
+          <view wx:if="{{currentTimeLineRowIndex === row.index}}" class="current-time-line coarse-current-time-line" style="{{currentTimeLineStyle}}" aria-hidden="true"></view>
+          <view class="coarse-block-list">
+            <view
+              wx:for="{{row.blocks}}"
+              wx:key="renderKey"
+              wx:for-item="block"
+              wx:if="{{!row.isCollapsed || block.coarseLineIndex === 0}}"
+              id="{{block.domId}}"
+              class="calendar-block coarse-calendar-block {{block.visualType}} {{block.priorityClass}} {{block.continuesBefore ? 'continues-before' : ''}} {{block.continuesAfter ? 'continues-after' : ''}} {{block.overlapMeta ? 'is-overlapping' : ''}}"
+              style="width: {{block.coarseWidth}}rpx;"
+              role="button"
+              aria-label="{{block.ariaLabel}}"
+              data-item="{{block}}"
+              bindtap="openItemDetail"
+            >
+              <view wx:if="{{block.continuesBefore}}" class="continuation continuation-before"></view>
+              <view class="block-title">{{block.title}}</view>
+              <view wx:if="{{block.continuesAfter}}" class="continuation continuation-after"></view>
+            </view>
+          </view>
+        </view>
+      </view>
     </view>
     <view class="calendar-scroll-safe-space" aria-hidden="true"></view>
   </scroll-view>

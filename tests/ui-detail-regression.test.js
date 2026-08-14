@@ -19,7 +19,7 @@ test('页面主头部在滚动时固定在顶部', () => {
   assert.match(calendarWxss, /\.calendar-toolbar\s*\{[^}]*position:\s*sticky;[^}]*top:\s*0;/s);
 });
 
-test('日历顶部提供当前范围、今天按钮、四种粒度与右对齐状态图例', () => {
+test('日历顶部提供当前范围、今天按钮、四种粒度、右对齐状态图例与循环筛选按钮', () => {
   const script = fs.readFileSync(path.join(pagesRoot, 'calendar/index.js'), 'utf8');
   const wxml = fs.readFileSync(path.join(pagesRoot, 'calendar/index.wxml'), 'utf8');
   const wxss = fs.readFileSync(path.join(pagesRoot, 'calendar/index.wxss'), 'utf8');
@@ -27,14 +27,19 @@ test('日历顶部提供当前范围、今天按钮、四种粒度与右对齐�
   assert.match(script, /data:\s*\{[\s\S]*?view:\s*'day'/);
   assert.match(script, /views:\s*\['year', 'month', 'week', 'day'\]/);
   assert.match(wxml, /class="range-label"/);
-  assert.match(wxml, /class="toolbar-left">[\s\S]*class="range-label"[\s\S]*wx:if="\{\{!timeline\.length\}\}" class="range-empty"/);
+  assert.match(wxml, /class="toolbar-left">[\s\S]*class="range-label"[\s\S]*wx:if="\{\{!hasTimelineItems\}\}" class="range-empty">\{\{rangeEmptyText\}\}/);
   assert.match(wxml, /class="today-button \{\{rangeIncludesToday \? 'is-current-range' : ''\}\}"[^>]*bindtap="goToday"/);
   assert.match(wxml, /class="toolbar-right">[\s\S]*class="view-tabs"[\s\S]*class="calendar-legend"/);
-  assert.match(wxml, /class="legend-dot plan"[\s\S]*>计划<[\s\S]*class="legend-dot candidate"[\s\S]*>候选<[\s\S]*class="legend-dot actual"[\s\S]*>实际</);
+  assert.match(wxml, /class="legend-dot plan"[\s\S]*>计划<[\s\S]*class="legend-dot actual"[\s\S]*>记录<[\s\S]*class="legend-dot candidate"[\s\S]*>候选</);
+  assert.match(wxml, /class="calendar-filter-button"[^>]*aria-label="切换日历显示内容，当前\{\{timelineFilterLabel\}\}，点击查看下一种"[^>]*bindtap="cycleTimelineFilter">[\s\S]*class="calendar-filter-label">\{\{timelineFilterLabel\}\}<\/text>[\s\S]*class="calendar-filter-switch-icon" aria-hidden="true">↻<\/text>[\s\S]*<\/view>/);
   assert.match(wxss, /\.range-label\s*\{[^}]*white-space:\s*nowrap;/s);
-  assert.match(wxss, /\.toolbar-left,\s*\.toolbar-right\s*\{[^}]*grid-template-rows:\s*52rpx 20rpx;/s);
+  assert.match(wxss, /\.toolbar-left,\s*\.toolbar-right\s*\{[^}]*grid-template-rows:\s*52rpx 44rpx;/s);
   assert.match(wxss, /\.toolbar-right\s*\{[^}]*justify-items:\s*end;/s);
   assert.match(wxss, /\.calendar-legend\s*\{[^}]*justify-content:\s*flex-end;/s);
+  assert.match(wxss, /\.calendar-filter-button\s*\{[^}]*height:\s*44rpx;[^}]*margin-left:\s*2rpx;[^}]*border:\s*2rpx solid #78947f;[^}]*border-radius:\s*22rpx;[^}]*background:\s*#e6ece7;[^}]*box-shadow:/s);
+  const switchIconStyle = wxss.match(/\.calendar-filter-switch-icon\s*\{[^}]*\}/s)[0];
+  assert.match(switchIconStyle, /display:\s*flex;[^}]*align-items:\s*center;[^}]*justify-content:\s*center;[^}]*color:\s*#78947f;[^}]*line-height:\s*1;/s);
+  assert.doesNotMatch(switchIconStyle, /border-radius|background:/);
   assert.match(wxss, /\.tab\s*\{[^}]*width:\s*54rpx;/s);
   assert.match(wxss, /\.today-button\s*\{[^}]*border:\s*0;/s);
   assert.match(wxss, /\.today-button\.is-current-range\s*\{[^}]*border:\s*4rpx solid #a9bdae;/s);
@@ -55,18 +60,59 @@ test('日历顶部提供当前范围、今天按钮、四种粒度与右对齐�
   assert.doesNotMatch(wxml, /class="nav-button"/);
 });
 
-test('日历计划优先级只用三档绿色呈现，不显示数字或优先级文字', () => {
+test('日历粗粒度视图使用定高内容块换行并允许时间格自然增高', () => {
   const script = fs.readFileSync(path.join(pagesRoot, 'calendar/index.js'), 'utf8');
   const wxml = fs.readFileSync(path.join(pagesRoot, 'calendar/index.wxml'), 'utf8');
   const wxss = fs.readFileSync(path.join(pagesRoot, 'calendar/index.wxss'), 'utf8');
+
+  assert.match(wxml, /wx:if="\{\{view === 'day'\}\}" class="calendar-grid day-calendar-grid"/);
+  assert.match(wxml, /wx:else class="calendar-grid coarse-calendar-grid"/);
+  assert.match(wxml, /wx:for="\{\{timeRows\}\}"[^>]*wx:for-item="row"[^>]*class="coarse-calendar-row"[^>]*style="min-height: \{\{row\.coarseMinHeight\}\}rpx;"/);
+  assert.match(wxml, /wx:for="\{\{row\.blocks\}\}"[^>]*wx:for-item="block"[^>]*class="calendar-block coarse-calendar-block \{\{block\.visualType\}\} \{\{block\.priorityClass\}\}[^>]*style="width: \{\{block\.coarseWidth\}\}rpx;"/);
+  assert.match(wxml, /wx:if="\{\{currentTimeLineRowIndex === row\.index\}\}" class="current-time-line coarse-current-time-line" style="\{\{currentTimeLineStyle\}\}"/);
+  assert.match(wxml, /data-item="\{\{block\}\}"[^>]*bindtap="openItemDetail"/);
+  assert.match(wxml, /class="coarse-time-label is-collapsible \{\{row\.isCollapsed \? 'is-collapsed' : ''\}\} \{\{view === 'week' \? 'is-week' : ''\}\}"[^>]*role="button"[^>]*bindtap="toggleCoarseRow"/);
+  assert.match(wxml, /class="coarse-time-label-content"[\s\S]*class="coarse-time-label-text"[\s\S]*class="coarse-collapse-indicator"/);
+  assert.match(wxml, /wx:for-item="block"[^>]*wx:if="\{\{!row\.isCollapsed \|\| block\.coarseLineIndex === 0\}\}"/);
+
+  const coarseRowStyle = wxss.match(/\.coarse-calendar-row\s*\{[^}]*\}/s)[0];
+  assert.match(coarseRowStyle, /display:\s*flex;/);
+  assert.doesNotMatch(coarseRowStyle, /(?:^|[;\s])height:/);
+  assert.match(wxss, /\.coarse-block-list\s*\{[^}]*display:\s*flex;[^}]*flex-wrap:\s*wrap;[^}]*gap:/s);
+  assert.match(wxss, /\.calendar-block\.coarse-calendar-block\s*\{[^}]*position:\s*relative;[^}]*display:\s*flex;[^}]*flex:\s*0 1 auto;[^}]*width:\s*auto;[^}]*max-width:\s*40vw;[^}]*height:\s*54rpx;[^}]*min-height:\s*54rpx;/s);
+  assert.match(wxss, /\.coarse-time-label\.is-collapsible:active\s*\{[^}]*background:\s*#ece9e4;/s);
+  assert.match(wxss, /\.coarse-time-label-content\s*\{[^}]*display:\s*flex;[^}]*align-items:\s*center;/s);
+  assert.match(wxss, /\.coarse-time-label\.is-week \.coarse-time-label-content\s*\{[^}]*flex-direction:\s*column;[^}]*align-items:\s*flex-end;/s);
+  assert.match(wxss, /\.coarse-time-label\.is-week \.coarse-collapse-indicator\s*\{[^}]*margin:\s*12rpx 0 0;/s);
+  assert.match(wxss, /\.coarse-collapse-indicator\s*\{[^}]*border-right:\s*2rpx solid #78947f;[^}]*border-bottom:\s*2rpx solid #78947f;/s);
+  assert.match(wxss, /\.coarse-collapse-indicator\s*\{[^}]*margin:\s*0 3rpx 0 10rpx;/s);
+  assert.doesNotMatch(wxss, /\.coarse-time-label\.is-collapsed \.coarse-collapse-indicator\s*\{[^}]*margin-/s);
+
+  assert.match(script, /buildCoarseCalendarRows/);
+  assert.match(script, /currentTimeLinePlacement/);
+  assert.match(script, /this\.data\.view === 'day'[\s\S]*buildCalendarBlocks/);
+  assert.doesNotMatch(script, /timeline\s*=\s*timeRows\.flatMap/);
+  assert.doesNotMatch(script, /refreshCurrentTimeLine[\s\S]*?this\.data\.timeRows\.map/);
+});
+
+test('日历计划优先级使用三档灰蓝色呈现，并与灰绿实际记录区分', () => {
+  const script = fs.readFileSync(path.join(pagesRoot, 'calendar/index.js'), 'utf8');
+  const wxml = fs.readFileSync(path.join(pagesRoot, 'calendar/index.wxml'), 'utf8');
+  const wxss = fs.readFileSync(path.join(pagesRoot, 'calendar/index.wxss'), 'utf8');
+  const editorWxss = fs.readFileSync(path.join(miniprogramRoot, 'components/plan-editor-sheet/index.wxss'), 'utf8');
 
   assert.match(wxml, /class="calendar-block \{\{item\.visualType\}\} \{\{item\.priorityClass\}\}/);
   assert.doesNotMatch(wxml, /detailItem\.displayPriority/);
   assert.doesNotMatch(script, /displayPriority:/);
   assert.match(script, /priorityAriaLabel/);
-  assert.match(wxss, /\.calendar-block\.plan\.plan-priority-1\s*\{/);
-  assert.match(wxss, /\.calendar-block\.plan\.plan-priority-2\s*\{/);
-  assert.match(wxss, /\.calendar-block\.plan\.plan-priority-3\s*\{/);
+  assert.match(wxss, /\.legend-dot\.plan\s*\{[^}]*background:\s*#7f8ca1;/s);
+  assert.match(wxss, /\.calendar-block\.plan\.plan-priority-1\s*\{[^}]*border-left-color:\s*#a7afbd;[^}]*background:\s*#eff1f4;[^}]*color:\s*#596577;/s);
+  assert.match(wxss, /\.calendar-block\.plan\.plan-priority-2\s*\{[^}]*border-left-color:\s*#7f8ca1;[^}]*background:\s*#dde3ea;[^}]*color:\s*#47566b;/s);
+  assert.match(wxss, /\.calendar-block\.plan\.plan-priority-3\s*\{[^}]*border-left-color:\s*#68788f;[^}]*background:\s*#c7ced8;[^}]*color:\s*#3f4d60;/s);
+  assert.match(wxss, /\.calendar-block\.confirmed\s*\{[^}]*border-left:\s*7rpx solid #55725e;[^}]*background:\s*#d8e1da;[^}]*color:\s*#385846;/s);
+  assert.match(editorWxss, /\.priority-1\s*\{\s*background:\s*#a7afbd;\s*\}/);
+  assert.match(editorWxss, /\.priority-2\s*\{\s*background:\s*#7f8ca1;\s*\}/);
+  assert.match(editorWxss, /\.priority-3\s*\{\s*background:\s*#68788f;\s*\}/);
 });
 
 test('所有自定义底部弹窗复用共享头部组件', () => {

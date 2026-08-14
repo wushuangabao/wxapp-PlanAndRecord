@@ -22,7 +22,7 @@
 .toolbar-left,
 .toolbar-right {
   display: grid;
-  grid-template-rows: 52rpx 20rpx;
+  grid-template-rows: 52rpx 44rpx;
   align-items: center;
   row-gap: 10rpx;
 }
@@ -118,11 +118,55 @@
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 18rpx;
+  gap: 14rpx;
   color: #626b65;
   font-size: 20rpx;
   line-height: 20rpx;
-  height: 20rpx;
+  height: 44rpx;
+}
+
+.calendar-filter-button {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6rpx;
+  min-width: 126rpx;
+  height: 44rpx;
+  margin-left: 2rpx;
+  padding: 0 8rpx 0 10rpx;
+  border: 2rpx solid #78947f;
+  border-radius: 22rpx;
+  background: #e6ece7;
+  box-shadow: 0 2rpx 6rpx rgba(72, 100, 85, .14);
+  color: #385846;
+  font-size: 19rpx;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.calendar-filter-button:active {
+  background: #d8e1da;
+  transform: scale(.97);
+}
+
+.calendar-filter-label {
+  white-space: nowrap;
+}
+
+.calendar-filter-switch-icon {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26rpx;
+  height: 26rpx;
+  color: #78947f;
+  font-size: 20rpx;
+  font-weight: 700;
+  line-height: 1;
+  text-align: center;
 }
 
 .legend-item {
@@ -140,7 +184,7 @@
 }
 
 .legend-dot.plan {
-  background: #7b918b;
+  background: #7f8ca1;
 }
 
 .legend-dot.candidate {
@@ -237,6 +281,102 @@
   border-bottom: 1rpx solid #dedad3;
 }
 
+.coarse-calendar-grid {
+  display: block;
+}
+
+.coarse-calendar-row {
+  display: flex;
+  align-items: stretch;
+  border-bottom: 1rpx solid #dedad3;
+}
+
+.coarse-time-label {
+  box-sizing: border-box;
+  display: flex;
+  flex: 0 0 138rpx;
+  align-items: flex-start;
+  justify-content: flex-end;
+  width: 138rpx;
+  padding: 14rpx 12rpx 0 4rpx;
+  background: #f6f4f0;
+  box-shadow: 1rpx 0 0 #d0cdc6;
+  color: #737b75;
+  font-size: 22rpx;
+  line-height: 1.2;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.coarse-time-label.is-collapsible {
+  color: #4d695b;
+}
+
+.coarse-time-label.is-collapsible:active {
+  background: #ece9e4;
+}
+
+.coarse-time-label-content {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-width: 0;
+}
+
+.coarse-time-label.is-week .coarse-time-label-content {
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: flex-start;
+}
+
+.coarse-time-label-text {
+  min-width: 0;
+}
+
+.coarse-collapse-indicator {
+  box-sizing: border-box;
+  flex: 0 0 auto;
+  width: 11rpx;
+  height: 11rpx;
+  margin: 0 3rpx 0 10rpx;
+  border-right: 2rpx solid #78947f;
+  border-bottom: 2rpx solid #78947f;
+  transform: rotate(45deg);
+  transform-origin: center;
+}
+
+.coarse-time-label.is-collapsed .coarse-collapse-indicator {
+  transform: rotate(-45deg);
+}
+
+.coarse-time-label.is-week .coarse-collapse-indicator {
+  margin: 12rpx 0 0;
+}
+
+.coarse-schedule-cell {
+  position: relative;
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  background: #faf9f7;
+}
+
+.coarse-block-list {
+  box-sizing: border-box;
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  align-items: flex-start;
+  gap: 8rpx;
+  min-width: 0;
+  padding: 13rpx 12rpx;
+}
+
+.coarse-current-time-line {
+  z-index: 5;
+}
+
 .calendar-grid-bottom-line {
   position: absolute;
   z-index: 7;
@@ -281,33 +421,49 @@
   color: #343a36;
 }
 
+.calendar-block.coarse-calendar-block {
+  position: relative;
+  display: flex;
+  flex: 0 1 auto;
+  align-items: stretch;
+  width: auto;
+  max-width: 40vw;
+  height: 54rpx;
+  min-height: 54rpx;
+}
+
+.coarse-calendar-block .block-title {
+  width: auto;
+  max-width: 100%;
+}
+
 .calendar-block.is-segmented {
   min-height: 0;
   border-radius: 6rpx;
 }
 
 .calendar-block.plan {
-  border-left: 7rpx solid #7b918b;
-  background: #e7edeb;
-  color: #486455;
+  border-left: 7rpx solid #7f8ca1;
+  background: #dde3ea;
+  color: #47566b;
 }
 
 .calendar-block.plan.plan-priority-1 {
-  border-left-color: #9fb4a4;
-  background: #e7edeb;
-  color: #486455;
+  border-left-color: #a7afbd;
+  background: #eff1f4;
+  color: #596577;
 }
 
 .calendar-block.plan.plan-priority-2 {
-  border-left-color: #78947f;
-  background: #b8c8bc;
-  color: #385846;
+  border-left-color: #7f8ca1;
+  background: #dde3ea;
+  color: #47566b;
 }
 
 .calendar-block.plan.plan-priority-3 {
-  border-left-color: #385846;
-  background: #55725e;
-  color: #faf9f7;
+  border-left-color: #68788f;
+  background: #c7ced8;
+  color: #3f4d60;
 }
 
 .calendar-block.candidate {

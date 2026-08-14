@@ -1693,6 +1693,45 @@ test('M4：重复实例按需投影，确认后不会再次投影', () => {
   assert.equal(repeated.rule.revisions[0].frequency, 'daily');
 });
 
+test('日历实际记录优先显示备注，空备注沿用任务名称与时间记录回退', () => {
+  const { service, now } = createHarness();
+  const startedAt = now() + 60 * 60 * 1000;
+  const task = service.createTask({ title: '整理资料' });
+  const event = service.createCalendarEvent({
+    title: '上午计划',
+    taskId: task.id,
+    startedAt,
+    endedAt: startedAt + 30 * 60 * 1000,
+    priority: 1
+  });
+  const noted = service.createManualLog({
+    calendarEventId: event.id,
+    startedAt,
+    endedAt: startedAt + 10 * 60 * 1000,
+    note: '  实际复盘  '
+  }).log;
+  const taskFallback = service.createManualLog({
+    calendarEventId: event.id,
+    startedAt: startedAt + 10 * 60 * 1000,
+    endedAt: startedAt + 20 * 60 * 1000,
+    note: '\u200B  '
+  }).log;
+  const genericFallback = service.createManualLog({
+    startedAt: startedAt + 20 * 60 * 1000,
+    endedAt: startedAt + 30 * 60 * 1000,
+    note: ''
+  }).log;
+
+  const actualById = new Map(service.timeline(
+    startedAt,
+    startedAt + 30 * 60 * 1000
+  ).filter((item) => item.type === LOG_STATUS.CONFIRMED).map((item) => [item.id, item]));
+
+  assert.equal(actualById.get(noted.id).title, '实际复盘');
+  assert.equal(actualById.get(taskFallback.id).title, '整理资料');
+  assert.equal(actualById.get(genericFallback.id).title, '时间记录');
+});
+
 test('M4/M5：跨查询起点的过夜重复实例进入时间线和计划统计，但不伪造实际记录', () => {
   const { service } = createHarness();
   const firstStart = new Date(2026, 6, 1, 23, 30, 0, 0).getTime();

@@ -49,9 +49,9 @@
     </scroll-view>
   </view>
 
-  <view class="card">
+  <view class="card project-card {{!activeProjects.length ? 'is-empty' : ''}}">
     <view class="section-header"><view class="section-heading"><view class="section-title">项目（{{activeProjects.length}} / 5）</view></view><view wx:if="{{activeProjects.length < 5}}" class="section-add project-add" role="button" aria-label="新建项目" bindtap="openProjectCreate">+</view></view>
-    <view wx:if="{{!activeProjects.length}}" class="empty">还没有正在进行的项目。</view>
+    <view wx:if="{{!activeProjects.length}}" class="empty project-empty">还没有正在进行的项目。</view>
     <view wx:for="{{projectCards}}" wx:key="id" class="item project-item">
       <view class="project-heading"><view class="project-collapse" role="button" aria-label="{{item.isCollapsed ? '展开项目' : '折叠项目'}}" data-id="{{item.id}}" bindtap="toggleProjectCollapse"><view class="project-collapse-icon {{item.isCollapsed ? 'is-collapsed' : ''}}" aria-hidden="true"></view></view><view class="project-title-deadline"><view class="item-title">{{item.title}}</view><view class="project-deadline-viewport"><view wx:if="{{item.isDeadlineScrolling}}" class="project-deadline-marquee"><view class="project-deadline-copy">截止：{{item.deadlineText}}</view><view class="project-deadline-gap" aria-hidden="true"></view><view class="project-deadline-copy">截止：{{item.deadlineText}}</view></view><view wx:else class="project-deadline-text">截止：{{item.deadlineText}}</view></view><view class="project-deadline-measure" aria-hidden="true">截止：{{item.deadlineText}}</view></view><view class="project-manage" role="button" aria-label="管理项目" data-id="{{item.id}}" bindtap="openProjectManage">…</view></view>
       <block wx:if="{{!item.isCollapsed}}">

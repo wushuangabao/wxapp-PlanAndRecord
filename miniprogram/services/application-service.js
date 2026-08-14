@@ -44,6 +44,7 @@ const {
   resolveImportAnalysis
 } = require('../repository/json-import');
 const { normalizeJsonSnapshot, parseJsonSnapshot, persistedValueEquals } = require('../repository/json-snapshot');
+const { displayLogTitle } = require('../utils/log-presentation');
 const { exportJson } = require('./export-service');
 const { buildTaskPlanStates } = require('./task-plan-state');
 
@@ -1351,7 +1352,7 @@ class ApplicationService {
       return {
         ...log,
         type: log.status,
-        title: log.taskNameSnapshot || log.note || '时间记录',
+        title: displayLogTitle(log),
         virtual: false,
         ...(overlapMeta ? { overlapMeta } : {})
       };

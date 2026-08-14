@@ -4,6 +4,7 @@ const {
 } = require('../../domain/constants');
 const { normalizeTags } = require('../../domain/tags');
 const { calculateTimerDurationMinutes, sumPausedMilliseconds } = require('../../domain/time');
+const { displayLogTitle } = require('../../utils/log-presentation');
 const { resolveEditedTimestamp, timePickerState } = require('../../utils/log-time-editor');
 const {
   defaultDateTime,
@@ -505,9 +506,7 @@ Page({
       const recentLogs = snapshot.timeLogs.slice(-5).reverse().map((log) => ({
         ...log,
         displayTime: `${formatDateTime(log.startedAt)} · ${log.durationMinutes} 分钟`,
-        displayNote: String(log.note || '')
-          .replace(/[\s\u200B-\u200D\uFEFF]+/g, ' ')
-          .trim() || '未命名记录',
+        displayTitle: displayLogTitle(log),
         isCandidate: log.status === 'candidate',
         isNew: log.id === highlightedRecentLogId,
         tags: Array.isArray(log.tags) ? log.tags : [],

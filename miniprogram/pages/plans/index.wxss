@@ -74,6 +74,8 @@
 .todo-header-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 4rpx; }
 .todo-sort-button { display: flex; flex: 0 0 54rpx; align-items: center; justify-content: center; box-sizing: border-box; width: 54rpx; height: 54rpx; border-radius: 12rpx; color: #4d695b; font-size: 32rpx; line-height: 1; }
 .todo-sort-button:active { background: #e6ece7; }
+.project-card.is-empty { box-sizing: border-box; height: 224rpx; }
+.project-empty { display: flex; align-items: center; height: 100rpx; padding-top: 20rpx; }
 .project-heading { display: flex; align-items: center; }
 .project-title-deadline { display: flex; flex: 1; min-width: 0; align-items: center; gap: 20rpx; overflow: hidden; }
 .project-heading .item-title { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

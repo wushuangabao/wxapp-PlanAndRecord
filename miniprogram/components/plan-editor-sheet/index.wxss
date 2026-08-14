@@ -203,13 +203,13 @@
 }
 
 .priority-choice.selected {
-  outline: 5rpx solid #c2d0c5;
+  outline: 5rpx solid #c7ccd6;
   outline-offset: 4rpx;
 }
 
-.priority-1 { background: #dce5de; }
-.priority-2 { background: #9fb4a4; }
-.priority-3 { background: #5f7b68; }
+.priority-1 { background: #a7afbd; }
+.priority-2 { background: #7f8ca1; }
+.priority-3 { background: #68788f; }
 
 .weekday-group {
   display: flex;
