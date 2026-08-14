@@ -27,11 +27,15 @@
 .input {
   box-sizing: border-box;
   width: 100%;
+  height: 72rpx;
   min-height: 72rpx;
   margin: 14rpx 0;
-  padding: 15rpx;
+  padding: 0 15rpx;
   border: 1rpx solid #d0cdc6;
   border-radius: 12rpx;
+  color: #343a36;
+  font-size: 28rpx;
+  line-height: 72rpx;
 }
 
 .plan-time-row {

@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 
 const componentPath = require.resolve('../miniprogram/components/plan-editor-sheet/index.js');
 const componentWxmlPath = path.join(__dirname, '../miniprogram/components/plan-editor-sheet/index.wxml');
+const componentWxssPath = path.join(__dirname, '../miniprogram/components/plan-editor-sheet/index.wxss');
 
 function loadDefinition() {
   const originalComponent = global.Component;
@@ -61,6 +62,19 @@ function createInitialValue(overrides = {}) {
     ...overrides
   };
 }
+
+test('iOS：固定底部弹窗输入框保持同层且保留键盘自动上推', () => {
+  const wxml = fs.readFileSync(componentWxmlPath, 'utf8');
+  const wxss = fs.readFileSync(componentWxssPath, 'utf8');
+  const inputs = wxml.match(/<input\b[^>]*\/>/g) || [];
+
+  assert.equal(inputs.length, 2);
+  inputs.forEach((input) => {
+    assert.match(input, /always-embed="\{\{true\}\}"/);
+    assert.match(input, /adjust-position="\{\{true\}\}"/);
+  });
+  assert.match(wxss, /\.input\s*\{[^}]*height:\s*72rpx;[^}]*padding:\s*0 15rpx;[^}]*line-height:\s*72rpx;/s);
+});
 
 test('calendar create：无任务隐藏选择器并可直接同名创建；仅已完成时必须显式选择', () => {
   const wxml = fs.readFileSync(componentWxmlPath, 'utf8');
