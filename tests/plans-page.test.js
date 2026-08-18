@@ -468,17 +468,23 @@ test('计划页：项目任务区以待处理和可展开的已完成列组织',
   const wxml = fs.readFileSync(plansWxmlPath, 'utf8');
   const wxss = fs.readFileSync(plansWxssPath, 'utf8');
 
-  assert.match(wxml, /class="project-task-columns \{\{item\.completedCount \? 'has-completed' : ''\}\}"/);
-  assert.match(wxml, /<view class="project-column-heading">待处理<\/view>/);
+  assert.match(wxml, /class="project-task-columns \{\{item\.completedCount \? \(item\.isCompletedExpanded \? 'has-completed' : 'is-completed-collapsed'\) : ''\}\}"/);
+  assert.match(wxml, /<view wx:if="\{\{!item\.hasNoTodoTasks\}\}" class="project-column-heading">待处理<\/view>/);
   assert.match(wxml, /class="project-todo-footer">[\s\S]*class="project-add-task"/);
   assert.match(wxml, /class="project-inline-link project-completed-toggle" role="button" aria-label="\{\{item\.isCompletedExpanded \? '收起已完成项' : '展开已完成项'\}\}"/);
-  assert.match(wxml, /已完成 \{\{item\.completedCount\}\} 项/);
+  assert.match(wxml, /\{\{item\.completedToggleText\}\}/);
   assert.match(wxml, /class="project-completed-list"/);
   assert.match(wxss, /\.project-task-columns\s*\{[^}]*display:\s*flex;[^}]*align-items:\s*stretch;[^}]*margin-top:\s*14rpx;/s);
   assert.match(wxss, /\.project-task-column\s*\{[^}]*flex:\s*1 1 0;[^}]*min-width:\s*0;/s);
   assert.match(wxss, /\.project-task-columns\.has-completed \.project-todo-column\s*\{[^}]*flex-basis:\s*56%;[^}]*padding-right:\s*24rpx;/s);
-  assert.match(wxss, /\.project-completed-column::before\s*\{[^}]*width:\s*1rpx;[^}]*background:\s*#dedad3;/s);
-  assert.match(wxss, /\.project-completed-list\s*\{[^}]*padding:\s*8rpx 10rpx;[^}]*border-radius:\s*14rpx;[^}]*background:\s*#f3f1ed;/s);
+  assert.match(wxss, /\.project-task-columns\.has-completed \.project-completed-column::before\s*\{[^}]*width:\s*1rpx;[^}]*background:\s*#dedad3;/s);
+  assert.match(wxss, /\.project-task-columns\.is-completed-collapsed\s*\{[^}]*align-items:\s*flex-start;/s);
+  assert.match(wxss, /\.project-task-columns\.is-completed-collapsed \.project-completed-column\s*\{[^}]*flex:\s*0 0 auto;[^}]*align-self:\s*flex-start;[^}]*margin-left:\s*auto;/s);
+  assert.match(wxss, /\.project-completed-column\s*\{[^}]*align-items:\s*flex-end;/s);
+  assert.match(wxss, /\.project-completed-toggle\s*\{[^}]*justify-content:\s*flex-end;[^}]*width:\s*auto;/s);
+  assert.match(wxss, /\.project-column-heading, \.project-completed-toggle\s*\{[^}]*color:\s*#4d695b;[^}]*font-size:\s*25rpx;/s);
+  assert.match(wxss, /\.project-completed-list\s*\{[^}]*padding:\s*8rpx 10rpx;/s);
+  assert.doesNotMatch(wxss, /\.project-completed-list\s*\{[^}]*background:/s);
   assert.match(wxss, /\.project-todo-column\s*\{[^}]*display:\s*flex;[^}]*flex-direction:\s*column;/s);
   assert.match(wxss, /\.project-todo-footer\s*\{[^}]*margin-top:\s*auto;[^}]*padding-top:\s*10rpx;/s);
   assert.match(wxss, /\.project-task-empty\s*\{[^}]*display:\s*flex;[^}]*flex:\s*1;[^}]*align-items:\s*center;/s);
@@ -907,6 +913,7 @@ test('计划页：项目卡默认预览前三条未完成项，两个展开状�
     harness.page.toggleProjectCompletedExpansion(event('project_1'));
     assert.deepEqual(harness.page.data.projectCards[0].completedTasks.map((task) => task.id), ['completed_1', 'completed_2']);
     assert.equal(harness.page.data.projectCards[0].isTodoExpanded, true);
+    assert.equal(harness.page.data.projectCards[0].completedToggleText, '收起已完成项');
   } finally {
     harness.restore();
   }

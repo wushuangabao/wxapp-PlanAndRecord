@@ -66,14 +66,55 @@ function createInitialValue(overrides = {}) {
 test('iOS：固定底部弹窗输入框保持同层且保留键盘自动上推', () => {
   const wxml = fs.readFileSync(componentWxmlPath, 'utf8');
   const wxss = fs.readFileSync(componentWxssPath, 'utf8');
+  const definition = loadDefinition();
   const inputs = wxml.match(/<input\b[^>]*\/>/g) || [];
 
   assert.equal(inputs.length, 2);
+  assert.equal(definition.options.virtualHost, true);
+  assert.doesNotMatch(wxml, /keyboardInsetStyle|bindkeyboardheightchange|onKeyboardHeightChange/);
   inputs.forEach((input) => {
     assert.match(input, /always-embed="\{\{true\}\}"/);
     assert.match(input, /adjust-position="\{\{true\}\}"/);
   });
-  assert.match(wxss, /\.input\s*\{[^}]*height:\s*72rpx;[^}]*padding:\s*0 15rpx;[^}]*line-height:\s*72rpx;/s);
+  assert.match(
+    wxss,
+    /\.plan-editor-input\s*\{[^}]*height:\s*72rpx;[^}]*padding:\s*0 15rpx;[^}]*line-height:\s*72rpx;/s
+  );
+});
+
+test('标题输入未截断时不 setData，截断时才回写视图', () => {
+  const { component } = openSheet({
+    visible: true,
+    initialValue: createInitialValue({ title: '' })
+  });
+  const calls = [];
+  const originalSetData = component.setData.bind(component);
+  component.setData = (updates, callback) => {
+    calls.push(updates);
+    return originalSetData(updates, callback);
+  };
+
+  assert.equal(
+    component.onTitleField({
+      currentTarget: { dataset: { key: 'title' } },
+      detail: { value: '日历计划' }
+    }),
+    '日历计划'
+  );
+  assert.equal(component.data.title, '日历计划');
+  assert.equal(calls.length, 0);
+
+  const tooLong = '字'.repeat(26);
+  const limited = '字'.repeat(25);
+  assert.equal(
+    component.onTitleField({
+      currentTarget: { dataset: { key: 'title' } },
+      detail: { value: tooLong }
+    }),
+    limited
+  );
+  assert.equal(component.data.title, limited);
+  assert.deepEqual(calls, [{ title: limited }]);
 });
 
 test('calendar create：无任务隐藏选择器并可直接同名创建；仅已完成时必须显式选择', () => {

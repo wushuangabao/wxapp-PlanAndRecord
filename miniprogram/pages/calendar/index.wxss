@@ -216,6 +216,11 @@
   animation: calendar-page-previous 280ms ease-in-out;
 }
 
+.calendar-scroll.is-sheet-open {
+  transform: none;
+  will-change: auto;
+}
+
 @keyframes calendar-page-next {
   0% { opacity: 1; transform: translateX(0); }
   45% { opacity: .36; transform: translateX(-16%); }

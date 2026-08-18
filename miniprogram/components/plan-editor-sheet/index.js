@@ -104,6 +104,10 @@ function blankData(now = Date.now()) {
 }
 
 Component({
+  options: {
+    virtualHost: true
+  },
+
   properties: {
     visible: { type: Boolean, value: false },
     variant: { type: String, value: 'calendar' },
@@ -202,9 +206,12 @@ Component({
     },
 
     onTitleField(event) {
-      this.setData({
-        [event.currentTarget.dataset.key]: limitTitleCodePoints(event.detail.value)
-      });
+      const key = event.currentTarget.dataset.key;
+      const value = limitTitleCodePoints(event.detail.value);
+      this.data[key] = value;
+      if (value === event.detail.value) return value;
+      this.setData({ [key]: value });
+      return value;
     },
 
     onSwitch(event) {

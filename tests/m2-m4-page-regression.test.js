@@ -81,11 +81,21 @@ test('日历新增计划弹窗改由 plan-editor-sheet 承载且页面不持有�
   const json = JSON.parse(fs.readFileSync(calendarJsonPath, 'utf8'));
   const pageJs = fs.readFileSync(calendarScriptPath, 'utf8');
   assert.equal(json.usingComponents['plan-editor-sheet'], '/components/plan-editor-sheet/index');
+  assert.doesNotMatch(wxml, /<page-meta\b/);
   assert.match(wxml, /<plan-editor-sheet[\s\S]*visible="\{\{isCreateOpen\}\}"/);
   assert.match(wxml, /variant="calendar"/);
   assert.match(wxml, /bind:success="onPlanEditorSuccess"/);
   assert.match(wxml, /bind:cancel="onPlanEditorCancel"/);
   assert.match(wxml, /bind:taskindexchange="onPlanEditorTaskIndexChange"/);
+  assert.match(
+    wxml,
+    /class="calendar-fab"[^>]*>\+<\/view>\s*<\/view>\s*<plan-editor-sheet/
+  );
+  assert.match(wxml, /scroll-y="\{\{!isCreateOpen\}\}"/);
+  assert.match(
+    wxml,
+    /class="calendar-scroll \{\{pageTurnClass\}\} \{\{isCreateOpen \? 'is-sheet-open' : ''\}\}"/
+  );
   assert.doesNotMatch(wxml, /class="modal create-modal"/);
   assert.doesNotMatch(pageJs, /createPlan\(\)\s*\{/);
 });

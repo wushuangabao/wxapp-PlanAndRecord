@@ -43,7 +43,7 @@ test('日历顶部提供当前范围、今天按钮、四种粒度、右对齐�
   assert.match(wxss, /\.tab\s*\{[^}]*width:\s*54rpx;/s);
   assert.match(wxss, /\.today-button\s*\{[^}]*border:\s*0;/s);
   assert.match(wxss, /\.today-button\.is-current-range\s*\{[^}]*border:\s*4rpx solid #a9bdae;/s);
-  assert.match(wxml, /class="calendar-scroll \{\{pageTurnClass\}\}"/);
+  assert.match(wxml, /class="calendar-scroll \{\{pageTurnClass\}\} \{\{isCreateOpen \? 'is-sheet-open' : ''\}\}"/);
   assert.match(wxml, /wx:if="\{\{currentTimeLineStyle\}\}" class="current-time-line" style="\{\{currentTimeLineStyle\}\}"/);
   assert.doesNotMatch(wxml, /class="calendar-empty"/);
   assert.doesNotMatch(wxml, /time-axis-terminal|24:00/);
@@ -52,6 +52,7 @@ test('日历顶部提供当前范围、今天按钮、四种粒度、右对齐�
   assert.doesNotMatch(wxss, /\.calendar-toolbar\s*\{[^}]*min-height:/s);
   assert.match(wxss, /\.page\s*\{[^}]*display:\s*flex;[^}]*flex-direction:\s*column;/s);
   assert.match(wxss, /\.calendar-scroll\s*\{[^}]*flex:\s*1 1 0;[^}]*height:\s*0;/s);
+  assert.match(wxss, /\.calendar-scroll\.is-sheet-open\s*\{[^}]*transform:\s*none;[^}]*will-change:\s*auto;/s);
   assert.match(wxss, /\.time-row,\s*\.grid-row\s*\{[^}]*position:\s*absolute;/s);
   assert.match(wxml, /class="calendar-grid-bottom-line"/);
   assert.match(wxss, /\.calendar-grid-bottom-line\s*\{[^}]*bottom:\s*0;[^}]*background:\s*#dedad3;/s);

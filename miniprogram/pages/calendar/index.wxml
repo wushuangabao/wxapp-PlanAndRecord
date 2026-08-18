@@ -24,8 +24,8 @@
   </view>
 
   <scroll-view
-    class="calendar-scroll {{pageTurnClass}}"
-    scroll-y="{{true}}"
+    class="calendar-scroll {{pageTurnClass}} {{isCreateOpen ? 'is-sheet-open' : ''}}"
+    scroll-y="{{!isCreateOpen}}"
     scroll-top="{{calendarScrollTop}}"
     scroll-into-view="{{scrollIntoView}}"
     scroll-with-animation="{{calendarScrollWithAnimation}}"
@@ -115,18 +115,19 @@
   </scroll-view>
 
   <view class="calendar-fab" role="button" aria-label="新增计划" bindtap="openCreatePlan">+</view>
+</view>
 
-  <plan-editor-sheet
-    visible="{{isCreateOpen}}"
-    variant="calendar"
-    mode="{{planEditorMode}}"
-    initial-value="{{planEditorInitialValue}}"
-    bind:success="onPlanEditorSuccess"
-    bind:cancel="onPlanEditorCancel"
-    bind:taskindexchange="onPlanEditorTaskIndexChange"
-  />
+<plan-editor-sheet
+  visible="{{isCreateOpen}}"
+  variant="calendar"
+  mode="{{planEditorMode}}"
+  initial-value="{{planEditorInitialValue}}"
+  bind:success="onPlanEditorSuccess"
+  bind:cancel="onPlanEditorCancel"
+  bind:taskindexchange="onPlanEditorTaskIndexChange"
+/>
 
-  <view wx:if="{{detailItem}}" class="modal-mask" bindtap="closeItemDetail">
+<view wx:if="{{detailItem}}" class="modal-mask" bindtap="closeItemDetail">
     <view class="modal detail-modal" catchtap="noop">
       <sheet-header title="{{detailItem.isAggregate ? '重叠条目' : detailItem.title}}" bind:cancel="closeItemDetail" />
       <block wx:if="{{detailItem.isAggregate}}">
@@ -193,4 +194,3 @@
       <view class="tag-hint">最多添加 {{maxTagsPerLog}} 个标签；每个最多 5 个汉字或 10 个英文字符（中英文折算）</view>
     </view>
   </view>
-</view>
