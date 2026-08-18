@@ -63,7 +63,7 @@ function createInitialValue(overrides = {}) {
   };
 }
 
-test('iOS：固定底部弹窗输入框保持同层且保留键盘自动上推', () => {
+test('iOS：计划输入框复用其他底部弹窗的原生非同层避让', () => {
   const wxml = fs.readFileSync(componentWxmlPath, 'utf8');
   const wxss = fs.readFileSync(componentWxssPath, 'utf8');
   const definition = loadDefinition();
@@ -71,11 +71,16 @@ test('iOS：固定底部弹窗输入框保持同层且保留键盘自动上推',
 
   assert.equal(inputs.length, 2);
   assert.equal(definition.options.virtualHost, true);
-  assert.doesNotMatch(wxml, /keyboardInsetStyle|bindkeyboardheightchange|onKeyboardHeightChange/);
+  assert.equal(definition.data.keyboardHeight, undefined);
+  assert.equal(definition.methods.onKeyboardHeightChange, undefined);
   inputs.forEach((input) => {
-    assert.match(input, /always-embed="\{\{true\}\}"/);
-    assert.match(input, /adjust-position="\{\{true\}\}"/);
+    assert.doesNotMatch(input, /always-embed|adjust-position|bindfocus|bindblur/);
   });
+  assert.equal(definition.methods.onEditorInputFocus, undefined);
+  assert.equal(definition.methods.onEditorInputBlur, undefined);
+  assert.doesNotMatch(wxml, /keyboardHeight|bindkeyboardheightchange/);
+  assert.doesNotMatch(wxss, /modal-keyboard-viewport/);
+  assert.match(wxss, /\.create-modal\s*\{[^}]*max-height:\s*88vh;/s);
   assert.match(
     wxss,
     /\.plan-editor-input\s*\{[^}]*height:\s*72rpx;[^}]*padding:\s*0 15rpx;[^}]*line-height:\s*72rpx;/s
