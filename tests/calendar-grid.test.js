@@ -244,6 +244,86 @@ test('粗粒度布局允许后续短块回填前序长块留下的行空隙', ()
   assert.equal(friday.blocks.find((block) => block.id === 'long').coarseWidth <= 300, true);
 });
 
+test('年视图同一月份内同一固定日程只显示一次，周月视图仍按实例分段', () => {
+  const yearRange = rangeForView(new Date(2026, 5, 1).getTime(), 'year');
+  const yearGrid = buildTimeRows(yearRange, 'year');
+  const juneOccurrences = Array.from({ length: 10 }, (_, index) => ({
+    id: `rule_morning:${index + 1}`,
+    ruleId: 'rule_morning',
+    virtual: true,
+    type: 'plan',
+    title: '晨跑',
+    startedAt: new Date(2026, 5, index + 1, 7, 0).getTime(),
+    endedAt: new Date(2026, 5, index + 1, 8, 0).getTime()
+  }));
+  const otherRule = {
+    id: 'rule_review:1',
+    ruleId: 'rule_review',
+    virtual: true,
+    type: 'plan',
+    title: '周复盘',
+    startedAt: new Date(2026, 5, 2, 9, 0).getTime(),
+    endedAt: new Date(2026, 5, 2, 10, 0).getTime()
+  };
+  const ordinaryPlan = {
+    id: 'event_oneoff',
+    type: 'plan',
+    virtual: false,
+    title: '一次性计划',
+    startedAt: new Date(2026, 5, 3, 14, 0).getTime(),
+    endedAt: new Date(2026, 5, 3, 15, 0).getTime()
+  };
+  const confirmedLog = {
+    id: 'log_1',
+    type: 'confirmed',
+    virtual: false,
+    originRuleId: 'rule_morning',
+    title: '晨跑',
+    startedAt: new Date(2026, 5, 4, 7, 0).getTime(),
+    endedAt: new Date(2026, 5, 4, 8, 0).getTime()
+  };
+  const julyOccurrence = {
+    id: 'rule_morning:july',
+    ruleId: 'rule_morning',
+    virtual: true,
+    type: 'plan',
+    title: '晨跑',
+    startedAt: new Date(2026, 6, 1, 7, 0).getTime(),
+    endedAt: new Date(2026, 6, 1, 8, 0).getTime()
+  };
+
+  const yearRows = buildCoarseCalendarRows(
+    juneOccurrences.concat(otherRule, ordinaryPlan, confirmedLog, julyOccurrence),
+    yearRange,
+    'year',
+    yearGrid
+  );
+  const june = yearRows[5];
+  const july = yearRows[6];
+  assert.deepEqual(
+    june.blocks.filter((block) => block.virtual).map((block) => block.id),
+    ['rule_morning:1', 'rule_review:1']
+  );
+  assert.equal(june.blocks.some((block) => block.id === 'event_oneoff'), true);
+  assert.equal(june.blocks.some((block) => block.id === 'log_1'), true);
+  assert.equal(june.blocks.length, 4);
+  assert.deepEqual(july.blocks.map((block) => block.id), ['rule_morning:july']);
+
+  const weekRange = rangeForView(new Date(2026, 5, 1).getTime(), 'week');
+  const weekGrid = buildTimeRows(weekRange, 'week');
+  const weekRows = buildCoarseCalendarRows(juneOccurrences.slice(0, 3), weekRange, 'week', weekGrid);
+  assert.equal(weekRows[0].blocks.map((block) => block.id).join(','), 'rule_morning:1');
+  assert.equal(weekRows[1].blocks.map((block) => block.id).join(','), 'rule_morning:2');
+  assert.equal(weekRows[2].blocks.map((block) => block.id).join(','), 'rule_morning:3');
+
+  const monthRange = rangeForView(new Date(2026, 5, 1).getTime(), 'month');
+  const monthGrid = buildTimeRows(monthRange, 'month');
+  const monthRows = buildCoarseCalendarRows(juneOccurrences.slice(0, 3), monthRange, 'month', monthGrid);
+  assert.equal(monthRows[0].blocks.length, 1);
+  assert.equal(monthRows[1].blocks.length, 1);
+  assert.equal(monthRows[2].blocks.length, 1);
+});
+
 test('重叠条目超过可见轨道上限时用最后一条轨道聚合为 +N', () => {
   const range = rangeForView(new Date(2026, 7, 8).getTime(), 'day');
   const grid = buildTimeRows(range, 'day');

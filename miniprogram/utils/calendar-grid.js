@@ -168,6 +168,11 @@ function coarseBlockWidthRpx(block) {
   );
 }
 
+function yearViewVirtualRuleKey(item) {
+  if (!item.virtual) return null;
+  return item.ruleId || item.originRuleId || null;
+}
+
 function packCoarseBlocks(blocks) {
   const lines = [];
   blocks.forEach((block) => {
@@ -195,13 +200,21 @@ function packCoarseBlocks(blocks) {
 function buildCoarseCalendarRows(items, range, view, grid = buildTimeRows(range, view)) {
   if (view === 'day') return grid.rows.map((row) => ({ ...row, blocks: [] }));
   const rows = grid.rows.map((row) => ({ ...row, blocks: [] }));
+  const seenRuleIdsByRow = view === 'year' ? rows.map(() => new Set()) : null;
   (items || []).forEach((item, sourceIndex) => {
     if (!Number.isFinite(item.startedAt)
       || !Number.isFinite(item.endedAt)
       || item.endedAt <= item.startedAt) return;
     let segmentIndex = 0;
-    rows.forEach((row) => {
+    rows.forEach((row, rowIndex) => {
       if (item.endedAt <= row.start || item.startedAt >= row.end) return;
+      if (seenRuleIdsByRow) {
+        const ruleKey = yearViewVirtualRuleKey(item);
+        if (ruleKey) {
+          if (seenRuleIdsByRow[rowIndex].has(ruleKey)) return;
+          seenRuleIdsByRow[rowIndex].add(ruleKey);
+        }
+      }
       const type = visualType(item);
       row.blocks.push({
         ...item,
