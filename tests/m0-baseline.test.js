@@ -52,8 +52,9 @@ test('M0：sitemap 仅收录业务页面，明确禁止收录数据恢复页', (
   ]);
 });
 
-test('M0：启动期数据恢复页已注册且不属于 tabBar', () => {
+test('M0：启动页为日历，数据恢复页已注册且不属于 tabBar', () => {
   const appConfig = require('../miniprogram/app.json');
+  assert.equal(appConfig.pages[0], 'pages/calendar/index');
   assert.ok(appConfig.pages.includes('pages/data-recovery/index'));
   assert.equal(
     appConfig.tabBar.list.some((item) => item.pagePath === 'pages/data-recovery/index'),

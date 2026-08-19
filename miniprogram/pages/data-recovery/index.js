@@ -46,7 +46,7 @@ Page({
   onLoad() {
     const bootstrap = getApp().globalData.bootstrap;
     if (!bootstrap || bootstrap.mode !== 'data-recovery') {
-      wx.reLaunch({ url: '/pages/timer/index' });
+      wx.reLaunch({ url: '/pages/calendar/index' });
       return;
     }
     const reason = bootstrap.recoveryReason;
@@ -286,7 +286,7 @@ Page({
         throw new Error('新资料库仍无法启动，请先保留原始数据');
       }
       wx.showToast({ title: message, icon: 'success' });
-      wx.reLaunch({ url: '/pages/timer/index' });
+      wx.reLaunch({ url: '/pages/calendar/index' });
     } catch (error) {
       this.setData({ busy: false });
       showError(error);

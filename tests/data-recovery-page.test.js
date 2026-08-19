@@ -171,10 +171,10 @@ test('恢复页按故障原因展示不同标题且不依赖应用服务', () =>
   }
 });
 
-test('恢复页在非恢复模式下返回计时页，不加载恢复内容', () => {
+test('恢复页在非恢复模式下返回日历页，不加载恢复内容', () => {
   const harness = createHarness({ bootstrapMode: 'ready' });
   try {
-    assert.deepEqual(harness.calls.reLaunch, [{ url: '/pages/timer/index' }]);
+    assert.deepEqual(harness.calls.reLaunch, [{ url: '/pages/calendar/index' }]);
     assert.equal(harness.page.data.title, '本地数据损坏');
     assert.equal(harness.page.data.explanation, '');
     assert.equal(harness.calls.exportRawData, 0);
@@ -309,7 +309,7 @@ test('救援文件删除失败只记录固定告警，不把发送成功误报�
   }
 });
 
-test('选择 JSON 后只准备预览，明确确认后才覆盖并回到计时页', () => {
+test('选择 JSON 后只准备预览，明确确认后才覆盖并回到日历页', () => {
   const harness = createHarness();
   try {
     harness.page.chooseReplacementFile();
@@ -320,7 +320,7 @@ test('选择 JSON 后只准备预览，明确确认后才覆盖并回到计时�
     harness.page.confirmReplacement();
     assert.deepEqual(harness.calls.commitReplacement, ['replacement_1']);
     assert.equal(harness.calls.rebuildBootstrap, 1);
-    assert.deepEqual(harness.calls.reLaunch, [{ url: '/pages/timer/index' }]);
+    assert.deepEqual(harness.calls.reLaunch, [{ url: '/pages/calendar/index' }]);
   } finally { harness.restore(); }
 });
 

@@ -1,9 +1,9 @@
 {
   "pages": [
-    "pages/timer/index",
-    "pages/data-recovery/index",
-    "pages/plans/index",
     "pages/calendar/index",
+    "pages/data-recovery/index",
+    "pages/timer/index",
+    "pages/plans/index",
     "pages/profile/index"
   ],
   "window": {
