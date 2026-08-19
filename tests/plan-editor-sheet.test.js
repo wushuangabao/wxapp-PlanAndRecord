@@ -63,18 +63,27 @@ function createInitialValue(overrides = {}) {
   };
 }
 
-test('iOS：计划输入框复用其他底部弹窗的原生非同层避让', () => {
+test('iOS：计划弹窗挂到页面根节点并保留原生输入框自动上推', () => {
   const wxml = fs.readFileSync(componentWxmlPath, 'utf8');
   const wxss = fs.readFileSync(componentWxssPath, 'utf8');
   const definition = loadDefinition();
   const inputs = wxml.match(/<input\b[^>]*\/>/g) || [];
+  const rootPortals = wxml.match(/<root-portal\b[^>]*>/g) || [];
 
   assert.equal(inputs.length, 2);
+  assert.equal(rootPortals.length, 1);
+  assert.match(rootPortals[0], /wx:if="\{\{visible\}\}"/);
+  assert.match(rootPortals[0], /enable="\{\{true\}\}"/);
+  assert.match(
+    wxml,
+    /<root-portal\b[^>]*>[\s\S]*class="modal-mask"[\s\S]*class="modal-mask task-picker-mask"[\s\S]*<\/root-portal>/
+  );
   assert.equal(definition.options.virtualHost, true);
   assert.equal(definition.data.keyboardHeight, undefined);
   assert.equal(definition.methods.onKeyboardHeightChange, undefined);
   inputs.forEach((input) => {
-    assert.doesNotMatch(input, /always-embed|adjust-position|bindfocus|bindblur/);
+    assert.doesNotMatch(input, /always-embed|bindfocus|bindblur/);
+    assert.match(input, /adjust-position="\{\{true\}\}"/);
   });
   assert.equal(definition.methods.onEditorInputFocus, undefined);
   assert.equal(definition.methods.onEditorInputBlur, undefined);
