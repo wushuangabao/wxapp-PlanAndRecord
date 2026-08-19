@@ -24,9 +24,9 @@
 .todo-control { display: flex; flex: 0 0 36rpx; align-items: center; justify-content: center; box-sizing: border-box; width: 36rpx; height: 56rpx; border-radius: 12rpx; }
 .todo-control:active { background: #e6ece7; }
 .todo-check { display: flex; flex: 0 0 36rpx; align-items: center; justify-content: center; box-sizing: border-box; width: 36rpx; height: 36rpx; border: 2rpx solid #a9bdae; border-radius: 10rpx; color: #17251d; font-size: 24rpx; }
-.todo-timer-icon { position: relative; box-sizing: border-box; width: 32rpx; height: 32rpx; border: 3rpx solid #ad6a3f; border-radius: 50%; color: #ad6a3f; }
-.todo-timer-crown { position: absolute; top: -8rpx; left: 9rpx; box-sizing: border-box; width: 9rpx; height: 6rpx; border: 2rpx solid currentColor; border-bottom: 0; border-radius: 2rpx 2rpx 0 0; }
-.todo-timer-hand { position: absolute; top: 5rpx; left: 12rpx; width: 3rpx; height: 11rpx; border-radius: 2rpx; background: currentColor; transform-origin: 50% 9rpx; }
+.todo-timer-icon { position: relative; box-sizing: border-box; width: 32rpx; height: 32rpx; overflow: visible; border: 3rpx solid #ad6a3f; border-radius: 50%; color: #ad6a3f; }
+.todo-timer-crown { position: absolute; top: -8rpx; left: 50%; box-sizing: border-box; width: 8rpx; height: 6rpx; border: 2rpx solid currentColor; border-bottom: 0; border-radius: 2rpx 2rpx 0 0; transform: translateX(-50%); }
+.todo-timer-hand { position: absolute; top: 50%; left: 50%; width: 3rpx; height: 10rpx; margin: -10rpx 0 0 -1.5rpx; border-radius: 2rpx; background: currentColor; transform-origin: 50% 100%; }
 .todo-timer-icon.is-running .todo-timer-hand { animation: todo-timer-tick 1.2s linear infinite; }
 .todo-timer-icon.is-paused { border-color: #ad6a3f; }
 .todo-timer-pause { position: absolute; right: -10rpx; bottom: -8rpx; min-width: 18rpx; border-radius: 9rpx; background: #faf9f7; color: #ad6a3f; font-size: 13rpx; font-weight: 700; line-height: 18rpx; text-align: center; }
