@@ -21,19 +21,27 @@
     "list": [
       {
         "pagePath": "pages/timer/index",
-        "text": "记录"
+        "text": "",
+        "iconPath": "images/tabbar/record.png",
+        "selectedIconPath": "images/tabbar/record-active.png"
       },
       {
         "pagePath": "pages/plans/index",
-        "text": "计划"
+        "text": "",
+        "iconPath": "images/tabbar/plan.png",
+        "selectedIconPath": "images/tabbar/plan-active.png"
       },
       {
         "pagePath": "pages/calendar/index",
-        "text": "日历"
+        "text": "",
+        "iconPath": "images/tabbar/calendar.png",
+        "selectedIconPath": "images/tabbar/calendar-active.png"
       },
       {
         "pagePath": "pages/profile/index",
-        "text": "我的"
+        "text": "",
+        "iconPath": "images/tabbar/profile.png",
+        "selectedIconPath": "images/tabbar/profile-active.png"
       }
     ]
   },
