@@ -47,6 +47,10 @@ function calendarBlockDomId(id) {
   return `calendar-block-${String(id || '').replace(/[^A-Za-z0-9_-]/g, '-')}`;
 }
 
+function rangeIncludesTimestamp(range, timestamp) {
+  return timestamp >= range.start && timestamp <= range.end;
+}
+
 function priorityAriaLabel(priority) {
   return ['', '低优先级', '中优先级', '高优先级'][Number(priority)] || '';
 }
@@ -392,7 +396,7 @@ Page({
         timeRows,
         canvasHeight: grid.canvasHeight,
         rangeLabel: formatRangeLabel(range, this.data.view),
-        rangeIncludesToday: now >= range.start && now <= range.end,
+        rangeIncludesToday: rangeIncludesTimestamp(range, now),
         currentTimeLineRowIndex,
         currentTimeLineStyle
       }, () => {
@@ -408,17 +412,30 @@ Page({
     if (view === this.data.view) return;
     this.cancelPageTurn();
     if (!this.viewScrollTops) this.viewScrollTops = {};
+    const now = Date.now();
+    const previousRangeIncludesToday = rangeIncludesTimestamp(
+      rangeForView(this.data.anchor, this.data.view),
+      now
+    );
+    const nextRangeIncludesToday = rangeIncludesTimestamp(
+      rangeForView(this.data.anchor, view),
+      now
+    );
+    const shouldFocusCurrentTime = previousRangeIncludesToday && nextRangeIncludesToday;
     const hasSavedScrollTop = Object.prototype.hasOwnProperty.call(this.viewScrollTops, view);
-    const calendarScrollTop = this.viewScrollTops[view] || 0;
+    const calendarScrollTop = shouldFocusCurrentTime ? 0 : (this.viewScrollTops[view] || 0);
     this.currentCalendarScrollTop = calendarScrollTop;
+    if (shouldFocusCurrentTime) this.viewScrollTops[view] = 0;
     this.setData({
       view,
       calendarScrollTop,
       calendarScrollWithAnimation: false,
       scrollIntoView: ''
     }, () => {
-      this.refresh();
-      if (!hasSavedScrollTop) this.focusCurrentHour();
+      this.refresh(() => {
+        if (shouldFocusCurrentTime) this.focusCurrentTime(now);
+        else if (!hasSavedScrollTop) this.focusCurrentHour(now);
+      });
     });
   },
 
@@ -488,7 +505,7 @@ Page({
   refreshCurrentTimeLine(now = Date.now()) {
     const range = rangeForView(this.data.anchor, this.data.view);
     const grid = buildTimeRows(range, this.data.view);
-    const rangeIncludesToday = now >= range.start && now <= range.end;
+    const rangeIncludesToday = rangeIncludesTimestamp(range, now);
     if (this.data.view !== 'day') {
       const placement = currentTimeLinePlacement(now, range, grid);
       const currentTimeLineRowIndex = placement ? placement.rowIndex : -1;

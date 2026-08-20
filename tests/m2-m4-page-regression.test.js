@@ -670,23 +670,72 @@ test('日历每月固定日程提交 monthDays 且不再写入 monthDay', () => 
   }
 });
 
-test('日历切换粒度恢复已有滚动位置，仅首次进入日视图定位当前小时', () => {
+test('日历从含今天的视图切换粒度后定位当前时间线，不含今天时恢复滚动位置', () => {
+  const now = new Date(2026, 7, 14, 17, 20).getTime();
+  const mondayThisWeek = new Date(2026, 7, 10).getTime();
+  const lastMonth = new Date(2026, 5, 1).getTime();
   const page = loadCalendarPage();
-  page.refresh = () => {};
-  let focusCount = 0;
-  page.focusCurrentHour = () => { focusCount += 1; };
-  page.data.view = 'week';
-  page.viewScrollTops = { day: 640, week: 128 };
+  const originalNow = Date.now;
+  Date.now = () => now;
+  try {
+    let afterRefresh;
+    const focusedAt = [];
+    let hourFocusCount = 0;
+    page.refresh = (callback) => { afterRefresh = callback; };
+    page.focusCurrentTime = (timestamp) => focusedAt.push(timestamp);
+    page.focusCurrentHour = (timestamp) => {
+      hourFocusCount += 1;
+      focusedAt.push(['hour', timestamp]);
+    };
 
-  page.changeView({ currentTarget: { dataset: { view: 'day' } } });
-  assert.equal(page.data.calendarScrollTop, 640);
-  assert.equal(focusCount, 0);
+    page.data.view = 'week';
+    page.data.anchor = now;
+    page.viewScrollTops = { month: 640, week: 128, day: 320 };
+    page.changeView({ currentTarget: { dataset: { view: 'month' } } });
+    assert.equal(page.data.view, 'month');
+    assert.equal(page.data.calendarScrollTop, 0);
+    assert.equal(page.viewScrollTops.month, 0);
+    assert.deepEqual(focusedAt, []);
+    afterRefresh();
+    assert.deepEqual(focusedAt, [now]);
 
-  page.data.view = 'week';
-  delete page.viewScrollTops.day;
-  page.changeView({ currentTarget: { dataset: { view: 'day' } } });
-  assert.equal(page.data.calendarScrollTop, 0);
-  assert.equal(focusCount, 1);
+    focusedAt.length = 0;
+    page.data.view = 'week';
+    page.data.anchor = mondayThisWeek;
+    page.viewScrollTops = { day: 640, week: 128 };
+    page.changeView({ currentTarget: { dataset: { view: 'day' } } });
+    assert.equal(page.data.calendarScrollTop, 640);
+    afterRefresh();
+    assert.deepEqual(focusedAt, []);
+
+    page.data.view = 'month';
+    page.data.anchor = lastMonth;
+    page.viewScrollTops = { week: 220, month: 80 };
+    page.changeView({ currentTarget: { dataset: { view: 'week' } } });
+    assert.equal(page.data.calendarScrollTop, 220);
+    afterRefresh();
+    assert.deepEqual(focusedAt, []);
+
+    delete page.viewScrollTops.day;
+    page.data.view = 'week';
+    page.data.anchor = lastMonth;
+    page.changeView({ currentTarget: { dataset: { view: 'day' } } });
+    assert.equal(page.data.calendarScrollTop, 0);
+    afterRefresh();
+    assert.equal(hourFocusCount, 1);
+    assert.deepEqual(focusedAt, [['hour', now]]);
+
+    const livePage = loadCalendarPage();
+    livePage.data.view = 'week';
+    livePage.data.anchor = now;
+    livePage.viewScrollTops = { month: 640 };
+    livePage.refresh = (callback) => { afterRefresh = callback; };
+    livePage.changeView({ currentTarget: { dataset: { view: 'month' } } });
+    afterRefresh();
+    assert.equal(livePage.data.scrollIntoView, 'calendar-time-row-13');
+  } finally {
+    Date.now = originalNow;
+  }
 });
 
 test('日历点击今天会在刷新完成后定位各粒度的当前时间行', () => {
