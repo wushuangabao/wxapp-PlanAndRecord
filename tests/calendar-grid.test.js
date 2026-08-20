@@ -9,6 +9,7 @@ const {
   currentTimeLinePosition,
   currentTimeLinePlacement,
   buildTimeRows,
+  coarseCollapsedVisibleLineCount,
   defaultPlanDate,
   formatRangeLabel
 } = require('../miniprogram/utils/calendar-grid');
@@ -240,12 +241,40 @@ test('粗粒度布局允许后续短块回填前序长块留下的行空隙', ()
     ['first', 'digits-1', 'digits-2', 'digits-3', 'backfill', 'long']
   );
   assert.equal(friday.coarseLineCount, 2);
+  assert.equal(friday.coarseLineCount > coarseCollapsedVisibleLineCount('week'), false);
   assert.deepEqual(
     friday.blocks.map((block) => block.coarseLineIndex),
     [0, 0, 0, 0, 0, 1]
   );
   assert.equal(friday.blocks.every((block) => Number.isFinite(block.coarseWidth)), true);
   assert.equal(friday.blocks.find((block) => block.id === 'long').coarseWidth <= 300, true);
+});
+
+test('周视图折叠后仍保留前两行，月和年只保留第一行', () => {
+  assert.equal(coarseCollapsedVisibleLineCount('week'), 2);
+  assert.equal(coarseCollapsedVisibleLineCount('month'), 1);
+  assert.equal(coarseCollapsedVisibleLineCount('year'), 1);
+
+  const range = rangeForView(new Date(2026, 7, 14, 12, 0).getTime(), 'week');
+  const grid = buildTimeRows(range, 'week');
+  const startedAt = new Date(2026, 7, 14, 9, 0).getTime();
+  const endedAt = new Date(2026, 7, 14, 10, 0).getTime();
+  const items = Array.from({ length: 12 }, (_, index) => ({
+    id: `item-${index}`,
+    title: '测试计划名称',
+    type: 'plan',
+    startedAt,
+    endedAt
+  }));
+  const friday = buildCoarseCalendarRows(items, range, 'week', grid).find((row) => row.index === 4);
+  const visibleLineCount = coarseCollapsedVisibleLineCount('week');
+
+  assert.ok(friday.coarseLineCount > visibleLineCount);
+  const visibleWhenCollapsed = friday.blocks.filter((block) => block.coarseLineIndex < visibleLineCount);
+  assert.equal(Math.max(...visibleWhenCollapsed.map((block) => block.coarseLineIndex)) + 1, visibleLineCount);
+  assert.ok(visibleWhenCollapsed.length < friday.blocks.length);
+  assert.equal(friday.blocks.some((block) => block.coarseLineIndex === 0), true);
+  assert.equal(friday.blocks.some((block) => block.coarseLineIndex === 1), true);
 });
 
 test('年视图同一月份内同一固定日程只显示一次，周月视图仍按实例分段', () => {

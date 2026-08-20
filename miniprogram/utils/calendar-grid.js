@@ -171,6 +171,10 @@ function yearViewVirtualRuleKey(item) {
   return item.ruleId || item.originRuleId || null;
 }
 
+function coarseCollapsedVisibleLineCount(view) {
+  return view === 'week' ? 2 : 1;
+}
+
 function packCoarseBlocks(blocks) {
   const lines = [];
   blocks.forEach((block) => {
@@ -491,6 +495,7 @@ module.exports = {
   buildCalendarBlocks,
   buildCoarseCalendarRows,
   buildTimeRows,
+  coarseCollapsedVisibleLineCount,
   currentTimeLinePlacement,
   currentTimeLinePosition,
   defaultPlanDate,

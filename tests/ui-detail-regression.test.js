@@ -74,7 +74,7 @@ test('日历粗粒度视图使用定高内容块换行并允许时间格自然�
   assert.match(wxml, /data-item="\{\{block\}\}"[^>]*bindtap="openItemDetail"/);
   assert.match(wxml, /class="coarse-time-label is-collapsible \{\{row\.isCollapsed \? 'is-collapsed' : ''\}\} \{\{view === 'week' \|\| view === 'month' \? 'is-week' : ''\}\}"[^>]*role="button"[^>]*bindtap="toggleCoarseRow"/);
   assert.match(wxml, /class="coarse-time-label-content"[\s\S]*class="coarse-time-label-text"[\s\S]*class="coarse-collapse-indicator"/);
-  assert.match(wxml, /wx:for-item="block"[^>]*wx:if="\{\{!row\.isCollapsed \|\| block\.coarseLineIndex === 0\}\}"/);
+  assert.match(wxml, /wx:for-item="block"[^>]*wx:if="\{\{!row\.isCollapsed \|\| block\.coarseLineIndex < row\.collapsedVisibleLineCount\}\}"/);
 
   const coarseRowStyle = wxss.match(/\.coarse-calendar-row\s*\{[^}]*\}/s)[0];
   assert.match(coarseRowStyle, /display:\s*flex;/);
@@ -90,6 +90,9 @@ test('日历粗粒度视图使用定高内容块换行并允许时间格自然�
   assert.doesNotMatch(wxss, /\.coarse-time-label\.is-collapsed \.coarse-collapse-indicator\s*\{[^}]*margin-/s);
 
   assert.match(script, /buildCoarseCalendarRows/);
+  assert.match(script, /coarseCollapsedVisibleLineCount\(this\.data\.view\)/);
+  assert.match(script, /row\.coarseLineCount > collapsedVisibleLineCount/);
+  assert.match(script, /collapsedVisibleLineCount,/);
   assert.match(script, /currentTimeLinePlacement/);
   assert.match(script, /this\.data\.view === 'day'[\s\S]*buildCalendarBlocks/);
   assert.doesNotMatch(script, /timeline\s*=\s*timeRows\.flatMap/);

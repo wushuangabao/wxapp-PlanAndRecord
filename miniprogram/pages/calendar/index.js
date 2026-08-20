@@ -6,6 +6,7 @@ const {
   buildCalendarBlocks,
   buildCoarseCalendarRows,
   buildTimeRows,
+  coarseCollapsedVisibleLineCount,
   currentTimeLinePlacement,
   currentTimeLinePosition,
   formatRangeLabel
@@ -357,6 +358,7 @@ Page({
           : `top: ${currentTimeTop.toFixed(2)}rpx;`;
       } else {
         if (!this.collapsedCoarseRowKeys) this.collapsedCoarseRowKeys = new Set();
+        const collapsedVisibleLineCount = coarseCollapsedVisibleLineCount(this.data.view);
         timeRows = buildCoarseCalendarRows(
           filteredTimeline,
           range,
@@ -364,12 +366,13 @@ Page({
           grid
         ).map((row) => {
           const collapseKey = coarseRowCollapseKey(this.data.view, row);
-          const isCollapsible = row.coarseLineCount > 1;
+          const isCollapsible = row.coarseLineCount > collapsedVisibleLineCount;
           return {
             ...row,
             collapseKey,
             isCollapsible,
             isCollapsed: isCollapsible && this.collapsedCoarseRowKeys.has(collapseKey),
+            collapsedVisibleLineCount,
             coarseMinHeight: grid.rowHeight,
             blocks: row.blocks.map(decorateBlock)
           };

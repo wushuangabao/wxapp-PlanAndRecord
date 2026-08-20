@@ -94,7 +94,7 @@
               wx:for="{{row.blocks}}"
               wx:key="renderKey"
               wx:for-item="block"
-              wx:if="{{!row.isCollapsed || block.coarseLineIndex === 0}}"
+              wx:if="{{!row.isCollapsed || block.coarseLineIndex < row.collapsedVisibleLineCount}}"
               id="{{block.domId}}"
               class="calendar-block coarse-calendar-block {{block.visualType}} {{block.priorityClass}} {{block.continuesBefore ? 'continues-before' : ''}} {{block.continuesAfter ? 'continues-after' : ''}} {{block.overlapMeta ? 'is-overlapping' : ''}}"
               style="width: {{block.coarseWidth}}rpx;"
