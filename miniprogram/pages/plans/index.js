@@ -32,6 +32,19 @@ const TODO_SORT_FIELD_OPTIONS = Object.freeze([
   { field: 'status', label: '完成情况' }
 ]);
 const DEFAULT_TODO_SORT_CRITERIA = Object.freeze([{ field: 'createdAt', direction: 'desc' }]);
+const TODO_PLAN_FILTERS = Object.freeze([{
+  value: 'all',
+  label: '查看全部',
+  emptyText: '还没有 TODO，点右上角 + 创建一条。'
+}, {
+  value: 'plan',
+  label: '只看计划',
+  emptyText: '当前没有关联计划的 TODO。'
+}, {
+  value: 'unplanned',
+  label: '不看计划',
+  emptyText: '当前没有未关联计划的 TODO。'
+}]);
 
 function completionUndoLogTitle(log) {
   return log.taskNameSnapshot || log.note || '时间记录';
@@ -201,6 +214,24 @@ function todoSortAvailableFields(criteria) {
   return TODO_SORT_FIELD_OPTIONS.filter((option) => !usedFields.has(option.field)).map((option) => ({ ...option }));
 }
 
+function todoPlanFilterOption(value) {
+  return TODO_PLAN_FILTERS.find((item) => item.value === value) || TODO_PLAN_FILTERS[0];
+}
+
+function taskHasPlanAssociations(task) {
+  return Boolean(task && (
+    task.hasPlanAssociations
+    || task.entityPlanCount
+    || task.repeatRuleCount
+  ));
+}
+
+function todoTaskMatchesPlanFilter(task, filter) {
+  if (filter === 'plan') return taskHasPlanAssociations(task);
+  if (filter === 'unplanned') return !taskHasPlanAssociations(task);
+  return true;
+}
+
 function buildTaskViewModels(tasks, projects, planStates = new Map()) {
   const projectsById = new Map(projects.map((project) => [project.id, project]));
   return tasks.map((task) => {
@@ -223,7 +254,13 @@ function buildTaskViewModels(tasks, projects, planStates = new Map()) {
       planCandidates: planState ? planState.candidates : [],
       entityPlanCount: planState ? planState.entityPlans.length : 0,
       repeatRuleCount: planState ? planState.repeatRules.length : 0,
-      hasPlanAssociations: Boolean(planState && planState.hasPlanAssociations),
+      hasPlanAssociations: Boolean(
+        planState && (
+          planState.hasPlanAssociations
+          || (planState.entityPlans && planState.entityPlans.length)
+          || (planState.repeatRules && planState.repeatRules.length)
+        )
+      ),
       completionUndoLogId: planState && planState.completionUndoLog
         ? planState.completionUndoLog.id
         : ''
@@ -350,6 +387,9 @@ Page({
     todoSortEditorItems: [],
     todoSortAvailableFields: [],
     isTodoSortOpen: false,
+    todoPlanFilter: 'all',
+    todoPlanFilterLabel: '查看全部',
+    todoEmptyText: '还没有 TODO，点右上角 + 创建一条。',
     todoListTasks: [],
     todoListColumns: [],
     todoColumnIndex: 0,
@@ -486,7 +526,11 @@ Page({
         : new Map();
       const tasks = buildTaskViewModels(snapshot.tasks, projects, planStates);
       const wishes = snapshot.wishes.slice();
-      const todoListTasks = sortTodoTasks(tasks.filter((task) => task.topVisible), todoSortCriteria);
+      const todoPlanFilter = todoPlanFilterOption(this.data.todoPlanFilter);
+      const todoListTasks = sortTodoTasks(
+        tasks.filter((task) => task.topVisible && todoTaskMatchesPlanFilter(task, todoPlanFilter.value)),
+        todoSortCriteria
+      );
       const todoListColumns = buildTodoColumns(todoListTasks);
       const wishListColumns = buildWishColumns(wishes);
       const activeProjects = projects.filter((project) => project.status === 'active');
@@ -517,6 +561,9 @@ Page({
         projects,
         activeProjects,
         todoSortCriteria,
+        todoPlanFilter: todoPlanFilter.value,
+        todoPlanFilterLabel: todoPlanFilter.label,
+        todoEmptyText: todoPlanFilter.emptyText,
         collapsedProjectIds,
         projectDeadlineScrollIds,
         expandedProjectIds,
@@ -549,6 +596,16 @@ Page({
     } catch (error) {
       showError(error);
     }
+  },
+
+  cycleTodoPlanFilter() {
+    const currentIndex = TODO_PLAN_FILTERS.findIndex((item) => item.value === this.data.todoPlanFilter);
+    const next = TODO_PLAN_FILTERS[(currentIndex + 1) % TODO_PLAN_FILTERS.length];
+    this.setData({
+      todoPlanFilter: next.value,
+      todoPlanFilterLabel: next.label,
+      todoEmptyText: next.emptyText
+    }, () => this.refresh({ resetTodoColumn: true }));
   },
 
   openTodoSort() {
@@ -988,25 +1045,43 @@ Page({
   },
 
   onTodoTitleInput(event) {
+    const dataset = event && event.currentTarget ? event.currentTarget.dataset || {} : {};
+    if (dataset.id && (
+      dataset.id !== this.data.todoTitleEditTaskId
+      || (dataset.editSource && dataset.editSource !== this.data.todoTitleEditSource)
+    )) return;
     this.setData({ todoTitleEditValue: limitTitleCodePoints(event.detail.value) });
   },
 
   saveTodoTitle(event) {
-    const taskId = this.data.todoTitleEditTaskId;
+    const dataset = event && event.currentTarget ? event.currentTarget.dataset || {} : {};
+    const taskId = dataset.id || this.data.todoTitleEditTaskId;
+    const editSource = dataset.editSource || this.data.todoTitleEditSource;
     if (!taskId) return;
+    const clearCurrentEditor = () => {
+      if (
+        this.data.todoTitleEditTaskId !== taskId
+        || this.data.todoTitleEditSource !== editSource
+      ) return;
+      this.setData({ todoTitleEditTaskId: '', todoTitleEditValue: '', todoTitleEditSource: '' });
+    };
     const task = this.data.tasks.find((item) => item.id === taskId);
     if (!task) {
-      this.setData({ todoTitleEditTaskId: '', todoTitleEditValue: '', todoTitleEditSource: '' });
+      clearCurrentEditor();
       return;
     }
-    const title = limitTitleCodePoints(event && event.detail ? event.detail.value : this.data.todoTitleEditValue);
+    const hasEventValue = Boolean(event && event.detail && typeof event.detail.value === 'string');
+    const isCurrentEditor = this.data.todoTitleEditTaskId === taskId
+      && this.data.todoTitleEditSource === editSource;
+    if (!hasEventValue && !isCurrentEditor) return;
+    const title = limitTitleCodePoints(hasEventValue ? event.detail.value : this.data.todoTitleEditValue);
     if (title === task.title) {
-      this.setData({ todoTitleEditTaskId: '', todoTitleEditValue: '', todoTitleEditSource: '' });
+      clearCurrentEditor();
       return;
     }
     try {
       getService().updateTask(taskId, { title });
-      this.setData({ todoTitleEditTaskId: '', todoTitleEditValue: '', todoTitleEditSource: '' });
+      clearCurrentEditor();
       showSaved('TODO 已更新');
       this.refresh();
     } catch (error) {

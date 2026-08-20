@@ -423,6 +423,61 @@ test('计划页：点击 TODO 标题就地编辑，输入完成后只更新标�
   }
 });
 
+test('计划页：迟到的旧标题 blur 只保存原任务，不覆盖新聚焦任务', () => {
+  const tasks = [
+    { id: 'task_a', title: '标题 A', status: TASK_STATUS.TODO, projectId: null, updatedAt: 20 },
+    { id: 'task_b', title: '标题 B', status: TASK_STATUS.TODO, projectId: null, updatedAt: 10 }
+  ];
+  const harness = createHarness({ tasks });
+  try {
+    harness.page.openTodoTitleEditor({
+      currentTarget: { dataset: { id: 'task_a', editSource: 'todo' } }
+    });
+    harness.page.openTodoTitleEditor({
+      currentTarget: { dataset: { id: 'task_b', editSource: 'todo' } }
+    });
+
+    harness.page.onTodoTitleInput({
+      currentTarget: { dataset: { id: 'task_a', editSource: 'todo' } },
+      detail: { value: '标题 A' }
+    });
+    harness.page.saveTodoTitle({
+      currentTarget: { dataset: { id: 'task_a', editSource: 'todo' } },
+      detail: { value: '标题 A' }
+    });
+
+    assert.deepEqual(harness.calls.updateTask, []);
+    assert.equal(tasks[1].title, '标题 B');
+    assert.equal(harness.page.data.todoTitleEditTaskId, 'task_b');
+    assert.equal(harness.page.data.todoTitleEditValue, '标题 B');
+    assert.equal(harness.page.data.todoTitleEditSource, 'todo');
+    assert.equal(harness.wxState.toast, undefined);
+
+    harness.page.openTodoTitleEditor({
+      currentTarget: { dataset: { id: 'task_a', editSource: 'todo' } }
+    });
+    harness.page.onTodoTitleInput({
+      currentTarget: { dataset: { id: 'task_a', editSource: 'todo' } },
+      detail: { value: '标题 A 已修改' }
+    });
+    harness.page.openTodoTitleEditor({
+      currentTarget: { dataset: { id: 'task_b', editSource: 'todo' } }
+    });
+    harness.page.saveTodoTitle({
+      currentTarget: { dataset: { id: 'task_a', editSource: 'todo' } },
+      detail: { value: '标题 A 已修改' }
+    });
+
+    assert.deepEqual(harness.calls.updateTask, [['task_a', { title: '标题 A 已修改' }]]);
+    assert.equal(tasks[0].title, '标题 A 已修改');
+    assert.equal(tasks[1].title, '标题 B');
+    assert.equal(harness.page.data.todoTitleEditTaskId, 'task_b');
+    assert.equal(harness.page.data.todoTitleEditValue, '标题 B');
+  } finally {
+    harness.restore();
+  }
+});
+
 test('计划页：项目区标题编辑只在项目区自动聚焦，并在保存后清空编辑来源', () => {
   const harness = createHarness();
   try {
@@ -441,6 +496,11 @@ test('计划页：项目区标题编辑只在项目区自动聚焦，并在保�
     assert.match(wxml, /<input wx:if="\{\{todoTitleEditTaskId === task\.id && todoTitleEditSource === 'todo'\}\}" class="todo-title-input"/);
     assert.equal(
       (wxml.match(/<input wx:if="\{\{todoTitleEditTaskId === task\.id && todoTitleEditSource === 'project'\}\}" class="todo-title-input"/g) || []).length,
+      2
+    );
+    assert.match(wxml, /todoTitleEditSource === 'todo'\}\}" class="todo-title-input" data-id="\{\{task\.id\}\}" data-edit-source="todo"/);
+    assert.equal(
+      (wxml.match(/todoTitleEditSource === 'project'\}\}" class="todo-title-input" data-id="\{\{task\.id\}\}" data-edit-source="project"/g) || []).length,
       2
     );
   } finally {
@@ -1213,6 +1273,97 @@ test('计划页：TODO 排序入口和多级排序面板使用共享弹窗头部
   assert.match(wxss, /\.todo-header-actions\s*\{[^}]*display:\s*flex;[^}]*align-items:\s*center;/s);
   assert.match(wxss, /\.todo-sort-modal\s*\{[^}]*padding-bottom:\s*calc\(36rpx \+ env\(safe-area-inset-bottom\)\);/s);
   assert.match(wxss, /\.todo-sort-row\s*\{[^}]*display:\s*flex;[^}]*align-items:\s*center;/s);
+});
+
+test('计划页：TODO LIST 在排序按钮左侧提供计划关联循环筛选', () => {
+  const wxml = fs.readFileSync(plansWxmlPath, 'utf8');
+  const wxss = fs.readFileSync(plansWxssPath, 'utf8');
+  assert.match(wxml, /class="todo-header-actions"><view class="todo-filter-button"[^>]*aria-label="切换 TODO 显示内容，当前\{\{todoPlanFilterLabel\}\}，点击查看下一种"[^>]*bindtap="cycleTodoPlanFilter"[\s\S]*class="todo-sort-button"[\s\S]*class="section-add todo-add"/);
+  assert.match(wxml, /class="todo-filter-label">\{\{todoPlanFilterLabel\}\}<\/text>/);
+  assert.match(wxml, /class="todo-filter-switch-icon" aria-hidden="true">↻<\/text>/);
+  assert.match(wxml, /class="todo-empty is-one-row">\{\{todoEmptyText\}\}<\/view>/);
+  assert.match(wxss, /\.todo-filter-button\s*\{[^}]*height:\s*44rpx;[^}]*border:\s*2rpx solid #78947f;[^}]*border-radius:\s*22rpx;[^}]*background:\s*#e6ece7;[^}]*box-shadow:/s);
+  const switchIconStyle = wxss.match(/\.todo-filter-switch-icon\s*\{[^}]*\}/s)[0];
+  assert.match(switchIconStyle, /display:\s*flex;[^}]*align-items:\s*center;[^}]*justify-content:\s*center;[^}]*color:\s*#78947f;[^}]*line-height:\s*1;/s);
+  assert.doesNotMatch(switchIconStyle, /border-radius|background:/);
+});
+
+test('计划页：TODO 可按是否关联计划循环筛选，且不影响项目卡片', () => {
+  const tasks = [
+    { id: 'task_plain', title: '普通任务', status: TASK_STATUS.TODO, projectId: 'project_1', updatedAt: 1 },
+    { id: 'task_plan', title: '计划任务', status: TASK_STATUS.TODO, projectId: 'project_1', updatedAt: 2 },
+    { id: 'task_hidden', title: '周末任务', status: TASK_STATUS.TODO, projectId: 'project_1', updatedAt: 3 }
+  ];
+  const planStates = new Map([
+    ['task_plan', {
+      topVisible: true,
+      controlKind: 'timer',
+      candidates: [{ id: 'event:event_1' }],
+      entityPlans: [{ id: 'event_1' }],
+      repeatRules: [],
+      activeRepeatRules: [],
+      hasPlanAssociations: true
+    }],
+    ['task_hidden', {
+      topVisible: false,
+      controlKind: 'schedule',
+      candidates: [],
+      entityPlans: [],
+      repeatRules: [{ id: 'rule_weekend' }],
+      activeRepeatRules: [{ id: 'rule_weekend' }],
+      hasPlanAssociations: true
+    }]
+  ]);
+  const harness = createHarness({ tasks, planStates });
+  try {
+    harness.page.refresh();
+    assert.equal(harness.page.data.todoPlanFilter, 'all');
+    assert.equal(harness.page.data.todoPlanFilterLabel, '查看全部');
+    assert.equal(harness.page.data.todoEmptyText, '还没有 TODO，点右上角 + 创建一条。');
+    assert.deepEqual(harness.page.data.todoListTasks.map((task) => task.id), ['task_plain', 'task_plan']);
+
+    harness.page.cycleTodoPlanFilter();
+    assert.equal(harness.page.data.todoPlanFilter, 'plan');
+    assert.equal(harness.page.data.todoPlanFilterLabel, '只看计划');
+    assert.deepEqual(harness.page.data.todoListTasks.map((task) => task.id), ['task_plan']);
+    assert.equal(harness.page.data.projectCards[0].todoTasks.some((task) => task.id === 'task_plain'), true);
+    assert.equal(harness.page.data.projectCards[0].todoTasks.some((task) => task.id === 'task_hidden'), true);
+
+    harness.page.cycleTodoPlanFilter();
+    assert.equal(harness.page.data.todoPlanFilter, 'unplanned');
+    assert.equal(harness.page.data.todoPlanFilterLabel, '不看计划');
+    assert.deepEqual(harness.page.data.todoListTasks.map((task) => task.id), ['task_plain']);
+
+    harness.page.cycleTodoPlanFilter();
+    assert.equal(harness.page.data.todoPlanFilter, 'all');
+    assert.equal(harness.page.data.todoPlanFilterLabel, '查看全部');
+    assert.deepEqual(harness.page.data.todoListTasks.map((task) => task.id), ['task_plain', 'task_plan']);
+  } finally {
+    harness.restore();
+  }
+});
+
+test('计划页：TODO 筛选为空时使用对应空态文案，并回到首列', () => {
+  const tasks = [
+    { id: 'task_plain', title: '普通任务', status: TASK_STATUS.TODO, projectId: null, updatedAt: 1 }
+  ];
+  const harness = createHarness({ tasks });
+  try {
+    harness.page.setData({ todoColumnIndex: 2, todoScrollLeft: 240 });
+    harness.page.refresh();
+    harness.page.cycleTodoPlanFilter();
+    assert.equal(harness.page.data.todoPlanFilterLabel, '只看计划');
+    assert.deepEqual(harness.page.data.todoListTasks, []);
+    assert.equal(harness.page.data.todoEmptyText, '当前没有关联计划的 TODO。');
+    assert.equal(harness.page.data.todoColumnIndex, 0);
+
+    harness.page.cycleTodoPlanFilter();
+    assert.equal(harness.page.data.todoPlanFilterLabel, '不看计划');
+    assert.deepEqual(harness.page.data.todoListTasks.map((task) => task.id), ['task_plain']);
+    assert.equal(harness.page.data.todoEmptyText, '当前没有未关联计划的 TODO。');
+  } finally {
+    harness.restore();
+  }
 });
 
 test('计划页：无关联 TODO 默认 32rpx，关联 TODO 默认 28rpx，溢出最小缩小到 18rpx', () => {
