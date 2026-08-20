@@ -15,7 +15,7 @@ test('页面主头部在滚动时固定在顶部', () => {
   }
   const calendarWxml = fs.readFileSync(path.join(pagesRoot, 'calendar/index.wxml'), 'utf8');
   const calendarWxss = fs.readFileSync(path.join(pagesRoot, 'calendar/index.wxss'), 'utf8');
-  assert.match(calendarWxml, /<view class="page">\s*<view class="calendar-toolbar">/s);
+  assert.match(calendarWxml, /<view class="page">\s*<view class="calendar-toolbar \{\{view === 'day' && !hasTimelineItems \? 'has-compact-lunar' : ''\}\}">/s);
   assert.match(calendarWxss, /\.calendar-toolbar\s*\{[^}]*position:\s*sticky;[^}]*top:\s*0;/s);
 });
 
@@ -27,7 +27,13 @@ test('日历顶部提供当前范围、今天按钮、四种粒度、右对齐�
   assert.match(script, /data:\s*\{[\s\S]*?view:\s*'day'/);
   assert.match(script, /views:\s*\['year', 'month', 'week', 'day'\]/);
   assert.match(wxml, /class="range-label"/);
-  assert.match(wxml, /class="toolbar-left">[\s\S]*class="range-label"[\s\S]*wx:if="\{\{!hasTimelineItems\}\}" class="range-empty">\{\{rangeEmptyText\}\}/);
+  assert.match(wxml, /class="range-heading \{\{view === 'day' && !hasTimelineItems \? 'is-compact-lunar' : ''\}\}"/);
+  assert.match(wxml, /<lunar-date wx:if="\{\{view === 'day' && !hasTimelineItems\}\}" compact="\{\{true\}\}" timestamp="\{\{anchor\}\}" \/>/);
+  assert.match(wxml, /<lunar-date wx:if="\{\{view === 'day' && hasTimelineItems\}\}" timestamp="\{\{anchor\}\}" \/>[\s\S]*wx:if="\{\{!hasTimelineItems\}\}" class="range-empty">\{\{rangeEmptyText\}\}/);
+  assert.match(wxss, /\.range-heading\.is-compact-lunar\s*\{[^}]*height:\s*68rpx;[^}]*gap:\s*12rpx;/s);
+  assert.match(wxss, /\.range-heading\.is-compact-lunar \.range-label\s*\{[^}]*height:\s*31rpx;/s);
+  const calendarJson = JSON.parse(fs.readFileSync(path.join(pagesRoot, 'calendar/index.json'), 'utf8'));
+  assert.equal(calendarJson.usingComponents['lunar-date'], '/components/lunar-date/index');
   assert.match(wxml, /class="today-button \{\{rangeIncludesToday \? 'is-current-range' : ''\}\}"[^>]*bindtap="goToday"/);
   assert.match(wxml, /class="toolbar-right">[\s\S]*class="view-tabs"[\s\S]*class="calendar-legend"/);
   assert.match(wxml, /class="legend-dot plan"[\s\S]*>计划<[\s\S]*class="legend-dot actual"[\s\S]*>记录<[\s\S]*class="legend-dot candidate"[\s\S]*>候选</);

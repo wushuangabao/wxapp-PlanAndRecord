@@ -1,0 +1,1 @@
+<view wx:if="{{label}}" class="lunar-date {{compact ? 'is-compact' : ''}}" aria-label="{{label}}">{{label}}</view>

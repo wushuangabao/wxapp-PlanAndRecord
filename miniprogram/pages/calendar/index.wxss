@@ -33,6 +33,15 @@
   padding-right: 18rpx;
 }
 
+.range-heading {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-width: 0;
+  height: 52rpx;
+  overflow: hidden;
+}
+
 .range-label {
   display: flex;
   align-items: center;
@@ -47,6 +56,16 @@
   white-space: nowrap;
 }
 
+.range-heading.is-compact-lunar {
+  height: 68rpx;
+  gap: 12rpx;
+}
+
+.range-heading.is-compact-lunar .range-label {
+  height: 31rpx;
+  line-height: 31rpx;
+}
+
 .range-empty {
   height: 20rpx;
   overflow: hidden;
@@ -55,6 +74,21 @@
   line-height: 20rpx;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.toolbar-left > lunar-date,
+.range-heading lunar-date {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.toolbar-left > lunar-date {
+  height: 44rpx;
+}
+
+.range-heading lunar-date {
+  height: 18rpx;
 }
 
 .toolbar-right {
