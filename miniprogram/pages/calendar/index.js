@@ -362,6 +362,9 @@ Page({
       } else {
         if (!this.collapsedCoarseRowKeys) this.collapsedCoarseRowKeys = new Set();
         const collapsedVisibleLineCount = coarseCollapsedVisibleLineCount(this.data.view);
+        const drillDownAria = this.data.view === 'year'
+          ? '，长按进入该月'
+          : '，长按进入该日';
         timeRows = buildCoarseCalendarRows(
           filteredTimeline,
           range,
@@ -377,6 +380,7 @@ Page({
             isCollapsed: isCollapsible && this.collapsedCoarseRowKeys.has(collapseKey),
             collapsedVisibleLineCount,
             coarseMinHeight: grid.rowHeight,
+            drillDownAria,
             blocks: row.blocks.map(decorateBlock)
           };
         });
@@ -425,8 +429,24 @@ Page({
   },
 
   changeView(event) {
-    const view = event.currentTarget.dataset.view;
-    if (view === this.data.view) return;
+    this.applyViewChange(event.currentTarget.dataset.view);
+  },
+
+  drillDownFromCoarseLabel(event) {
+    const nextView = this.data.view === 'year'
+      ? 'month'
+      : this.data.view === 'month' || this.data.view === 'week'
+        ? 'day'
+        : '';
+    if (!nextView) return;
+    const rowStart = Number(event.currentTarget.dataset.rowStart);
+    if (!Number.isFinite(rowStart)) return;
+    this.applyViewChange(nextView, rowStart);
+  },
+
+  applyViewChange(view, anchor) {
+    const nextAnchor = Number.isFinite(anchor) ? anchor : this.data.anchor;
+    if (!view || (view === this.data.view && nextAnchor === this.data.anchor)) return;
     this.cancelPageTurn();
     if (!this.viewScrollTops) this.viewScrollTops = {};
     const now = Date.now();
@@ -435,7 +455,7 @@ Page({
       now
     );
     const nextRangeIncludesToday = rangeIncludesTimestamp(
-      rangeForView(this.data.anchor, view),
+      rangeForView(nextAnchor, view),
       now
     );
     const shouldFocusCurrentTime = previousRangeIncludesToday && nextRangeIncludesToday;
@@ -445,6 +465,7 @@ Page({
     if (shouldFocusCurrentTime) this.viewScrollTops[view] = 0;
     this.setData({
       view,
+      anchor: nextAnchor,
       calendarScrollTop,
       calendarScrollWithAnimation: false,
       scrollIntoView: ''

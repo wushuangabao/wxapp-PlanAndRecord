@@ -746,6 +746,81 @@ test('日历从含今天的视图切换粒度后定位当前时间线，不含�
   }
 });
 
+test('日历长按年、月、周左列会下钻到对应粒度', () => {
+  const now = new Date(2026, 7, 20, 9, 30).getTime();
+  const marchStart = new Date(2026, 2, 1).getTime();
+  const augustStart = new Date(2026, 7, 1).getTime();
+  const dayStart = new Date(2026, 7, 8).getTime();
+  const todayStart = new Date(2026, 7, 20).getTime();
+  const page = loadCalendarPage();
+  const originalNow = Date.now;
+  Date.now = () => now;
+  try {
+    let afterRefresh;
+    const focusedAt = [];
+    page.refresh = (callback) => { afterRefresh = callback; };
+    page.focusCurrentTime = (timestamp) => focusedAt.push(timestamp);
+    page.focusCurrentHour = () => focusedAt.push('hour');
+    page.cancelPageTurn = () => {};
+
+    page.data.view = 'year';
+    page.data.anchor = now;
+    page.viewScrollTops = { month: 480, year: 88 };
+    page.drillDownFromCoarseLabel({ currentTarget: { dataset: { rowStart: String(marchStart) } } });
+    assert.equal(page.data.view, 'month');
+    assert.equal(page.data.anchor, marchStart);
+    assert.equal(page.data.calendarScrollTop, 480);
+    afterRefresh();
+    assert.deepEqual(focusedAt, []);
+
+    focusedAt.length = 0;
+    page.data.view = 'year';
+    page.data.anchor = now;
+    page.viewScrollTops = { month: 480, year: 88 };
+    page.drillDownFromCoarseLabel({ currentTarget: { dataset: { rowStart: augustStart } } });
+    assert.equal(page.data.view, 'month');
+    assert.equal(page.data.anchor, augustStart);
+    assert.equal(page.data.calendarScrollTop, 0);
+    afterRefresh();
+    assert.deepEqual(focusedAt, [now]);
+
+    focusedAt.length = 0;
+    page.data.view = 'month';
+    page.data.anchor = now;
+    page.viewScrollTops = { day: 240, month: 80 };
+    page.drillDownFromCoarseLabel({ currentTarget: { dataset: { rowStart: String(dayStart) } } });
+    assert.equal(page.data.view, 'day');
+    assert.equal(page.data.anchor, dayStart);
+    assert.equal(page.data.calendarScrollTop, 240);
+    afterRefresh();
+    assert.deepEqual(focusedAt, []);
+
+    focusedAt.length = 0;
+    page.data.view = 'week';
+    page.data.anchor = now;
+    page.viewScrollTops = { day: 240, week: 64 };
+    page.drillDownFromCoarseLabel({ currentTarget: { dataset: { rowStart: String(dayStart) } } });
+    assert.equal(page.data.view, 'day');
+    assert.equal(page.data.anchor, dayStart);
+    assert.equal(page.data.calendarScrollTop, 240);
+    afterRefresh();
+    assert.deepEqual(focusedAt, []);
+
+    focusedAt.length = 0;
+    page.data.view = 'week';
+    page.data.anchor = now;
+    page.viewScrollTops = { day: 240, week: 64 };
+    page.drillDownFromCoarseLabel({ currentTarget: { dataset: { rowStart: todayStart } } });
+    assert.equal(page.data.view, 'day');
+    assert.equal(page.data.anchor, todayStart);
+    assert.equal(page.data.calendarScrollTop, 0);
+    afterRefresh();
+    assert.deepEqual(focusedAt, [now]);
+  } finally {
+    Date.now = originalNow;
+  }
+});
+
 test('日历点击今天会在刷新完成后定位各粒度的当前时间行', () => {
   const now = new Date(2026, 7, 14, 17, 20).getTime();
   const page = loadCalendarPage();

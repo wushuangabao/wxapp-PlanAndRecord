@@ -80,7 +80,8 @@ test('日历粗粒度视图使用定高内容块换行并允许时间格自然�
   assert.match(wxml, /wx:if="\{\{row\.restDayKind\}\}"[\s\S]*class="rest-day-corner rest-day-\{\{row\.restDayKind\}\}"/);
   assert.doesNotMatch(wxml.split('coarse-calendar-grid')[0], /rest-day-corner/);
   assert.match(wxml, /data-item="\{\{block\}\}"[^>]*bindtap="openItemDetail"/);
-  assert.match(wxml, /class="coarse-time-label is-collapsible \{\{row\.isCollapsed \? 'is-collapsed' : ''\}\} \{\{view === 'week' \|\| view === 'month' \? 'is-week' : ''\}\}"[^>]*role="button"[^>]*bindtap="toggleCoarseRow"/);
+  assert.match(wxml, /class="coarse-time-label is-collapsible is-drillable \{\{row\.isCollapsed \? 'is-collapsed' : ''\}\} \{\{view === 'week' \|\| view === 'month' \? 'is-week' : ''\}\}"[^>]*role="button"[^>]*data-row-start="\{\{row\.start\}\}"[^>]*bindtap="toggleCoarseRow"[^>]*bindlongpress="drillDownFromCoarseLabel"/);
+  assert.match(wxml, /class="coarse-time-label is-drillable"[^>]*role="button"[^>]*data-row-start="\{\{row\.start\}\}"[^>]*bindlongpress="drillDownFromCoarseLabel"/);
   assert.match(wxml, /class="coarse-time-label-content"[\s\S]*class="coarse-time-label-text"[\s\S]*class="coarse-collapse-indicator"/);
   assert.match(wxml, /wx:for-item="block"[^>]*wx:if="\{\{!row\.isCollapsed \|\| block\.coarseLineIndex < row\.collapsedVisibleLineCount\}\}"/);
 
@@ -89,7 +90,9 @@ test('日历粗粒度视图使用定高内容块换行并允许时间格自然�
   assert.doesNotMatch(coarseRowStyle, /(?:^|[;\s])height:/);
   assert.match(wxss, /\.coarse-block-list\s*\{[^}]*display:\s*flex;[^}]*flex-wrap:\s*wrap;[^}]*gap:/s);
   assert.match(wxss, /\.calendar-block\.coarse-calendar-block\s*\{[^}]*position:\s*relative;[^}]*display:\s*flex;[^}]*flex:\s*0 1 auto;[^}]*width:\s*auto;[^}]*max-width:\s*40vw;[^}]*height:\s*54rpx;[^}]*min-height:\s*54rpx;/s);
-  assert.match(wxss, /\.coarse-time-label\.is-collapsible:active\s*\{[^}]*background:\s*#ece9e4;/s);
+  assert.match(wxss, /\.coarse-time-label\s*\{[^}]*user-select:\s*none;/s);
+  assert.match(wxss, /\.coarse-time-label\.is-collapsible:active[\s\S]*?background:\s*#ece9e4;/);
+  assert.match(wxss, /\.coarse-time-label\.is-drillable:active[\s\S]*?background:\s*#ece9e4;/);
   assert.match(wxss, /\.coarse-time-label-content\s*\{[^}]*display:\s*flex;[^}]*align-items:\s*center;/s);
   assert.match(wxss, /\.coarse-time-label\.is-week \.coarse-time-label-content\s*\{[^}]*flex-direction:\s*column;[^}]*align-items:\s*flex-end;/s);
   assert.match(wxss, /\.coarse-time-label\.is-week \.coarse-collapse-indicator\s*\{[^}]*margin:\s*12rpx 0 0;/s);
@@ -100,6 +103,7 @@ test('日历粗粒度视图使用定高内容块换行并允许时间格自然�
   assert.match(wxss, /\.rest-day-corner\.rest-day-holiday\s*\{[^}]*border-bottom-color:\s*#c17b70;/s);
   assert.doesNotMatch(wxss, /\.coarse-time-label\.is-collapsed \.coarse-collapse-indicator\s*\{[^}]*margin-/s);
 
+  assert.match(script, /drillDownFromCoarseLabel/);
   assert.match(script, /buildCoarseCalendarRows/);
   assert.match(script, /coarseCollapsedVisibleLineCount\(this\.data\.view\)/);
   assert.match(script, /row\.coarseLineCount > collapsedVisibleLineCount/);

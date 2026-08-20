@@ -345,13 +345,15 @@
   line-height: 1.2;
   text-align: right;
   white-space: nowrap;
+  user-select: none;
 }
 
 .coarse-time-label.is-collapsible {
   color: #4d695b;
 }
 
-.coarse-time-label.is-collapsible:active {
+.coarse-time-label.is-collapsible:active,
+.coarse-time-label.is-drillable:active {
   background: #ece9e4;
 }
 

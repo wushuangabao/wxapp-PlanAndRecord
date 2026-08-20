@@ -79,18 +79,27 @@
       >
         <view
           wx:if="{{row.isCollapsible}}"
-          class="coarse-time-label is-collapsible {{row.isCollapsed ? 'is-collapsed' : ''}} {{view === 'week' || view === 'month' ? 'is-week' : ''}}"
+          class="coarse-time-label is-collapsible is-drillable {{row.isCollapsed ? 'is-collapsed' : ''}} {{view === 'week' || view === 'month' ? 'is-week' : ''}}"
           role="button"
-          aria-label="{{row.label}}{{row.restDayAria}}，{{row.isCollapsed ? '已折叠，点击展开' : '已展开，点击折叠'}}"
+          aria-label="{{row.label}}{{row.restDayAria}}{{row.drillDownAria}}，{{row.isCollapsed ? '已折叠，点击展开' : '已展开，点击折叠'}}"
           data-collapse-key="{{row.collapseKey}}"
+          data-row-start="{{row.start}}"
           bindtap="toggleCoarseRow"
+          bindlongpress="drillDownFromCoarseLabel"
         >
           <view class="coarse-time-label-content">
             <text class="coarse-time-label-text">{{row.label}}</text>
             <view class="coarse-collapse-indicator" aria-hidden="true"></view>
           </view>
         </view>
-        <view wx:else class="coarse-time-label" aria-label="{{row.label}}{{row.restDayAria}}"><text>{{row.label}}</text></view>
+        <view
+          wx:else
+          class="coarse-time-label is-drillable"
+          role="button"
+          aria-label="{{row.label}}{{row.restDayAria}}{{row.drillDownAria}}"
+          data-row-start="{{row.start}}"
+          bindlongpress="drillDownFromCoarseLabel"
+        ><text>{{row.label}}</text></view>
         <view class="coarse-schedule-cell">
           <view
             wx:if="{{row.restDayKind}}"
