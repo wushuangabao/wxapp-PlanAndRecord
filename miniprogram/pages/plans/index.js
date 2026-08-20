@@ -1079,14 +1079,43 @@ Page({
       clearCurrentEditor();
       return;
     }
-    try {
-      getService().updateTask(taskId, { title });
-      clearCurrentEditor();
-      showSaved('TODO 已更新');
-      this.refresh();
-    } catch (error) {
-      showError(error);
+    const applyTitle = () => {
+      try {
+        getService().updateTask(taskId, { title });
+        clearCurrentEditor();
+        this.refresh();
+      } catch (error) {
+        showError(error);
+      }
+    };
+    if (!taskHasPlanAssociations(task)) {
+      applyTitle();
+      return;
     }
+    const pending = this.pendingTodoTitleSave;
+    if (pending && pending.taskId === taskId && pending.title === title) return;
+    this.pendingTodoTitleSave = { taskId, title, editSource };
+    const clearPending = () => {
+      if (
+        this.pendingTodoTitleSave
+        && this.pendingTodoTitleSave.taskId === taskId
+        && this.pendingTodoTitleSave.title === title
+      ) {
+        this.pendingTodoTitleSave = null;
+      }
+    };
+    wx.showModal({
+      title: '确认要修改任务标题？',
+      success: (result) => {
+        clearPending();
+        if (!result.confirm) {
+          clearCurrentEditor();
+          return;
+        }
+        applyTitle();
+      },
+      fail: clearPending
+    });
   },
 
   closeTaskEditor() {

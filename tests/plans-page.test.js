@@ -418,6 +418,57 @@ test('计划页：点击 TODO 标题就地编辑，输入完成后只更新标�
     harness.page.saveTodoTitle({ detail: { value: '已编辑任务' } });
     assert.deepEqual(harness.calls.updateTask.at(-1), ['task_todo', { title: '已编辑任务' }]);
     assert.equal(harness.page.data.todoTitleEditTaskId, '');
+    assert.equal(harness.wxState.toast, undefined);
+    assert.equal(harness.wxState.modal, undefined);
+  } finally {
+    harness.restore();
+  }
+});
+
+test('计划页：已关联计划的任务改标题须确认，取消不写入，确认后不弹出已更新提示', () => {
+  const tasks = [
+    { id: 'task_plan', title: '计划任务', status: TASK_STATUS.TODO, projectId: null, updatedAt: 1 }
+  ];
+  const planStates = new Map([
+    ['task_plan', {
+      topVisible: true,
+      controlKind: 'timer',
+      candidates: [{ id: 'event:event_1' }],
+      entityPlans: [{ id: 'event_1' }],
+      repeatRules: [],
+      hasPlanAssociations: true
+    }]
+  ]);
+  const harness = createHarness({ tasks, planStates });
+  try {
+    harness.page.refresh();
+    harness.page.openTodoTitleEditor({
+      currentTarget: { dataset: { id: 'task_plan', editSource: 'todo' } }
+    });
+    harness.page.onTodoTitleInput({ detail: { value: '新标题' } });
+    harness.page.saveTodoTitle({ detail: { value: '新标题' } });
+    harness.page.saveTodoTitle({ detail: { value: '新标题' } });
+
+    assert.deepEqual(harness.calls.updateTask, []);
+    assert.equal(harness.wxState.modal.title, '确认要修改任务标题？');
+    assert.equal(harness.page.data.todoTitleEditTaskId, 'task_plan');
+    assert.equal(harness.page.data.todoTitleEditValue, '新标题');
+
+    harness.wxState.modal.success({ confirm: false });
+    assert.deepEqual(harness.calls.updateTask, []);
+    assert.equal(tasks[0].title, '计划任务');
+    assert.equal(harness.page.data.todoTitleEditTaskId, '');
+    assert.equal(harness.wxState.toast, undefined);
+
+    harness.page.openTodoTitleEditor({
+      currentTarget: { dataset: { id: 'task_plan', editSource: 'todo' } }
+    });
+    harness.page.onTodoTitleInput({ detail: { value: '新标题' } });
+    harness.page.saveTodoTitle({ detail: { value: '新标题' } });
+    harness.wxState.modal.success({ confirm: true });
+    assert.deepEqual(harness.calls.updateTask, [['task_plan', { title: '新标题' }]]);
+    assert.equal(harness.page.data.todoTitleEditTaskId, '');
+    assert.equal(harness.wxState.toast, undefined);
   } finally {
     harness.restore();
   }
