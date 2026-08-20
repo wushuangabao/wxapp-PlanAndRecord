@@ -1,4 +1,5 @@
 const { localDateKey, startOfLocalDay } = require('../domain/time');
+const { resolveRestDayMark, restDayAriaSuffix } = require('./cn-holidays');
 
 const DAY_MS = 24 * 60 * 60 * 1_000;
 const HOUR_MS = 60 * 60 * 1_000;
@@ -43,7 +44,7 @@ function formatRangeLabel(range, view) {
   return `${start.year}年${start.month}月${start.day}日–${end.day}日`;
 }
 
-function createRow(start, end, label, index, rowHeight) {
+function createRow(start, end, label, index, rowHeight, restDay = null) {
   const top = index * rowHeight;
   return {
     key: `${start}`,
@@ -52,7 +53,10 @@ function createRow(start, end, label, index, rowHeight) {
     label,
     index,
     top,
-    style: `top: ${top}rpx; height: ${rowHeight}rpx;`
+    style: `top: ${top}rpx; height: ${rowHeight}rpx;`,
+    restDayKind: restDay ? restDay.kind : '',
+    restDayName: restDay && restDay.name ? restDay.name : '',
+    restDayAria: restDayAriaSuffix(restDay)
   };
 }
 
@@ -91,7 +95,14 @@ function buildTimeRows(range, view) {
       const endDate = new Date(startDate);
       endDate.setDate(endDate.getDate() + 1);
       const label = `${WEEKDAY_NAMES[startDate.getDay()]}·${startDate.getDate()}号`;
-      rows.push(createRow(startDate.getTime(), endDate.getTime(), label, index, rowHeight));
+      rows.push(createRow(
+        startDate.getTime(),
+        endDate.getTime(),
+        label,
+        index,
+        rowHeight,
+        resolveRestDayMark(startDate.getTime(), view)
+      ));
     }
   }
   return {

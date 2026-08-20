@@ -71,6 +71,8 @@ test('日历粗粒度视图使用定高内容块换行并允许时间格自然�
   assert.match(wxml, /wx:for="\{\{timeRows\}\}"[^>]*wx:for-item="row"[^>]*class="coarse-calendar-row"[^>]*style="min-height: \{\{row\.coarseMinHeight\}\}rpx;"/);
   assert.match(wxml, /wx:for="\{\{row\.blocks\}\}"[^>]*wx:for-item="block"[^>]*class="calendar-block coarse-calendar-block \{\{block\.visualType\}\} \{\{block\.priorityClass\}\}[^>]*style="width: \{\{block\.coarseWidth\}\}rpx;"/);
   assert.match(wxml, /wx:if="\{\{currentTimeLineRowIndex === row\.index\}\}" class="current-time-line coarse-current-time-line" style="\{\{currentTimeLineStyle\}\}"/);
+  assert.match(wxml, /wx:if="\{\{row\.restDayKind\}\}"[\s\S]*class="rest-day-corner rest-day-\{\{row\.restDayKind\}\}"/);
+  assert.doesNotMatch(wxml.split('coarse-calendar-grid')[0], /rest-day-corner/);
   assert.match(wxml, /data-item="\{\{block\}\}"[^>]*bindtap="openItemDetail"/);
   assert.match(wxml, /class="coarse-time-label is-collapsible \{\{row\.isCollapsed \? 'is-collapsed' : ''\}\} \{\{view === 'week' \|\| view === 'month' \? 'is-week' : ''\}\}"[^>]*role="button"[^>]*bindtap="toggleCoarseRow"/);
   assert.match(wxml, /class="coarse-time-label-content"[\s\S]*class="coarse-time-label-text"[\s\S]*class="coarse-collapse-indicator"/);
@@ -87,6 +89,9 @@ test('日历粗粒度视图使用定高内容块换行并允许时间格自然�
   assert.match(wxss, /\.coarse-time-label\.is-week \.coarse-collapse-indicator\s*\{[^}]*margin:\s*12rpx 0 0;/s);
   assert.match(wxss, /\.coarse-collapse-indicator\s*\{[^}]*border-right:\s*2rpx solid #78947f;[^}]*border-bottom:\s*2rpx solid #78947f;/s);
   assert.match(wxss, /\.coarse-collapse-indicator\s*\{[^}]*margin:\s*0 3rpx 0 10rpx;/s);
+  assert.match(wxss, /\.rest-day-corner\s*\{[^}]*right:\s*0;[^}]*bottom:\s*0;[^}]*border-width:\s*0 0 24rpx 24rpx;/s);
+  assert.match(wxss, /\.rest-day-corner\.rest-day-weekend\s*\{[^}]*border-bottom-color:\s*#9a938a;/s);
+  assert.match(wxss, /\.rest-day-corner\.rest-day-holiday\s*\{[^}]*border-bottom-color:\s*#c17b70;/s);
   assert.doesNotMatch(wxss, /\.coarse-time-label\.is-collapsed \.coarse-collapse-indicator\s*\{[^}]*margin-/s);
 
   assert.match(script, /buildCoarseCalendarRows/);

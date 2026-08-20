@@ -366,6 +366,27 @@
   background: #faf9f7;
 }
 
+.rest-day-corner {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  z-index: 2;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+  border-style: solid;
+  border-width: 0 0 24rpx 24rpx;
+  border-color: transparent transparent #9a938a transparent;
+}
+
+.rest-day-corner.rest-day-weekend {
+  border-bottom-color: #9a938a;
+}
+
+.rest-day-corner.rest-day-holiday {
+  border-bottom-color: #c17b70;
+}
+
 .coarse-block-list {
   box-sizing: border-box;
   display: flex;

@@ -77,7 +77,7 @@
           wx:if="{{row.isCollapsible}}"
           class="coarse-time-label is-collapsible {{row.isCollapsed ? 'is-collapsed' : ''}} {{view === 'week' || view === 'month' ? 'is-week' : ''}}"
           role="button"
-          aria-label="{{row.label}}，{{row.isCollapsed ? '已折叠，点击展开' : '已展开，点击折叠'}}"
+          aria-label="{{row.label}}{{row.restDayAria}}，{{row.isCollapsed ? '已折叠，点击展开' : '已展开，点击折叠'}}"
           data-collapse-key="{{row.collapseKey}}"
           bindtap="toggleCoarseRow"
         >
@@ -86,8 +86,13 @@
             <view class="coarse-collapse-indicator" aria-hidden="true"></view>
           </view>
         </view>
-        <view wx:else class="coarse-time-label"><text>{{row.label}}</text></view>
+        <view wx:else class="coarse-time-label" aria-label="{{row.label}}{{row.restDayAria}}"><text>{{row.label}}</text></view>
         <view class="coarse-schedule-cell">
+          <view
+            wx:if="{{row.restDayKind}}"
+            class="rest-day-corner rest-day-{{row.restDayKind}}"
+            aria-hidden="true"
+          ></view>
           <view wx:if="{{currentTimeLineRowIndex === row.index}}" class="current-time-line coarse-current-time-line" style="{{currentTimeLineStyle}}" aria-hidden="true"></view>
           <view class="coarse-block-list">
             <view

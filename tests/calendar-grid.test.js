@@ -101,6 +101,36 @@ test('四种视图生成对应时间刻度', () => {
   assert.equal('terminalLabel' in day, false);
 });
 
+test('周月日期行标注休息日脚标，日年和调休上班不标注', () => {
+  const august = new Date(2026, 7, 8).getTime();
+  const week = buildTimeRows(rangeForView(august, 'week'), 'week');
+  assert.equal(week.rows[0].restDayKind, '');
+  assert.equal(week.rows[4].restDayKind, '');
+  assert.equal(week.rows[5].restDayKind, 'weekend');
+  assert.equal(week.rows[5].restDayAria, '，周末');
+  assert.equal(week.rows[6].restDayKind, 'weekend');
+  assert.equal(week.rows[0].label, '周一·3号');
+
+  const month = buildTimeRows(rangeForView(august, 'month'), 'month');
+  assert.equal(month.rows[0].restDayKind, 'weekend');
+  assert.equal(month.rows[2].restDayKind, '');
+  assert.equal(month.rows[7].restDayKind, 'weekend');
+  assert.equal(month.rows[30].restDayKind, '');
+
+  const october = buildTimeRows(rangeForView(new Date(2026, 9, 1).getTime(), 'month'), 'month');
+  assert.equal(october.rows[0].restDayKind, 'holiday');
+  assert.equal(october.rows[0].restDayName, '国庆节');
+  assert.equal(october.rows[0].restDayAria, '，国庆节，放假');
+  assert.equal(october.rows[3].restDayKind, 'holiday');
+  assert.equal(october.rows[9].restDayKind, '');
+  assert.equal(october.rows[9].label, '周六·10号');
+
+  const year = buildTimeRows(rangeForView(august, 'year'), 'year');
+  assert.ok(year.rows.every((row) => row.restDayKind === ''));
+  const day = buildTimeRows(rangeForView(august, 'day'), 'day');
+  assert.ok(day.rows.every((row) => row.restDayKind === ''));
+});
+
 test('计划块按优先级生成三档灰蓝样式，非计划块不携带优先级样式', () => {
   const range = rangeForView(new Date(2026, 7, 8, 12, 0).getTime(), 'day');
   const grid = buildTimeRows(range, 'day');
