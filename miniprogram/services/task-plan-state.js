@@ -69,6 +69,15 @@ function timerAssociation(database) {
   return null;
 }
 
+function activeTimerMatchesOccurrence(database, ruleId, originOccurrenceId) {
+  const association = timerAssociation(database);
+  return Boolean(
+    association
+    && association.kind === 'occurrence'
+    && association.id === occurrenceAssociationKey(ruleId, originOccurrenceId)
+  );
+}
+
 function inferCompletionUndoLog(state) {
   if (!state || !state.entityPlanEvidence || !state.entityPlanEvidence.length) {
     return null;
@@ -213,5 +222,6 @@ function buildTaskPlanStates(database, now = Date.now()) {
 module.exports = {
   buildTaskPlanStates,
   inferCompletionUndoLog,
-  occurrenceAssociationKey
+  occurrenceAssociationKey,
+  activeTimerMatchesOccurrence
 };

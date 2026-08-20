@@ -403,6 +403,41 @@ test('确认 virtual plan 只创建一条 confirmed rule 日志且重复确认�
   assert.equal(service.snapshot().timeLogs.length, 1);
 });
 
+test('活动计时关联的重复实例不能再被确认完成', () => {
+  const { service, now } = createHarness();
+  const startedAt = now() + 60 * 60 * 1000;
+  createRecurringPlanForTask(service, {
+    title: '计时中不可确认',
+    startedAt,
+    endedAt: startedAt + 30 * 60 * 1000,
+    frequency: 'daily',
+    interval: 1
+  });
+  const first = service.timeline(startedAt, startedAt + 30 * 60 * 1000).find((item) => item.virtual);
+  const nextStart = startedAt + 86_400_000;
+  const second = service.timeline(nextStart, nextStart + 30 * 60 * 1000).find((item) => item.virtual);
+
+  service.startTimer({
+    originRuleId: first.ruleId,
+    originOccurrenceId: first.originOccurrenceId
+  });
+  assert.throws(
+    () => service.confirmVirtualOccurrence(first),
+    (error) => error.code === 'OCCURRENCE_TIMER_ACTIVE'
+  );
+  assert.equal(service.snapshot().timeLogs.length, 0);
+
+  service.pauseTimer();
+  assert.throws(
+    () => service.confirmVirtualOccurrence(first),
+    (error) => error.code === 'OCCURRENCE_TIMER_ACTIVE'
+  );
+
+  const otherLog = service.confirmVirtualOccurrence(second);
+  assert.equal(otherLog.originOccurrenceId, second.originOccurrenceId);
+  assert.equal(service.snapshot().timer.status, TIMER_STATUS.PAUSED);
+});
+
 test('跳过真实固定日程实例只写 skip，并保留同规则其他实例投影', () => {
   const { service, now } = createHarness();
   const dayMs = 24 * 60 * 60 * 1000;

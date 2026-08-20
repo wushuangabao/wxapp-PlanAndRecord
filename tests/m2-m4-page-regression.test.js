@@ -260,16 +260,24 @@ test('M4：日历详情层提供原有操作，画布块不显示状态文字且
   const script = fs.readFileSync(calendarScriptPath, 'utf8');
   const wxss = fs.readFileSync(calendarWxssPath, 'utf8');
   assert.match(wxml, /openPlanEditor/);
+  assert.match(wxml, /class="detail-actions-start">[\s\S]*bindtap="deletePlan">删除计划[\s\S]*bindtap="deleteRuleFollowing">删除本次及后续[\s\S]*bindtap="skipVirtualOccurrence"[\s\S]*class="detail-actions-end">/);
+  assert.match(wxml, /class="detail-actions-end">[\s\S]*bindtap="openPlanEditor">编辑计划[\s\S]*bindtap="startTimerFromPlan">开始计时[\s\S]*detailItem\.virtual && detailItem\.canConfirmVirtual[^>]*bindtap="confirmItem">确认完成/);
   assert.match(wxml, /detailItem\.type === 'plan' && !detailItem\.virtual && detailItem\.canEditPlan/);
   assert.match(wxml, /detailItem\.type === 'plan' && detailItem\.canAssociate/);
   assert.match(wxml, /detailItem\.type === 'plan' && !detailItem\.virtual[^>]*bindtap="deletePlan"/);
   assert.match(wxml, /detailItem\.virtual[^>]*bindtap="confirmItem"/);
   assert.match(wxml, /detailItem\.virtual[^>]*class="detail-action danger-action"[^>]*bindtap="deleteRuleFollowing">删除本次及后续/);
   assert.match(wxml, /detailItem\.virtual[^>]*bindtap="skipVirtualOccurrence"/);
+  assert.match(wxss, /\.detail-actions\s*\{[^}]*justify-content:\s*space-between;/s);
+  assert.match(wxss, /\.detail-actions-start\s*\{[^}]*justify-content:\s*flex-start;/s);
+  assert.match(wxss, /\.detail-actions-end\s*\{[^}]*justify-content:\s*flex-end;[^}]*margin-left:\s*auto;/s);
   assert.match(wxml, /detailItem\.type === 'candidate' && !detailItem\.virtual[^>]*bindtap="confirmItem"/);
   assert.match(wxml, /detailItem\.type === 'candidate' && !detailItem\.virtual[^>]*bindtap="openLogEditor"/);
   assert.match(wxml, /detailItem\.type === 'candidate' && !detailItem\.virtual[^>]*bindtap="discardCandidate"/);
   assert.match(script, /item\.virtual\s*\?\s*'重复计划·待确认'/);
+  assert.doesNotMatch(script, /已从计划块开始计时/);
+  assert.match(script, /item\.virtual\s*\?\s*'固定日程已完成'/);
+  assert.doesNotMatch(script, /重复计划已确认/);
   assert.match(script, /item\.type === 'candidate'\s*\?\s*'候选记录'/);
   assert.doesNotMatch(script, /virtual[^\n]*candidate|candidate[^\n]*virtual/);
   assert.match(wxss, /\.calendar-block\.plan\s*\{[^}]*#7f8ca1/s);
@@ -1579,6 +1587,7 @@ test('日历只在重叠条目的详情层显示低干扰的实际与候选计�
     );
     assert.equal(itemById.get('plain_log').displayOverlap, '');
     assert.equal(itemById.get('virtual_plan').displayOverlap, '');
+    assert.equal(itemById.get('virtual_plan').canConfirmVirtual, true);
 
     const wxml = fs.readFileSync(calendarWxmlPath, 'utf8');
     const wxss = fs.readFileSync(calendarWxssPath, 'utf8');
@@ -1586,6 +1595,79 @@ test('日历只在重叠条目的详情层显示低干扰的实际与候选计�
     assert.match(wxml, /wx:if="\{\{detailItem\.displayOverlap\}\}"[^>]*detail-overlap/);
     assert.match(wxss, /\.calendar-block\.is-overlapping\s*\{[^}]*box-shadow:/s);
     assert.doesNotMatch(wxss, /\.calendar-block\.is-overlapping\s*\{[^}]*border-left:/s);
+  } finally {
+    global.getApp = originalGetApp;
+  }
+});
+
+test('日历对正在计时的重复实例隐藏确认完成，并在刷新时更新已打开详情', () => {
+  const originalGetApp = global.getApp;
+  const startedAt = 1_700_000_100_000;
+  const originOccurrenceId = 'rule_repeat:1:1700000100000';
+  const otherOccurrenceId = 'rule_repeat:1:1700086500000';
+  const snapshot = {
+    projects: [],
+    tasks: [{ id: 'task_repeat', title: '循环任务', status: 'todo' }],
+    calendarEvents: [],
+    timer: {
+      status: 'running',
+      draft: {
+        originRuleId: 'rule_repeat',
+        originOccurrenceId
+      }
+    }
+  };
+  const timeline = [{
+    id: 'virtual_timing',
+    type: 'plan',
+    virtual: true,
+    title: '正在计时的实例',
+    ruleId: 'rule_repeat',
+    originOccurrenceId,
+    startedAt,
+    endedAt: startedAt + 60_000,
+    taskId: 'task_repeat'
+  }, {
+    id: 'virtual_other',
+    type: 'plan',
+    virtual: true,
+    title: '其他实例',
+    ruleId: 'rule_repeat',
+    originOccurrenceId: otherOccurrenceId,
+    startedAt: startedAt + 2 * 60 * 60 * 1000,
+    endedAt: startedAt + 2 * 60 * 60 * 1000 + 60_000,
+    taskId: 'task_repeat'
+  }];
+  global.getApp = () => ({
+    globalData: { bootstrap: { applicationService: {
+      snapshot() { return snapshot; },
+      timeline() { return timeline; }
+    } } }
+  });
+  try {
+    const page = loadCalendarPage();
+    page.data.anchor = startedAt;
+    page.data.view = 'day';
+    page.refresh();
+    const itemById = new Map(page.data.timeline.map((item) => [item.id, item]));
+    assert.equal(itemById.get('virtual_timing').canConfirmVirtual, false);
+    assert.equal(itemById.get('virtual_other').canConfirmVirtual, true);
+
+    page.setData({
+      detailItem: {
+        ...itemById.get('virtual_timing'),
+        canConfirmVirtual: true
+      }
+    });
+    page.refresh();
+    assert.equal(page.data.detailItem.canConfirmVirtual, false);
+    assert.equal(page.data.detailItem.originOccurrenceId, originOccurrenceId);
+
+    const wxml = fs.readFileSync(calendarWxmlPath, 'utf8');
+    assert.match(
+      wxml,
+      /detailItem\.virtual && detailItem\.canConfirmVirtual[^>]*bindtap="confirmItem">确认完成/
+    );
   } finally {
     global.getApp = originalGetApp;
   }
@@ -1708,6 +1790,7 @@ test('日历可从具体或虚拟计划块开始计时，并使用对应联合�
   const originalGetApp = global.getApp;
   const originalWx = global.wx;
   const associations = [];
+  const toasts = [];
   global.getApp = () => ({
     globalData: {
       bootstrap: {
@@ -1718,7 +1801,7 @@ test('日历可从具体或虚拟计划块开始计时，并使用对应联合�
     }
   });
   global.wx = {
-    showToast() {},
+    showToast(options) { toasts.push(options); },
     switchTab() {}
   };
   try {
@@ -1747,6 +1830,7 @@ test('日历可从具体或虚拟计划块开始计时，并使用对应联合�
         originOccurrenceId: 'rule_repeat:2:123'
       }
     ]);
+    assert.equal(toasts.length, 0);
   } finally {
     global.getApp = originalGetApp;
     global.wx = originalWx;
@@ -1775,9 +1859,10 @@ test('日历确认虚拟实例或候选日志后会更新最近记录的 new 标
       return { id: 'confirmed_candidate' };
     }
   };
+  const toasts = [];
   global.getApp = () => ({ globalData: { bootstrap: { applicationService: service, preferences } } });
   global.wx = {
-    showToast() {},
+    showToast(options) { toasts.push(options); },
     setStorageSync(key, value) { stored.set(key, value); }
   };
   try {
@@ -1798,6 +1883,7 @@ test('日历确认虚拟实例或候选日志后会更新最近记录的 new 标
 
     page.confirmItem({ currentTarget: { dataset: { item: { id: 'candidate_log', virtual: false } } } });
     assert.deepEqual(calls.map(([type]) => type), ['virtual', 'candidate']);
+    assert.deepEqual(toasts.map((item) => item.title), ['固定日程已完成', '候选记录已确认']);
     assert.deepEqual(stored.get('plan-and-record.recent-log-highlight'), {
       version: 1,
       profileId: 'profile_calendar',

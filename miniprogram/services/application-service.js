@@ -46,7 +46,7 @@ const {
 const { normalizeJsonSnapshot, parseJsonSnapshot, persistedValueEquals } = require('../repository/json-snapshot');
 const { displayLogTitle } = require('../utils/log-presentation');
 const { exportJson } = require('./export-service');
-const { buildTaskPlanStates } = require('./task-plan-state');
+const { buildTaskPlanStates, activeTimerMatchesOccurrence } = require('./task-plan-state');
 
 function firstRuleOccurrence(rule) {
   const revision = rule.revisions[0];
@@ -1387,6 +1387,9 @@ class ApplicationService {
         .find((item) => item.originOccurrenceId === input.originOccurrenceId);
       if (!occurrence) {
         throw new DomainError('OCCURRENCE_NOT_FOUND', '该重复实例已跳过、已修改或不再有效');
+      }
+      if (activeTimerMatchesOccurrence(database, rule.id, occurrence.originOccurrenceId)) {
+        throw new DomainError('OCCURRENCE_TIMER_ACTIVE', '该计划正在计时，请先结束当前计时');
       }
       const occurrenceLogicalKey = occurrenceKey(rule.id, occurrence.occurrenceStart);
       if (database.timeLogs.some((log) => (

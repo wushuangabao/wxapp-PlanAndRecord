@@ -19,6 +19,7 @@ const {
   showSaved,
   writeRecentLogHighlight
 } = require('../../utils/page');
+const { activeTimerMatchesOccurrence } = require('../../services/task-plan-state');
 
 const DAY_MS = 24 * 60 * 60 * 1_000;
 const PLAN_WINDOW_PADDING_MS = DAY_MS;
@@ -319,6 +320,8 @@ Page({
           displayTags: Array.isArray(item.tags) ? item.tags.join('、') : '',
           priority: item.priority || 1,
           canAssociate,
+          canConfirmVirtual: Boolean(item.virtual)
+            && !activeTimerMatchesOccurrence(snapshot, item.ruleId, item.originOccurrenceId),
           canEditPlan: item.type === 'plan'
             && !item.virtual
             && (canAssociate || item.endedAt > now)
@@ -385,6 +388,16 @@ Page({
       this.eventById = new Map(snapshot.calendarEvents.map((item) => [item.id, item]));
       this.currentSnapshot = snapshot;
       this.currentService = service;
+      const detailItem = this.data.detailItem && this.data.detailItem.virtual
+        ? {
+          ...this.data.detailItem,
+          canConfirmVirtual: !activeTimerMatchesOccurrence(
+            snapshot,
+            this.data.detailItem.ruleId,
+            this.data.detailItem.originOccurrenceId
+          )
+        }
+        : this.data.detailItem;
       this.setData({
         tasks,
         planTasks,
@@ -401,7 +414,8 @@ Page({
         rangeLabel: formatRangeLabel(range, this.data.view),
         rangeIncludesToday: rangeIncludesTimestamp(range, now),
         currentTimeLineRowIndex,
-        currentTimeLineStyle
+        currentTimeLineStyle,
+        detailItem
       }, () => {
         if (typeof afterRefresh === 'function') afterRefresh();
       });
@@ -769,7 +783,6 @@ Page({
         : { calendarEventId: item.id };
       getService().startTimer(association);
       this.closeItemDetail();
-      showSaved('已从计划块开始计时');
       wx.switchTab({ url: '/pages/timer/index' });
     } catch (error) {
       showError(error);
@@ -785,7 +798,7 @@ Page({
         : service.confirmCandidateLog(item.id);
       writeRecentLogHighlight(this.currentSnapshot, log && log.id);
       this.closeItemDetail();
-      showSaved(item.virtual ? '重复计划已确认' : '候选记录已确认');
+      showSaved(item.virtual ? '固定日程已完成' : '候选记录已确认');
       this.refresh();
     } catch (error) {
       showError(error);

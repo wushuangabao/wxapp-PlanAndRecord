@@ -160,17 +160,21 @@
         <view wx:if="{{detailItem.displayTags}}" class="detail-row detail-row-stack"><text>标签</text><text>{{detailItem.displayTags}}</text></view>
         <view wx:if="{{detailItem.displayOverlap}}" class="detail-overlap">{{detailItem.displayOverlap}}</view>
         <view class="detail-actions">
-          <view wx:if="{{detailItem.type === 'plan' && detailItem.canAssociate}}" class="detail-action primary-action" role="button" data-item="{{detailItem}}" bindtap="startTimerFromPlan">从此开始计时</view>
-          <view wx:if="{{detailItem.type === 'plan' && !detailItem.virtual && detailItem.canEditPlan}}" class="detail-action" role="button" data-item="{{detailItem}}" bindtap="openPlanEditor">编辑计划</view>
-          <view wx:if="{{detailItem.type === 'plan' && !detailItem.virtual}}" class="detail-action danger-action" role="button" data-item="{{detailItem}}" bindtap="deletePlan">删除计划</view>
-          <view wx:if="{{detailItem.virtual}}" class="detail-action primary-action" role="button" data-item="{{detailItem}}" bindtap="confirmItem">确认</view>
-          <view wx:if="{{detailItem.virtual}}" class="detail-action danger-action" role="button" aria-label="删除本次及后续" data-item="{{detailItem}}" bindtap="deleteRuleFollowing">删除本次及后续</view>
-          <view wx:if="{{detailItem.virtual}}" class="detail-action danger-action" role="button" data-item="{{detailItem}}" bindtap="skipVirtualOccurrence">跳过</view>
-          <view wx:if="{{detailItem.type === 'candidate' && !detailItem.virtual}}" class="detail-action primary-action" role="button" data-item="{{detailItem}}" bindtap="confirmItem">确认</view>
-          <view wx:if="{{detailItem.type === 'candidate' && !detailItem.virtual}}" class="detail-action" role="button" data-item="{{detailItem}}" bindtap="openLogEditor">编辑确认</view>
-          <view wx:if="{{detailItem.type === 'candidate' && !detailItem.virtual}}" class="detail-action danger-action" role="button" data-item="{{detailItem}}" bindtap="discardCandidate">作废</view>
-          <view wx:if="{{detailItem.type === 'confirmed'}}" class="detail-action" role="button" data-item="{{detailItem}}" bindtap="openLogEditor">编辑</view>
-          <view wx:if="{{detailItem.type === 'confirmed'}}" class="detail-action danger-action" role="button" data-item="{{detailItem}}" bindtap="deleteConfirmed">删除</view>
+          <view class="detail-actions-start">
+            <view wx:if="{{detailItem.type === 'plan' && !detailItem.virtual}}" class="detail-action danger-action" role="button" data-item="{{detailItem}}" bindtap="deletePlan">删除计划</view>
+            <view wx:if="{{detailItem.virtual}}" class="detail-action danger-action" role="button" aria-label="删除本次及后续" data-item="{{detailItem}}" bindtap="deleteRuleFollowing">删除本次及后续</view>
+            <view wx:if="{{detailItem.virtual}}" class="detail-action danger-action" role="button" data-item="{{detailItem}}" bindtap="skipVirtualOccurrence">跳过</view>
+            <view wx:if="{{detailItem.type === 'candidate' && !detailItem.virtual}}" class="detail-action danger-action" role="button" data-item="{{detailItem}}" bindtap="discardCandidate">作废</view>
+            <view wx:if="{{detailItem.type === 'confirmed'}}" class="detail-action danger-action" role="button" data-item="{{detailItem}}" bindtap="deleteConfirmed">删除</view>
+          </view>
+          <view class="detail-actions-end">
+            <view wx:if="{{detailItem.type === 'plan' && !detailItem.virtual && detailItem.canEditPlan}}" class="detail-action" role="button" data-item="{{detailItem}}" bindtap="openPlanEditor">编辑计划</view>
+            <view wx:if="{{detailItem.type === 'plan' && detailItem.canAssociate}}" class="detail-action primary-action" role="button" data-item="{{detailItem}}" bindtap="startTimerFromPlan">开始计时</view>
+            <view wx:if="{{detailItem.virtual && detailItem.canConfirmVirtual}}" class="detail-action primary-action" role="button" data-item="{{detailItem}}" bindtap="confirmItem">确认完成</view>
+            <view wx:if="{{detailItem.type === 'candidate' && !detailItem.virtual}}" class="detail-action" role="button" data-item="{{detailItem}}" bindtap="openLogEditor">编辑确认</view>
+            <view wx:if="{{detailItem.type === 'candidate' && !detailItem.virtual}}" class="detail-action primary-action" role="button" data-item="{{detailItem}}" bindtap="confirmItem">确认</view>
+            <view wx:if="{{detailItem.type === 'confirmed'}}" class="detail-action" role="button" data-item="{{detailItem}}" bindtap="openLogEditor">编辑</view>
+          </view>
         </view>
       </block>
     </view>

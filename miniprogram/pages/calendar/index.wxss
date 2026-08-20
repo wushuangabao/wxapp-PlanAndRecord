@@ -827,8 +827,26 @@
 .detail-actions {
   display: flex;
   flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
   gap: 14rpx;
   margin-top: 28rpx;
+}
+
+.detail-actions-start,
+.detail-actions-end {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14rpx;
+}
+
+.detail-actions-start {
+  justify-content: flex-start;
+}
+
+.detail-actions-end {
+  justify-content: flex-end;
+  margin-left: auto;
 }
 
 .detail-action {

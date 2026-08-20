@@ -1161,7 +1161,6 @@ Page({
   startTimerForTaskCandidate(taskId, candidateId) {
     try {
       getService().startTaskPlanTimer(taskId, candidateId);
-      showSaved('已从计划开始计时');
       wx.switchTab({ url: '/pages/timer/index' });
     } catch (error) {
       showError(error);

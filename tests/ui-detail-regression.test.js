@@ -163,6 +163,25 @@ test('所有自定义底部弹窗复用共享头部组件', () => {
   assert.doesNotMatch(planEditorWxml, /class="modal-title"/);
 });
 
+test('日历详情弹窗危险操作左对齐、绿色主操作右对齐', () => {
+  const wxml = fs.readFileSync(path.join(pagesRoot, 'calendar/index.wxml'), 'utf8');
+  const wxss = fs.readFileSync(path.join(pagesRoot, 'calendar/index.wxss'), 'utf8');
+  const startGroup = wxml.match(/class="detail-actions-start">([\s\S]*?)<\/view>\s*<view class="detail-actions-end">/)[1];
+  const endGroup = wxml.match(/class="detail-actions-end">([\s\S]*?)<\/view>\s*<\/view>/)[1];
+
+  assert.match(startGroup, /danger-action[\s\S]*deletePlan/);
+  assert.match(startGroup, /danger-action[\s\S]*deleteRuleFollowing/);
+  assert.match(startGroup, /danger-action[\s\S]*skipVirtualOccurrence/);
+  assert.doesNotMatch(startGroup, /primary-action/);
+  assert.match(endGroup, /primary-action[\s\S]*startTimerFromPlan">开始计时/);
+  assert.match(endGroup, /detailItem\.virtual && detailItem\.canConfirmVirtual[^>]*bindtap="confirmItem">确认完成/);
+  assert.match(endGroup, /detailItem\.type === 'candidate' && !detailItem\.virtual[^>]*bindtap="confirmItem">确认</);
+  assert.doesNotMatch(endGroup, /danger-action/);
+  assert.match(wxss, /\.detail-actions\s*\{[^}]*justify-content:\s*space-between;/s);
+  assert.match(wxss, /\.detail-actions-start\s*\{[^}]*justify-content:\s*flex-start;/s);
+  assert.match(wxss, /\.detail-actions-end\s*\{[^}]*justify-content:\s*flex-end;[^}]*margin-left:\s*auto;/s);
+});
+
 test('所有页面和共享控件使用莫兰迪绿色主色板', () => {
   const files = [
     path.join(miniprogramRoot, 'app.json'),
