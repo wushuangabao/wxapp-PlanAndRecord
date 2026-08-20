@@ -78,7 +78,11 @@ test('周标题按同月、跨月和跨年消除日期歧义', () => {
 test('四种视图生成对应时间刻度', () => {
   const anchor = new Date(2026, 7, 8).getTime();
   assert.equal(buildTimeRows(rangeForView(anchor, 'year'), 'year').rows.length, 12);
-  assert.equal(buildTimeRows(rangeForView(anchor, 'month'), 'month').rows.length, 31);
+  const month = buildTimeRows(rangeForView(anchor, 'month'), 'month');
+  assert.equal(month.rows.length, 31);
+  assert.equal(month.rows[0].label, '周六·1号');
+  assert.equal(month.rows[7].label, '周六·8号');
+  assert.equal(month.rows[30].label, '周一·31号');
   const week = buildTimeRows(rangeForView(anchor, 'week'), 'week');
   assert.equal(week.rows.length, 7);
   assert.equal(week.rowHeight, 128);

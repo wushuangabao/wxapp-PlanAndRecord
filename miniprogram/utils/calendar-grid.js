@@ -90,9 +90,7 @@ function buildTimeRows(range, view) {
       startDate.setHours(0, 0, 0, 0);
       const endDate = new Date(startDate);
       endDate.setDate(endDate.getDate() + 1);
-      const label = view === 'week'
-        ? `${WEEKDAY_NAMES[startDate.getDay()]}·${startDate.getDate()}号`
-        : `${startDate.getDate()}号`;
+      const label = `${WEEKDAY_NAMES[startDate.getDay()]}·${startDate.getDate()}号`;
       rows.push(createRow(startDate.getTime(), endDate.getTime(), label, index, rowHeight));
     }
   }

@@ -72,7 +72,7 @@ test('日历粗粒度视图使用定高内容块换行并允许时间格自然�
   assert.match(wxml, /wx:for="\{\{row\.blocks\}\}"[^>]*wx:for-item="block"[^>]*class="calendar-block coarse-calendar-block \{\{block\.visualType\}\} \{\{block\.priorityClass\}\}[^>]*style="width: \{\{block\.coarseWidth\}\}rpx;"/);
   assert.match(wxml, /wx:if="\{\{currentTimeLineRowIndex === row\.index\}\}" class="current-time-line coarse-current-time-line" style="\{\{currentTimeLineStyle\}\}"/);
   assert.match(wxml, /data-item="\{\{block\}\}"[^>]*bindtap="openItemDetail"/);
-  assert.match(wxml, /class="coarse-time-label is-collapsible \{\{row\.isCollapsed \? 'is-collapsed' : ''\}\} \{\{view === 'week' \? 'is-week' : ''\}\}"[^>]*role="button"[^>]*bindtap="toggleCoarseRow"/);
+  assert.match(wxml, /class="coarse-time-label is-collapsible \{\{row\.isCollapsed \? 'is-collapsed' : ''\}\} \{\{view === 'week' \|\| view === 'month' \? 'is-week' : ''\}\}"[^>]*role="button"[^>]*bindtap="toggleCoarseRow"/);
   assert.match(wxml, /class="coarse-time-label-content"[\s\S]*class="coarse-time-label-text"[\s\S]*class="coarse-collapse-indicator"/);
   assert.match(wxml, /wx:for-item="block"[^>]*wx:if="\{\{!row\.isCollapsed \|\| block\.coarseLineIndex === 0\}\}"/);
 

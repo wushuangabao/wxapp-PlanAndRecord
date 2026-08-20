@@ -75,7 +75,7 @@
       >
         <view
           wx:if="{{row.isCollapsible}}"
-          class="coarse-time-label is-collapsible {{row.isCollapsed ? 'is-collapsed' : ''}} {{view === 'week' ? 'is-week' : ''}}"
+          class="coarse-time-label is-collapsible {{row.isCollapsed ? 'is-collapsed' : ''}} {{view === 'week' || view === 'month' ? 'is-week' : ''}}"
           role="button"
           aria-label="{{row.label}}，{{row.isCollapsed ? '已折叠，点击展开' : '已展开，点击折叠'}}"
           data-collapse-key="{{row.collapseKey}}"
