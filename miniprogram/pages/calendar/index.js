@@ -20,6 +20,7 @@ const {
   writeRecentLogHighlight
 } = require('../../utils/page');
 const { activeTimerMatchesOccurrence } = require('../../services/task-plan-state');
+const { takeCalendarHandoff } = require('../../utils/calendar-handoff');
 
 const DAY_MS = 24 * 60 * 60 * 1_000;
 const PLAN_WINDOW_PADDING_MS = DAY_MS;
@@ -31,6 +32,7 @@ const GESTURE_DIRECTION_THRESHOLD_PX = 12;
 const CREATE_TASK_OPTION_ID = '__create_same_title_task__';
 const CREATED_PLAN_VISIBLE_EDGE_PX = 8;
 const CREATED_PLAN_VISIBLE_BOTTOM_INSET_PX = 72;
+const HANDOFF_HIGHLIGHT_MS = 3_000;
 const TIMELINE_FILTERS = [{
   value: 'all',
   label: '查看全部',
@@ -263,15 +265,27 @@ Page({
     planTasks: [],
     logEvents: [],
     logEventIndex: 0,
-    views: ['year', 'month', 'week', 'day']
+    views: ['year', 'month', 'week', 'day'],
+    highlightedPlanId: ''
   },
 
   onShow() {
-    this.refresh();
+    const handoff = takeCalendarHandoff();
+    if (handoff && handoff.type === 'reveal-plan' && handoff.id
+      && Number.isFinite(handoff.startedAt) && Number.isFinite(handoff.endedAt)) {
+      this.applyRevealPlanHandoff(handoff);
+    } else if (handoff && handoff.type === 'create-plan' && handoff.taskId) {
+      this.applyCreatePlanHandoff(handoff);
+    } else {
+      this.refresh();
+    }
     this.startCurrentTimeTicker();
   },
 
   onHide() {
+    this.clearPendingCoarseDrillDown();
+    this.clearHandoffHighlight();
+    this.releaseLocateScrollLock();
     this.stopCurrentTimeTicker();
   },
 
@@ -279,6 +293,9 @@ Page({
     clearTimeout(this.pageTurnSwapTimer);
     clearTimeout(this.pageTurnEndTimer);
     clearTimeout(this.createdPlanScrollVerifyTimer);
+    this.clearPendingCoarseDrillDown();
+    this.releaseLocateScrollLock();
+    this.clearHandoffHighlight();
     this.stopCurrentTimeTicker();
   },
 
@@ -441,12 +458,30 @@ Page({
     if (!nextView) return;
     const rowStart = Number(event.currentTarget.dataset.rowStart);
     if (!Number.isFinite(rowStart)) return;
-    this.applyViewChange(nextView, rowStart);
+    this.pendingCoarseDrillDown = { nextView, rowStart };
+  },
+
+  onCoarseLabelTouchEnd() {
+    this.flushPendingCoarseDrillDown();
+  },
+
+  clearPendingCoarseDrillDown() {
+    this.pendingCoarseDrillDown = null;
+    this.coarseDrillDownConsumedTouch = false;
+  },
+
+  flushPendingCoarseDrillDown() {
+    const pending = this.pendingCoarseDrillDown;
+    if (!pending) return;
+    this.pendingCoarseDrillDown = null;
+    this.coarseDrillDownConsumedTouch = true;
+    this.applyViewChange(pending.nextView, pending.rowStart);
   },
 
   applyViewChange(view, anchor) {
     const nextAnchor = Number.isFinite(anchor) ? anchor : this.data.anchor;
     if (!view || (view === this.data.view && nextAnchor === this.data.anchor)) return;
+    this.clearHandoffHighlight();
     this.cancelPageTurn();
     if (!this.viewScrollTops) this.viewScrollTops = {};
     const now = Date.now();
@@ -508,6 +543,7 @@ Page({
 
   goToday() {
     const now = Date.now();
+    this.clearHandoffHighlight();
     this.cancelPageTurn();
     this.currentCalendarScrollTop = 0;
     if (!this.viewScrollTops) this.viewScrollTops = {};
@@ -592,6 +628,24 @@ Page({
     this.viewScrollTops[this.data.view] = this.currentCalendarScrollTop;
   },
 
+  releaseLocateScrollLock() {
+    clearTimeout(this.scrollIntoViewClearTimer);
+    this.scrollIntoViewClearTimer = null;
+    if (!this.data.scrollIntoView && !this.data.calendarScrollWithAnimation) return;
+    this.setData({
+      scrollIntoView: '',
+      calendarScrollWithAnimation: false
+    });
+  },
+
+  scheduleLocateScrollLockRelease() {
+    clearTimeout(this.scrollIntoViewClearTimer);
+    this.scrollIntoViewClearTimer = setTimeout(() => {
+      this.scrollIntoViewClearTimer = null;
+      this.releaseLocateScrollLock();
+    }, PAGE_TURN_DURATION_MS + 80);
+  },
+
   applyCreatedPlanScroll(eventId, targetScrollTop) {
     const updates = {
       calendarScrollWithAnimation: true,
@@ -603,7 +657,9 @@ Page({
       if (!this.viewScrollTops) this.viewScrollTops = {};
       this.viewScrollTops[this.data.view] = targetScrollTop;
     }
-    this.setData({ scrollIntoView: '' }, () => this.setData(updates));
+    this.setData({ scrollIntoView: '' }, () => {
+      this.setData(updates, () => this.scheduleLocateScrollLockRelease());
+    });
   },
 
   scrollCreatedPlanIntoView(eventId, verifyAttempt = 0) {
@@ -623,13 +679,14 @@ Page({
       const viewport = rects && rects[0];
       const block = rects && rects[1];
       if (!viewport || !block) {
-        this.applyCreatedPlanScroll(eventId);
         if (verifyAttempt === 0) {
           this.createdPlanScrollVerifyTimer = setTimeout(() => {
             this.createdPlanScrollVerifyTimer = null;
             this.scrollCreatedPlanIntoView(eventId, 1);
           }, PAGE_TURN_DURATION_MS + 80);
+          return;
         }
+        this.releaseLocateScrollLock();
         return;
       }
       const viewportBottom = Number.isFinite(viewport.bottom)
@@ -640,7 +697,10 @@ Page({
         : block.top + block.height;
       const visibleTop = viewport.top + CREATED_PLAN_VISIBLE_EDGE_PX;
       const visibleBottom = viewportBottom - CREATED_PLAN_VISIBLE_BOTTOM_INSET_PX;
-      if (block.top >= visibleTop && blockBottom <= visibleBottom) return;
+      if (block.top >= visibleTop && blockBottom <= visibleBottom) {
+        this.releaseLocateScrollLock();
+        return;
+      }
 
       const currentScrollTop = Number.isFinite(this.currentCalendarScrollTop)
         ? this.currentCalendarScrollTop
@@ -692,6 +752,84 @@ Page({
     }, () => this.refresh(revealAfterRefresh, { protectedItemId: event.id }));
   },
 
+  clearHandoffHighlight() {
+    clearTimeout(this.handoffHighlightTimer);
+    this.handoffHighlightTimer = null;
+    if (this.data.highlightedPlanId) this.setData({ highlightedPlanId: '' });
+  },
+
+  startHandoffHighlight(planId) {
+    clearTimeout(this.handoffHighlightTimer);
+    this.handoffHighlightTimer = setTimeout(() => {
+      this.handoffHighlightTimer = null;
+      if (this.data.highlightedPlanId === planId) this.setData({ highlightedPlanId: '' });
+    }, HANDOFF_HIGHLIGHT_MS);
+  },
+
+  applyRevealPlanHandoff(handoff) {
+    clearTimeout(this.handoffHighlightTimer);
+    this.handoffHighlightTimer = null;
+    this.cancelPageTurn();
+    const timelineFilter = this.data.timelineFilter === 'record'
+      ? 'plan'
+      : this.data.timelineFilter;
+    this.setData({
+      view: 'day',
+      timelineFilter,
+      highlightedPlanId: handoff.id,
+      detailItem: null,
+      isCreateOpen: false,
+      planEditorInitialValue: null
+    }, () => {
+      this.revealCreatedPlan({
+        id: handoff.id,
+        startedAt: handoff.startedAt,
+        endedAt: handoff.endedAt
+      });
+      this.startHandoffHighlight(handoff.id);
+    });
+  },
+
+  applyCreatePlanHandoff(handoff) {
+    this.clearHandoffHighlight();
+    const now = Date.now();
+    this.cancelPageTurn();
+    this.currentCalendarScrollTop = 0;
+    if (!this.viewScrollTops) this.viewScrollTops = {};
+    this.viewScrollTops.day = 0;
+    this.setData({
+      view: 'day',
+      anchor: now,
+      calendarScrollTop: 0,
+      calendarScrollWithAnimation: false,
+      scrollIntoView: '',
+      detailItem: null
+    }, () => this.refresh(() => this.openCreatePlanForTask(handoff.taskId)));
+  },
+
+  openCreatePlanForTask(taskId) {
+    const tasks = this.data.tasks.slice();
+    const existing = this.taskById && this.taskById.get(taskId);
+    if (existing && !tasks.some((task) => task.id === existing.id)) {
+      tasks.push({ ...existing, optionType: 'task' });
+    }
+    const taskIndex = existing ? findOptionIndex(tasks, existing.id) : this.data.taskIndex;
+    this.setData({
+      tasks,
+      taskIndex,
+      isCreateOpen: true,
+      planEditorMode: 'create',
+      planEditorInitialValue: {
+        title: '',
+        anchorDate: this.data.anchor,
+        priority: 1,
+        hasAnyTasks: this.data.hasAnyTasks || tasks.length > 1,
+        taskOptions: tasks,
+        taskIndex
+      }
+    });
+  },
+
   onCanvasTouchStart(event) {
     const touch = event.touches && event.touches[0];
     this.canvasTouchStart = touch
@@ -710,16 +848,21 @@ Page({
   },
 
   onCanvasTouchEnd(event) {
+    const skipSwipe = Boolean(this.pendingCoarseDrillDown) || this.coarseDrillDownConsumedTouch;
+    this.flushPendingCoarseDrillDown();
+    this.coarseDrillDownConsumedTouch = false;
     const start = this.canvasTouchStart;
     const touch = event.changedTouches && event.changedTouches[0];
     this.canvasTouchStart = null;
-    if (!start || !touch) return;
+    if (skipSwipe || !start || !touch) return;
     const deltaX = touch.clientX - start.x;
     if (start.direction !== 'horizontal' || Math.abs(deltaX) < 48) return;
     this.animateRangeChange(deltaX < 0 ? 1 : -1);
   },
 
   onCanvasTouchCancel() {
+    this.flushPendingCoarseDrillDown();
+    this.coarseDrillDownConsumedTouch = false;
     this.canvasTouchStart = null;
   },
 
@@ -733,6 +876,7 @@ Page({
 
   animateRangeChange(offset) {
     if (!offset || this.pageTurnEndTimer) return;
+    this.clearHandoffHighlight();
     const targetAnchor = shiftAnchor(this.data.anchor, this.data.view, offset);
     const pageTurnClass = offset > 0 ? 'page-turn-next' : 'page-turn-previous';
     this.setData({ pageTurnClass });

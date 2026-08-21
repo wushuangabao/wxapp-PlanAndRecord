@@ -4,7 +4,8 @@ const { showError } = require('./utils/page');
 App({
   globalData: {
     bootstrap: null,
-    storageWarningShown: false
+    storageWarningShown: false,
+    calendarHandoff: null
   },
 
   onLaunch() {

@@ -560,6 +560,15 @@
   box-shadow: inset 0 0 0 2rpx #d9c9aa;
 }
 
+.calendar-block.is-handoff-highlight {
+  z-index: 4;
+  box-shadow: 0 0 0 4rpx #78947f;
+}
+
+.calendar-block.is-overlapping.is-handoff-highlight {
+  box-shadow: inset 0 0 0 2rpx #d9c9aa, 0 0 0 4rpx #78947f;
+}
+
 .block-title {
   box-sizing: border-box;
   width: 100%;

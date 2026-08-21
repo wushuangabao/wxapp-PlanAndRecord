@@ -10,6 +10,10 @@ const {
   showSaved
 } = require('../../utils/page');
 const { getRuntimeWindowWidth } = require('../../utils/wechat-runtime');
+const {
+  revealPlanTargetId,
+  setCalendarHandoff
+} = require('../../utils/calendar-handoff');
 
 const HORIZONTAL_COLUMN_SIZE = 3;
 const TODO_SWIPE_DISTANCE_RATIO = 0.15;
@@ -24,6 +28,9 @@ const TODO_TITLE_LINKED_FONT_SIZE = 28;
 const TODO_TITLE_MIN_FONT_SIZE = 18;
 const TODO_TITLE_WIDTH_PADDING = 4;
 const PROJECT_TASK_PREVIEW_LIMIT = 3;
+const TASK_PLAN_OPTION_ROW_HEIGHT_RPX = 96;
+const TASK_PLAN_OPTION_GAP_RPX = 12;
+const TASK_PLAN_PICKER_MAX_LIST_HEIGHT_RPX = 600;
 const TODO_SORT_FIELDS = new Set(['createdAt', 'title', 'project', 'status']);
 const TODO_SORT_FIELD_OPTIONS = Object.freeze([
   { field: 'createdAt', label: '创建时间' },
@@ -224,6 +231,29 @@ function taskHasPlanAssociations(task) {
     || task.entityPlanCount
     || task.repeatRuleCount
   ));
+}
+
+function taskPlanPickerListHeight(count) {
+  if (!count) return 0;
+  return Math.min(
+    TASK_PLAN_PICKER_MAX_LIST_HEIGHT_RPX,
+    count * TASK_PLAN_OPTION_ROW_HEIGHT_RPX + (count - 1) * TASK_PLAN_OPTION_GAP_RPX
+  );
+}
+
+function taskPlanPickerItems(candidates) {
+  return (candidates || []).map((candidate) => ({
+    ...candidate,
+    timeText: `${formatDateTime(candidate.startedAt)} – ${formatDateTime(candidate.endedAt)}`
+  }));
+}
+
+function switchToCalendar(handoff) {
+  setCalendarHandoff(handoff);
+  wx.switchTab({
+    url: '/pages/calendar/index',
+    fail: () => setCalendarHandoff(null)
+  });
 }
 
 function todoTaskMatchesPlanFilter(task, filter) {
@@ -435,7 +465,8 @@ Page({
     projectEditor: null,
     projectEditorTitle: '',
     projectEditorDate: '',
-    projectEditorTime: ''
+    projectEditorTime: '',
+    taskPlanPicker: null
   },
 
   onLoad() {
@@ -495,6 +526,7 @@ Page({
 
   onHide() {
     this.clearNextLocalDayRefresh();
+    this.pendingCalendarHandoff = null;
   },
 
   onReady() {
@@ -955,6 +987,7 @@ Page({
   },
 
   onTodoTouchEnd(event) {
+    this.flushPendingCalendarHandoff();
     this.onHorizontalTouchEnd('todo', event);
   },
 
@@ -1041,6 +1074,86 @@ Page({
       todoTitleEditTaskId: task.id,
       todoTitleEditValue: task.title,
       todoTitleEditSource: event.currentTarget.dataset.editSource || 'todo'
+    });
+  },
+
+  onTaskTitleLongPress(event) {
+    const task = this.data.tasks.find((item) => item.id === event.currentTarget.dataset.id);
+    if (!task) return;
+    const candidates = taskPlanPickerItems(task.planCandidates);
+    if (!candidates.length) {
+      this.confirmCreatePlanForTask(task.id);
+      return;
+    }
+    if (candidates.length === 1) {
+      this.queueCalendarHandoffAfterTouch(this.revealPlanHandoff(candidates[0]));
+      return;
+    }
+    this.setData({
+      taskPlanPicker: {
+        taskId: task.id,
+        plans: candidates,
+        listHeight: taskPlanPickerListHeight(candidates.length)
+      }
+    });
+  },
+
+  queueCalendarHandoffAfterTouch(handoff) {
+    if (!handoff) return;
+    this.pendingCalendarHandoff = handoff;
+  },
+
+  flushPendingCalendarHandoff() {
+    const handoff = this.pendingCalendarHandoff;
+    if (!handoff) return;
+    this.pendingCalendarHandoff = null;
+    switchToCalendar(handoff);
+  },
+
+  onTaskTitleTouchEnd() {
+    this.flushPendingCalendarHandoff();
+  },
+
+  closeTaskPlanPicker() {
+    this.setData({ taskPlanPicker: null });
+  },
+
+  selectTaskPlan(event) {
+    const picker = this.data.taskPlanPicker;
+    const planId = event.currentTarget.dataset.id;
+    const plan = picker && picker.plans
+      ? picker.plans.find((item) => item.id === planId)
+      : null;
+    this.setData({ taskPlanPicker: null });
+    if (plan) this.jumpToPlanCandidate(plan);
+  },
+
+  revealPlanHandoff(candidate) {
+    const id = revealPlanTargetId(candidate);
+    if (!id || !Number.isFinite(candidate.startedAt) || !Number.isFinite(candidate.endedAt)) {
+      wx.showToast({ title: '无法定位该计划', icon: 'none' });
+      return null;
+    }
+    return {
+      type: 'reveal-plan',
+      id,
+      startedAt: candidate.startedAt,
+      endedAt: candidate.endedAt
+    };
+  },
+
+  jumpToPlanCandidate(candidate) {
+    const handoff = this.revealPlanHandoff(candidate);
+    if (handoff) switchToCalendar(handoff);
+  },
+
+  confirmCreatePlanForTask(taskId) {
+    wx.showModal({
+      title: '是否创建实施计划？',
+      success: (result) => {
+        if (!result.confirm) return;
+        switchToCalendar({ type: 'create-plan', taskId });
+      }
     });
   },
 

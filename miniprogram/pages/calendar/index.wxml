@@ -54,7 +54,7 @@
           wx:for="{{timeline}}"
           wx:key="renderKey"
           id="{{item.domId}}"
-          class="calendar-block {{item.visualType}} {{item.priorityClass}} {{item.continuesBefore ? 'continues-before' : ''}} {{item.continuesAfter ? 'continues-after' : ''}} {{item.overlapMeta ? 'is-overlapping' : ''}}"
+          class="calendar-block {{item.visualType}} {{item.priorityClass}} {{item.continuesBefore ? 'continues-before' : ''}} {{item.continuesAfter ? 'continues-after' : ''}} {{item.overlapMeta ? 'is-overlapping' : ''}} {{item.id === highlightedPlanId ? 'is-handoff-highlight' : ''}}"
           style="{{item.blockStyle}}"
           role="button"
           aria-label="{{item.ariaLabel}}"
@@ -86,6 +86,8 @@
           data-row-start="{{row.start}}"
           bindtap="toggleCoarseRow"
           bindlongpress="drillDownFromCoarseLabel"
+          bindtouchend="onCoarseLabelTouchEnd"
+          bindtouchcancel="onCoarseLabelTouchEnd"
         >
           <view class="coarse-time-label-content">
             <text class="coarse-time-label-text">{{row.label}}</text>
@@ -99,6 +101,8 @@
           aria-label="{{row.label}}{{row.restDayAria}}{{row.drillDownAria}}"
           data-row-start="{{row.start}}"
           bindlongpress="drillDownFromCoarseLabel"
+          bindtouchend="onCoarseLabelTouchEnd"
+          bindtouchcancel="onCoarseLabelTouchEnd"
         ><text>{{row.label}}</text></view>
         <view class="coarse-schedule-cell">
           <view

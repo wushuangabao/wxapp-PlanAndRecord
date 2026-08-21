@@ -80,8 +80,8 @@ test('日历粗粒度视图使用定高内容块换行并允许时间格自然�
   assert.match(wxml, /wx:if="\{\{row\.restDayKind\}\}"[\s\S]*class="rest-day-corner rest-day-\{\{row\.restDayKind\}\}"/);
   assert.doesNotMatch(wxml.split('coarse-calendar-grid')[0], /rest-day-corner/);
   assert.match(wxml, /data-item="\{\{block\}\}"[^>]*bindtap="openItemDetail"/);
-  assert.match(wxml, /class="coarse-time-label is-collapsible is-drillable \{\{row\.isCollapsed \? 'is-collapsed' : ''\}\} \{\{view === 'week' \|\| view === 'month' \? 'is-week' : ''\}\}"[^>]*role="button"[^>]*data-row-start="\{\{row\.start\}\}"[^>]*bindtap="toggleCoarseRow"[^>]*bindlongpress="drillDownFromCoarseLabel"/);
-  assert.match(wxml, /class="coarse-time-label is-drillable"[^>]*role="button"[^>]*data-row-start="\{\{row\.start\}\}"[^>]*bindlongpress="drillDownFromCoarseLabel"/);
+  assert.match(wxml, /class="coarse-time-label is-collapsible is-drillable \{\{row\.isCollapsed \? 'is-collapsed' : ''\}\} \{\{view === 'week' \|\| view === 'month' \? 'is-week' : ''\}\}"[^>]*role="button"[^>]*data-row-start="\{\{row\.start\}\}"[^>]*bindtap="toggleCoarseRow"[^>]*bindlongpress="drillDownFromCoarseLabel"[^>]*bindtouchend="onCoarseLabelTouchEnd"/);
+  assert.match(wxml, /class="coarse-time-label is-drillable"[^>]*role="button"[^>]*data-row-start="\{\{row\.start\}\}"[^>]*bindlongpress="drillDownFromCoarseLabel"[^>]*bindtouchend="onCoarseLabelTouchEnd"/);
   assert.match(wxml, /class="coarse-time-label-content"[\s\S]*class="coarse-time-label-text"[\s\S]*class="coarse-collapse-indicator"/);
   assert.match(wxml, /wx:for-item="block"[^>]*wx:if="\{\{!row\.isCollapsed \|\| block\.coarseLineIndex < row\.collapsedVisibleLineCount\}\}"/);
 
@@ -135,7 +135,7 @@ test('日历计划优先级使用三档灰蓝色呈现，并与灰绿实际记�
 });
 
 test('所有自定义底部弹窗复用共享头部组件', () => {
-  const expectedModalCounts = { plans: 5, calendar: 2 };
+  const expectedModalCounts = { plans: 6, calendar: 2 };
   const calendarModalBindings = [
     'closeItemDetail',
     'closeLogEditor'

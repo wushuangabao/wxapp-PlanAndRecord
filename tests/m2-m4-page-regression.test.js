@@ -767,6 +767,8 @@ test('日历长按年、月、周左列会下钻到对应粒度', () => {
     page.data.anchor = now;
     page.viewScrollTops = { month: 480, year: 88 };
     page.drillDownFromCoarseLabel({ currentTarget: { dataset: { rowStart: String(marchStart) } } });
+    assert.equal(page.data.view, 'year');
+    page.onCoarseLabelTouchEnd();
     assert.equal(page.data.view, 'month');
     assert.equal(page.data.anchor, marchStart);
     assert.equal(page.data.calendarScrollTop, 480);
@@ -778,6 +780,8 @@ test('日历长按年、月、周左列会下钻到对应粒度', () => {
     page.data.anchor = now;
     page.viewScrollTops = { month: 480, year: 88 };
     page.drillDownFromCoarseLabel({ currentTarget: { dataset: { rowStart: augustStart } } });
+    assert.equal(page.data.view, 'year');
+    page.onCoarseLabelTouchEnd();
     assert.equal(page.data.view, 'month');
     assert.equal(page.data.anchor, augustStart);
     assert.equal(page.data.calendarScrollTop, 0);
@@ -789,6 +793,8 @@ test('日历长按年、月、周左列会下钻到对应粒度', () => {
     page.data.anchor = now;
     page.viewScrollTops = { day: 240, month: 80 };
     page.drillDownFromCoarseLabel({ currentTarget: { dataset: { rowStart: String(dayStart) } } });
+    assert.equal(page.data.view, 'month');
+    page.onCoarseLabelTouchEnd();
     assert.equal(page.data.view, 'day');
     assert.equal(page.data.anchor, dayStart);
     assert.equal(page.data.calendarScrollTop, 240);
@@ -800,6 +806,8 @@ test('日历长按年、月、周左列会下钻到对应粒度', () => {
     page.data.anchor = now;
     page.viewScrollTops = { day: 240, week: 64 };
     page.drillDownFromCoarseLabel({ currentTarget: { dataset: { rowStart: String(dayStart) } } });
+    assert.equal(page.data.view, 'week');
+    page.onCoarseLabelTouchEnd();
     assert.equal(page.data.view, 'day');
     assert.equal(page.data.anchor, dayStart);
     assert.equal(page.data.calendarScrollTop, 240);
@@ -811,6 +819,8 @@ test('日历长按年、月、周左列会下钻到对应粒度', () => {
     page.data.anchor = now;
     page.viewScrollTops = { day: 240, week: 64 };
     page.drillDownFromCoarseLabel({ currentTarget: { dataset: { rowStart: todayStart } } });
+    assert.equal(page.data.view, 'week');
+    page.onCoarseLabelTouchEnd();
     assert.equal(page.data.view, 'day');
     assert.equal(page.data.anchor, todayStart);
     assert.equal(page.data.calendarScrollTop, 0);
@@ -1490,7 +1500,7 @@ test('日历只在新建计划块不完整可见时平滑滚动到其附近', ()
     assert.equal(page.data.scrollIntoView, 'calendar-block-event_hidden');
     assert.equal(page.currentCalendarScrollTop, 447);
     assert.equal(page.viewScrollTops.day, 447);
-    assert.deepEqual(scheduled.map((item) => item.delay), [360]);
+    assert.deepEqual(scheduled.map((item) => item.delay), [360, 360]);
     assert.deepEqual(selectors, [
       '.calendar-scroll',
       '#calendar-block-event_visible',
@@ -1508,11 +1518,12 @@ test('日历只在新建计划块不完整可见时平滑滚动到其附近', ()
   }
 });
 
-test('日历新计划节点暂未完成渲染时仍按 ID 定位并在动画后复核', () => {
+test('日历新计划节点暂未完成渲染时等节点出现后再定位，不把滚动锁到缺失 ID', () => {
   const originalWx = global.wx;
   const originalSetTimeout = global.setTimeout;
   const originalClearTimeout = global.clearTimeout;
   const scheduled = [];
+  let rects = [{ top: 100, bottom: 500, height: 400 }, null];
   global.setTimeout = (callback, delay) => {
     scheduled.push({ callback, delay });
     return scheduled.length;
@@ -1523,21 +1534,102 @@ test('日历新计划节点暂未完成渲染时仍按 ID 定位并在动画后�
       return {
         select() { return this; },
         boundingClientRect() { return this; },
-        exec(callback) { callback([{ top: 100, bottom: 500, height: 400 }, null]); }
+        exec(callback) { callback(rects); }
       };
     }
   };
   try {
     const page = loadCalendarPage();
+    page.data.calendarScrollTop = 120;
+    page.currentCalendarScrollTop = 120;
     page.scrollCreatedPlanIntoView('event_rendering');
 
+    assert.equal(page.data.scrollIntoView, '');
+    assert.equal(page.data.calendarScrollWithAnimation, false);
+    assert.equal(page.data.calendarScrollTop, 120);
+    assert.deepEqual(scheduled.map((item) => item.delay), [360]);
+
+    rects = [
+      { top: 100, bottom: 500, height: 400 },
+      { top: 600, bottom: 654, height: 54 }
+    ];
+    scheduled[0].callback();
     assert.equal(page.data.scrollIntoView, 'calendar-block-event_rendering');
     assert.equal(page.data.calendarScrollWithAnimation, true);
-    assert.deepEqual(scheduled.map((item) => item.delay), [360]);
   } finally {
     global.wx = originalWx;
     global.setTimeout = originalSetTimeout;
     global.clearTimeout = originalClearTimeout;
+  }
+});
+
+test('计划页跳转已有计划时范围内不重置滚动，并保护目标不被折进+N', () => {
+  const originalWx = global.wx;
+  global.wx = {};
+  let page;
+  try {
+    page = loadCalendarPage();
+    page.data.view = 'day';
+    page.data.anchor = new Date(2026, 7, 8, 12, 0).getTime();
+    page.data.calendarScrollTop = 160;
+    page.currentCalendarScrollTop = 160;
+    page.viewScrollTops = { day: 160 };
+    page.data.timelineFilter = 'all';
+    const layoutOptions = [];
+    const revealedIds = [];
+    page.refresh = (callback, options) => {
+      layoutOptions.push(options);
+      if (callback) callback();
+    };
+    page.scrollCreatedPlanIntoView = (id) => { revealedIds.push(id); };
+
+    page.applyRevealPlanHandoff({
+      type: 'reveal-plan',
+      id: 'event_visible',
+      startedAt: new Date(2026, 7, 8, 18, 0).getTime(),
+      endedAt: new Date(2026, 7, 8, 19, 0).getTime()
+    });
+
+    assert.equal(page.data.view, 'day');
+    assert.equal(page.data.calendarScrollTop, 160);
+    assert.equal(page.currentCalendarScrollTop, 160);
+    assert.equal(page.data.highlightedPlanId, 'event_visible');
+    assert.deepEqual(revealedIds, ['event_visible']);
+    assert.deepEqual(layoutOptions, [{ protectedItemId: 'event_visible' }]);
+    assert.equal(Object.prototype.hasOwnProperty.call(page.data, 'handoffGestureLock'), false);
+  } finally {
+    global.wx = originalWx;
+    if (page) {
+      clearTimeout(page.handoffHighlightTimer);
+    }
+  }
+});
+
+test('日历接收计划页长按跳转时不创建覆盖点击与横滑的全屏手势层', () => {
+  const originalWx = global.wx;
+  global.wx = {};
+  let page;
+  try {
+    page = loadCalendarPage();
+    page.refresh = (callback) => { if (callback) callback(); };
+    page.scrollCreatedPlanIntoView = () => {};
+
+    page.applyRevealPlanHandoff({
+      type: 'reveal-plan',
+      id: 'event_visible',
+      startedAt: new Date(2026, 7, 8, 18, 0).getTime(),
+      endedAt: new Date(2026, 7, 8, 19, 0).getTime(),
+      swallowPendingTouch: true
+    });
+
+    assert.equal(Object.prototype.hasOwnProperty.call(page.data, 'handoffGestureLock'), false);
+
+    const wxml = fs.readFileSync(calendarWxmlPath, 'utf8');
+    const wxss = fs.readFileSync(calendarWxssPath, 'utf8');
+    assert.doesNotMatch(wxml, /handoff-gesture-lock|onHandoffGestureLockTouch|releaseHandoffGestureLock/);
+    assert.doesNotMatch(wxss, /\.handoff-gesture-lock/);
+  } finally {
+    global.wx = originalWx;
   }
 });
 

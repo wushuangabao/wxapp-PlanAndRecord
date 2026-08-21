@@ -129,9 +129,10 @@ function createHarness({
   };
   const page = loadPlansPage();
 
-  global.getApp = () => ({
+  const app = {
     globalData: { bootstrap: { applicationService: service, preferences: preferenceStore } }
-  });
+  };
+  global.getApp = () => app;
   global.wx = {
     showToast(config) { wxState.toast = config; },
     showActionSheet(config) { wxState.actionSheet = config; },
@@ -1813,6 +1814,57 @@ test('计划页：TODO 连续左划可吸附到最后一列，四条任务可吸
     fourTaskHarness.page.clearTodoScrollAnimation();
   } finally {
     fourTaskHarness.restore();
+  }
+});
+
+test('计划页：长按单条计划时等触摸结束后再跳转日历', () => {
+  const startedAt = 1_700_000_100_000;
+  const harness = createHarness();
+  const originalSetTimeout = global.setTimeout;
+  const originalClearTimeout = global.clearTimeout;
+  const scheduled = [];
+  try {
+    global.setTimeout = (callback, delay) => {
+      scheduled.push({ callback, delay });
+      return scheduled.length;
+    };
+    global.clearTimeout = () => {};
+    harness.page.data.tasks = [{
+      id: 'task_todo',
+      planCandidates: [{
+        kind: 'event',
+        title: '计划A',
+        startedAt,
+        endedAt: startedAt + 3_600_000,
+        calendarEventId: 'event_1'
+      }]
+    }];
+
+    harness.page.onTaskTitleLongPress(event('task_todo'));
+    assert.equal(harness.wxState.switchTab, undefined);
+    assert.equal(global.getApp().globalData.calendarHandoff, undefined);
+
+    scheduled
+      .filter((item) => item.delay === 600)
+      .forEach((item) => item.callback());
+    assert.equal(harness.wxState.switchTab, undefined);
+    assert.equal(global.getApp().globalData.calendarHandoff, undefined);
+
+    harness.page.onTaskTitleTouchEnd();
+    assert.equal(harness.wxState.switchTab.url, '/pages/calendar/index');
+    assert.deepEqual(global.getApp().globalData.calendarHandoff, {
+      type: 'reveal-plan',
+      id: 'event_1',
+      startedAt,
+      endedAt: startedAt + 3_600_000
+    });
+
+    const wxml = fs.readFileSync(plansWxmlPath, 'utf8');
+    assert.match(wxml, /bindlongpress="onTaskTitleLongPress" bindtouchend="onTaskTitleTouchEnd" bindtouchcancel="onTaskTitleTouchEnd"/);
+  } finally {
+    global.setTimeout = originalSetTimeout;
+    global.clearTimeout = originalClearTimeout;
+    harness.restore();
   }
 });
 
