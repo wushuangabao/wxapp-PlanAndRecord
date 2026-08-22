@@ -99,7 +99,11 @@ function blankData(now = Date.now()) {
     isTaskPickerOpen: false,
     taskPickerListHeight: 0,
     planEditor: null,
-    newTaskProjectId: null
+    isRecurringEditor: false,
+    recurringRuleId: null,
+    recurringOccurrenceStart: null,
+    newTaskProjectId: null,
+    existingTaskId: null
   };
 }
 
@@ -129,13 +133,30 @@ Component({
       const initialValue = this.properties.initialValue || {};
       const variant = this.properties.variant || 'calendar';
       const mode = variant === 'plans-todo' ? 'create' : (this.properties.mode || 'create');
-      const reset = blankData(now);
+      const editingPlan = (mode === 'edit' || mode === 'edit-recurring') && initialValue.plan;
+      const initialPlanStartedAt = editingPlan
+        ? Number(initialValue.plan.startedAt)
+        : NaN;
+      const reset = blankData(Number.isFinite(initialPlanStartedAt) ? initialPlanStartedAt : now);
 
-      if (mode === 'edit' && initialValue.plan) {
+      if (editingPlan) {
         const plan = initialValue.plan;
         const start = defaultDateTime(plan.startedAt);
         const end = defaultDateTime(plan.endedAt);
         const tasks = Array.isArray(initialValue.taskOptions) ? initialValue.taskOptions.slice() : [];
+        const isRecurringEditor = mode === 'edit-recurring';
+        const revision = isRecurringEditor && initialValue.revision
+          ? initialValue.revision
+          : null;
+        const frequencyIndex = revision
+          ? Math.max(0, FREQUENCY_VALUES.indexOf(revision.frequency))
+          : 0;
+        const repeatWeekdays = revision && Array.isArray(revision.weekdays)
+          ? revision.weekdays.slice()
+          : reset.repeatWeekdays;
+        const repeatMonthDays = revision && Array.isArray(revision.monthDays)
+          ? revision.monthDays.slice()
+          : reset.repeatMonthDays;
         this.validTaskIds = new Set(tasks.filter((item) => item && item.id).map((item) => item.id));
         this.setData({
           ...reset,
@@ -147,7 +168,24 @@ Component({
           priority: plan.priority ?? 1,
           planFormTasks: tasks,
           planFormTaskIndex: Number(initialValue.taskIndex) || 0,
-          planEditor: plan
+          planEditor: plan,
+          isRecurringEditor,
+          recurringRuleId: isRecurringEditor ? initialValue.ruleId || plan.ruleId : null,
+          recurringOccurrenceStart: isRecurringEditor
+            ? Number(initialValue.occurrenceStart ?? plan.occurrenceStart)
+            : null,
+          repeatEnabled: isRecurringEditor,
+          frequencyIndex,
+          repeatGap: revision ? String(revision.interval - 1) : reset.repeatGap,
+          repeatWeekdays,
+          repeatMonthDays,
+          repeatOccurrenceText: repeatOccurrenceText(
+            frequencyIndex,
+            repeatWeekdays,
+            repeatMonthDays
+          ),
+          weekdayOptions: weekdayOptionsWithSelection(repeatWeekdays),
+          monthDayOptions: monthDayOptionsWithSelection(repeatMonthDays)
         });
         return;
       }
@@ -173,6 +211,7 @@ Component({
         planFormTasks: tasks,
         planFormTaskIndex: Number(initialValue.taskIndex) || 0,
         newTaskProjectId: initialValue.newTaskProjectId || null,
+        existingTaskId: initialValue.existingTaskId || null,
         repeatEnabled: false
       });
     },
@@ -294,15 +333,35 @@ Component({
           endedAt,
           priority: this.data.priority
         };
+        if (this.data.repeatEnabled) {
+          input.frequency = FREQUENCY_VALUES[this.data.frequencyIndex];
+          input.interval = repeatIntervalFromGap(this.data.repeatGap);
+          input.weekdays = input.frequency === 'weekly' ? this.data.repeatWeekdays : [];
+          input.monthDays = input.frequency === 'monthly' ? this.data.repeatMonthDays : [];
+        }
         let operation;
         let result;
 
         if (variant === 'plans-todo') {
-          result = service.createCalendarEventWithNewTask({
-            ...input,
-            taskProjectId: this.data.newTaskProjectId || undefined
-          });
-          operation = 'create-event';
+          if (this.data.existingTaskId) {
+            input.taskId = this.data.existingTaskId;
+            if (this.data.repeatEnabled) {
+              result = service.createRecurringPlan(input);
+              operation = 'create-recurring';
+            } else {
+              result = service.createCalendarEvent(input);
+              operation = 'create-event';
+            }
+          } else {
+            input.taskProjectId = this.data.newTaskProjectId || undefined;
+            if (this.data.repeatEnabled) {
+              result = service.createRecurringPlanWithNewTask(input);
+              operation = 'create-recurring';
+            } else {
+              result = service.createCalendarEventWithNewTask(input);
+              operation = 'create-event';
+            }
+          }
         } else {
           const task = this.data.planFormTasks[this.data.planFormTaskIndex];
           const shouldCreateTask = !this.data.hasAnyTasks
@@ -311,10 +370,6 @@ Component({
           if (!shouldCreateTask) input.taskId = task.id;
 
           if (this.data.repeatEnabled) {
-            input.frequency = FREQUENCY_VALUES[this.data.frequencyIndex];
-            input.interval = repeatIntervalFromGap(this.data.repeatGap);
-            input.weekdays = input.frequency === 'weekly' ? this.data.repeatWeekdays : [];
-            input.monthDays = input.frequency === 'monthly' ? this.data.repeatMonthDays : [];
             result = shouldCreateTask
               ? service.createRecurringPlanWithNewTask(input)
               : service.createRecurringPlan(input);
@@ -343,17 +398,42 @@ Component({
         if (!task || !task.id || !this.validTaskIds || !this.validTaskIds.has(task.id)) {
           throw new Error('请选择任务');
         }
-        const result = getService().updateCalendarEvent(this.data.planEditor.id, {
+        const input = {
           title: this.data.title,
           startedAt: parseLocalDateTime(this.data.startDate, this.data.startTime),
           endedAt: parseLocalDateTime(this.data.endDate, this.data.endTime),
           priority: this.data.priority,
           taskId: task.id
-        });
+        };
+        let operation = 'update-event';
+        let result;
+        if (this.data.isRecurringEditor) {
+          input.frequency = FREQUENCY_VALUES[this.data.frequencyIndex];
+          input.interval = repeatIntervalFromGap(this.data.repeatGap);
+          input.weekdays = input.frequency === 'weekly' ? this.data.repeatWeekdays : [];
+          input.monthDays = input.frequency === 'monthly' ? this.data.repeatMonthDays : [];
+          result = getService().editRuleFollowing(
+            this.data.recurringRuleId,
+            this.data.recurringOccurrenceStart,
+            input
+          );
+          operation = 'update-recurring';
+        } else if (this.data.repeatEnabled) {
+          input.frequency = FREQUENCY_VALUES[this.data.frequencyIndex];
+          input.interval = repeatIntervalFromGap(this.data.repeatGap);
+          input.weekdays = input.frequency === 'weekly' ? this.data.repeatWeekdays : [];
+          input.monthDays = input.frequency === 'monthly' ? this.data.repeatMonthDays : [];
+          result = getService().enableRecurringForCalendarEvent(this.data.planEditor.id, input);
+          operation = 'create-recurring';
+        } else {
+          result = getService().updateCalendarEvent(this.data.planEditor.id, input);
+        }
         this.triggerEvent('success', {
-          operation: 'update-event',
+          operation,
           result,
-          revealTarget: null
+          revealTarget: operation === 'create-recurring' || operation === 'update-recurring'
+            ? createdPlanTarget(result)
+            : null
         });
       } catch (error) {
         showError(error);

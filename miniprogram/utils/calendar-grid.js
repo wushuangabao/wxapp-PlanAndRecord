@@ -17,7 +17,9 @@ const LANE_GAP_PERCENT = 2;
 const COARSE_BLOCK_LIST_WIDTH_RPX = 538;
 const COARSE_BLOCK_MAX_WIDTH_RPX = 300;
 const COARSE_BLOCK_GAP_RPX = 8;
-const COARSE_BLOCK_TITLE_HORIZONTAL_PADDING_RPX = 24;
+const COARSE_BLOCK_TITLE_HORIZONTAL_PADDING_RPX = 16;
+// 块宽保持不变，把原内边距预算中的 8rpx 留给字体度量与像素取整误差。
+const COARSE_BLOCK_TEXT_RENDERING_TOLERANCE_RPX = 8;
 
 function formatDateParts(timestamp) {
   const date = new Date(timestamp);
@@ -173,7 +175,10 @@ function coarseBlockWidthRpx(block) {
   );
   return Math.min(
     COARSE_BLOCK_MAX_WIDTH_RPX,
-    COARSE_BLOCK_TITLE_HORIZONTAL_PADDING_RPX + borderWidth + titleWidth
+    COARSE_BLOCK_TITLE_HORIZONTAL_PADDING_RPX
+      + COARSE_BLOCK_TEXT_RENDERING_TOLERANCE_RPX
+      + borderWidth
+      + titleWidth
   );
 }
 

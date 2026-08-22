@@ -295,6 +295,66 @@ test('createCalendarEventWithNewTask 支持活动项目 taskProjectId 并拒绝�
   assert.equal(archivedHarness.service.snapshot().calendarEvents.length, 0);
 });
 
+test('createRecurringPlanWithNewTask 支持活动项目 taskProjectId 并拒绝归档或不存在项目', () => {
+  const start = 1_700_000_000_000 + 3_600_000;
+  const recurringInput = {
+    title: '带项目固定日程',
+    startedAt: start,
+    endedAt: start + 1_800_000,
+    priority: 1,
+    frequency: 'daily',
+    interval: 1
+  };
+  const activeHarness = createHarness();
+  const project = activeHarness.service.createProject({
+    title: '活动项目',
+    deadlineAt: start + 86_400_000
+  });
+  const linked = activeHarness.service.createRecurringPlanWithNewTask({
+    ...recurringInput,
+    taskProjectId: project.id
+  });
+  assert.equal(linked.task.projectId, project.id);
+  assert.equal(linked.task.projectNameSnapshot, '活动项目');
+  assert.equal(linked.rule.revisions[0].projectId, null);
+  assert.equal(linked.rule.revisions[0].projectNameSnapshot, '活动项目');
+  assert.equal(linked.rule.revisions[0].taskId, linked.task.id);
+  assert.equal(linked.occurrence.virtual, true);
+  assert.equal(activeHarness.service.snapshot().calendarEvents.length, 0);
+
+  const omitted = createHarness().service.createRecurringPlanWithNewTask(recurringInput);
+  assert.equal(omitted.task.projectId, null);
+  assert.equal(omitted.rule.revisions[0].projectId, null);
+
+  const missingHarness = createHarness();
+  assert.throws(
+    () => missingHarness.service.createRecurringPlanWithNewTask({
+      ...recurringInput,
+      taskProjectId: 'project_missing'
+    }),
+    (error) => error.code === 'ENTITY_NOT_FOUND'
+  );
+  assert.equal(missingHarness.service.snapshot().tasks.length, 0);
+  assert.equal(missingHarness.service.snapshot().repeatRules.length, 0);
+
+  const archivedHarness = createHarness();
+  const archived = archivedHarness.service.createProject({
+    title: '归档项目',
+    deadlineAt: start + 86_400_000
+  });
+  archivedHarness.service.setProjectArchived(archived.id, true);
+  assert.throws(
+    () => archivedHarness.service.createRecurringPlanWithNewTask({
+      ...recurringInput,
+      title: '归档项目固定日程',
+      taskProjectId: archived.id
+    }),
+    (error) => error.code === 'PROJECT_NOT_ACTIVE'
+  );
+  assert.equal(archivedHarness.service.snapshot().tasks.length, 0);
+  assert.equal(archivedHarness.service.snapshot().repeatRules.length, 0);
+});
+
 test('删除愿望需要二次确认并只移除目标愿望', () => {
   const { service } = createHarness();
   const deletedWish = service.createWish('准备删除的愿望');
@@ -375,6 +435,169 @@ test('重复规则投影返回 virtual plan 而不是候选日志', () => {
   );
 });
 
+test('编辑普通计划开启固定日程：无记录或计时引用时原子替换为重复规则', () => {
+  const { service, now } = createHarness();
+  const originalTask = service.createTask({ title: '原任务' });
+  const selectedTask = service.createTask({ title: '新任务' });
+  const event = service.createCalendarEvent({
+    title: '普通计划',
+    startedAt: now() + 60 * 60 * 1000,
+    endedAt: now() + 2 * 60 * 60 * 1000,
+    priority: 1,
+    taskId: originalTask.id
+  });
+  const nextStart = now() + 3 * 60 * 60 * 1000;
+
+  const result = service.enableRecurringForCalendarEvent(event.id, {
+    title: '固定复盘',
+    startedAt: nextStart,
+    endedAt: nextStart + 30 * 60 * 1000,
+    priority: 3,
+    taskId: selectedTask.id,
+    frequency: 'weekly',
+    interval: 2,
+    weekdays: [new Date(nextStart).getDay()],
+    monthDays: []
+  });
+  const snapshot = service.snapshot();
+  const revision = result.rule.revisions[0];
+
+  assert.equal(result.originalEventPreserved, false);
+  assert.equal(result.event, null);
+  assert.equal(snapshot.calendarEvents.some((item) => item.id === event.id), false);
+  assert.equal(snapshot.repeatRules.length, 1);
+  assert.deepEqual(
+    [result.rule.title, revision.startedAt, revision.endedAt, revision.priority, revision.taskId],
+    ['固定复盘', nextStart, nextStart + 30 * 60 * 1000, 3, selectedTask.id]
+  );
+  assert.deepEqual(
+    [revision.frequency, revision.interval, revision.weekdays, revision.monthDays],
+    ['weekly', 2, [new Date(nextStart).getDay()], []]
+  );
+  assert.equal(result.occurrence.ruleId, result.rule.id);
+});
+
+test('编辑有记录的普通计划开启固定日程：保留并同步更新原计划，记录关联不变', () => {
+  const { service, now } = createHarness();
+  const task = service.createTask({ title: '记录任务' });
+  const event = service.createCalendarEvent({
+    title: '已有记录的计划',
+    startedAt: now() + 60 * 60 * 1000,
+    endedAt: now() + 2 * 60 * 60 * 1000,
+    priority: 1,
+    taskId: task.id
+  });
+  const log = service.createManualLog({
+    startedAt: now() - 30 * 60 * 1000,
+    endedAt: now() - 20 * 60 * 1000,
+    calendarEventId: event.id
+  }).log;
+  const nextStart = now() + 4 * 60 * 60 * 1000;
+
+  const result = service.enableRecurringForCalendarEvent(event.id, {
+    title: '同名固定日程',
+    startedAt: nextStart,
+    endedAt: nextStart + 45 * 60 * 1000,
+    priority: 2,
+    taskId: task.id,
+    frequency: 'daily',
+    interval: 1,
+    weekdays: [],
+    monthDays: []
+  });
+  const snapshot = service.snapshot();
+  const keptEvent = snapshot.calendarEvents.find((item) => item.id === event.id);
+  const keptLog = snapshot.timeLogs.find((item) => item.id === log.id);
+  const revision = result.rule.revisions[0];
+
+  assert.equal(result.originalEventPreserved, true);
+  assert.equal(result.event.id, event.id);
+  assert.deepEqual(
+    [keptEvent.title, keptEvent.startedAt, keptEvent.endedAt, keptEvent.priority, keptEvent.taskId],
+    ['同名固定日程', nextStart, nextStart + 45 * 60 * 1000, 2, task.id]
+  );
+  assert.deepEqual(
+    [result.rule.title, revision.startedAt, revision.endedAt, revision.priority, revision.taskId],
+    ['同名固定日程', nextStart, nextStart + 45 * 60 * 1000, 2, task.id]
+  );
+  assert.equal(keptLog.calendarEventId, event.id);
+  assert.equal(keptLog.originRuleId, null);
+  assert.equal(keptLog.source, LOG_SOURCE.MANUAL);
+  assert.equal(snapshot.tasks.find((item) => item.id === task.id).status, TASK_STATUS.TODO);
+});
+
+test('编辑有活动计时或恢复草稿引用的普通计划开启固定日程时保留原计划和引用', () => {
+  for (const referenceKind of ['active', 'recovery']) {
+    const { service, setNow, now } = createHarness();
+    const task = service.createTask({ title: `${referenceKind} 任务` });
+    const event = service.createCalendarEvent({
+      title: `${referenceKind} 计划`,
+      startedAt: now() + 60 * 60 * 1000,
+      endedAt: now() + 2 * 60 * 60 * 1000,
+      priority: 1,
+      taskId: task.id
+    });
+    service.startTimer({ calendarEventId: event.id });
+    if (referenceKind === 'recovery') {
+      setNow(now() + MAX_TIMER_SPAN_MS + 1);
+      service.recoverTimer();
+    }
+
+    const result = service.enableRecurringForCalendarEvent(event.id, {
+      title: `${referenceKind} 固定日程`,
+      startedAt: event.startedAt,
+      endedAt: event.endedAt,
+      priority: 1,
+      taskId: task.id,
+      frequency: 'daily',
+      interval: 1,
+      weekdays: [],
+      monthDays: []
+    });
+    const snapshot = service.snapshot();
+    const draft = referenceKind === 'active'
+      ? snapshot.timer.draft
+      : snapshot.recoveryDraft.timer.draft;
+
+    assert.equal(result.originalEventPreserved, true, referenceKind);
+    assert.equal(snapshot.calendarEvents.some((item) => item.id === event.id), true, referenceKind);
+    assert.equal(draft.calendarEventId, event.id, referenceKind);
+    assert.equal(draft.originRuleId, null, referenceKind);
+  }
+});
+
+test('编辑普通计划开启固定日程写入失败时不删除或修改原计划，也不留下规则', () => {
+  const storage = new TrackingStorage();
+  const { service, now } = createHarness(undefined, storage);
+  const task = service.createTask({ title: '回滚任务' });
+  const event = service.createCalendarEvent({
+    title: '回滚前计划',
+    startedAt: now() + 60 * 60 * 1000,
+    endedAt: now() + 2 * 60 * 60 * 1000,
+    priority: 1,
+    taskId: task.id
+  });
+  const before = service.snapshot();
+  storage.resetCalls();
+  storage.failNextSet = true;
+
+  assert.throws(
+    () => service.enableRecurringForCalendarEvent(event.id, {
+      title: '不应保存的固定日程',
+      startedAt: event.startedAt,
+      endedAt: event.endedAt,
+      priority: 2,
+      taskId: task.id,
+      frequency: 'daily',
+      interval: 1,
+      weekdays: [],
+      monthDays: []
+    }),
+    (error) => error instanceof StorageError && error.code === 'WRITE_FAILED'
+  );
+  assert.deepEqual(service.snapshot(), before);
+});
+
 test('确认 virtual plan 只创建一条 confirmed rule 日志且重复确认被拒绝', () => {
   const { service, now } = createHarness();
   const startedAt = now() + 60 * 60 * 1000;
@@ -436,6 +659,62 @@ test('活动计时关联的重复实例不能再被确认完成', () => {
   const otherLog = service.confirmVirtualOccurrence(second);
   assert.equal(otherLog.originOccurrenceId, second.originOccurrenceId);
   assert.equal(service.snapshot().timer.status, TIMER_STATUS.PAUSED);
+});
+
+test('TODO 长按确认：按候选生成普通计划或固定日程记录，计时中拒绝', () => {
+  const { service, now } = createHarness();
+  const task = service.createTask({ title: '待确认计划任务' });
+  const event = service.createCalendarEvent({
+    title: '上午计划',
+    taskId: task.id,
+    startedAt: now() + 60 * 60 * 1000,
+    endedAt: now() + 2 * 60 * 60 * 1000,
+    priority: 1
+  });
+
+  const eventLog = service.confirmTaskPlanCandidate(task.id, `event:${event.id}`);
+  assert.deepEqual(
+    [eventLog.status, eventLog.source, eventLog.calendarEventId, eventLog.startedAt, eventLog.endedAt],
+    [LOG_STATUS.CONFIRMED, LOG_SOURCE.MANUAL, event.id, event.startedAt, event.endedAt]
+  );
+  assert.equal(service.snapshot().tasks.find((item) => item.id === task.id).status, TASK_STATUS.COMPLETED);
+  assert.throws(
+    () => service.confirmTaskPlanCandidate(task.id, `event:${event.id}`),
+    (error) => error.code === 'TASK_PLAN_CANDIDATE_UNAVAILABLE'
+  );
+
+  const startedAt = now() + 60 * 60 * 1000;
+  const { rule } = createRecurringPlanForTask(service, {
+    title: '每日确认',
+    startedAt,
+    endedAt: startedAt + 30 * 60 * 1000,
+    frequency: 'daily',
+    interval: 1
+  });
+  const occurrenceTaskId = rule.revisions[0].taskId;
+  const occurrenceCandidate = service.taskPlanStates().get(occurrenceTaskId).candidates
+    .find((item) => item.kind === 'occurrence');
+  assert.ok(occurrenceCandidate);
+  const occurrenceLog = service.confirmTaskPlanCandidate(occurrenceTaskId, occurrenceCandidate.id);
+  assert.deepEqual(
+    [occurrenceLog.status, occurrenceLog.source, occurrenceLog.originRuleId, occurrenceLog.originOccurrenceId],
+    [LOG_STATUS.CONFIRMED, LOG_SOURCE.RULE, rule.id, occurrenceCandidate.originOccurrenceId]
+  );
+
+  const timedTask = service.createTask({ title: '计时中计划任务' });
+  const timedEvent = service.createCalendarEvent({
+    title: '正在计时的计划',
+    taskId: timedTask.id,
+    startedAt: now() + 3 * 60 * 60 * 1000,
+    endedAt: now() + 4 * 60 * 60 * 1000,
+    priority: 1
+  });
+  service.startTimer({ calendarEventId: timedEvent.id });
+  assert.throws(
+    () => service.confirmTaskPlanCandidate(timedTask.id, `event:${timedEvent.id}`),
+    (error) => error.code === 'PLAN_TIMER_ACTIVE'
+  );
+  assert.equal(service.snapshot().timeLogs.filter((item) => item.calendarEventId === timedEvent.id).length, 0);
 });
 
 test('跳过真实固定日程实例只写 skip，并保留同规则其他实例投影', () => {
@@ -902,8 +1181,302 @@ test('删除本次及后续固定日程写入失败时完整回滚规则、skip�
   assert.deepEqual(service.snapshot(), before);
 });
 
-test('固定日程当前 v1 不暴露实例修改或后续修订写入口', () => {
+test('编辑本次及后续会截断旧规则、创建新 ruleId，并保留过去投影和 skip', () => {
+  const { service, storage } = createHarness();
+  const firstStart = new Date(2026, 7, 20, 9, 0, 0, 0).getTime();
+  const boundary = new Date(2026, 7, 22, 9, 0, 0, 0).getTime();
+  const futureStart = new Date(2026, 7, 23, 9, 0, 0, 0).getTime();
+  const oldTask = service.createTask({ title: '旧任务' });
+  const newTask = service.createTask({ title: '新任务' });
+  const { rule } = createRecurringPlanForTask(service, {
+    title: '旧固定日程',
+    taskId: oldTask.id,
+    startedAt: firstStart,
+    endedAt: firstStart + 30 * 60 * 1000,
+    priority: 1,
+    frequency: 'daily',
+    interval: 1
+  });
+  service.skipOccurrence(rule.id, firstStart);
+  service.skipOccurrence(rule.id, futureStart);
+  storage.resetCalls();
+
+  assert.equal(service.canEditRuleFollowing(rule.id, boundary), true);
+  assert.deepEqual(storage.setCalls, []);
+
+  const editedStart = new Date(2026, 7, 22, 11, 0, 0, 0).getTime();
+  const result = service.editRuleFollowing(rule.id, boundary, {
+    title: '新固定日程',
+    taskId: newTask.id,
+    startedAt: editedStart,
+    endedAt: editedStart + 60 * 60 * 1000,
+    priority: 3,
+    frequency: 'weekly',
+    interval: 2,
+    weekdays: [new Date(editedStart).getDay()]
+  });
+  const snapshot = service.snapshot();
+  const oldRule = snapshot.repeatRules.find((item) => item.id === rule.id);
+  const nextRule = snapshot.repeatRules.find((item) => item.id === result.rule.id);
+
+  assert.notEqual(result.rule.id, rule.id);
+  assert.equal(result.previousRuleId, rule.id);
+  assert.equal(result.removedPreviousRule, false);
+  assert.equal(oldRule.title, '旧固定日程');
+  assert.equal(oldRule.revisions.length, 1);
+  assert.equal(oldRule.revisions[0].effectiveUntil, boundary - 1);
+  assert.equal(oldRule.revisions[0].taskId, oldTask.id);
+  assert.equal(nextRule.title, '新固定日程');
+  assert.equal(nextRule.revisions.length, 1);
+  assert.deepEqual(
+    [nextRule.revisions[0].effectiveFrom, nextRule.revisions[0].startedAt, nextRule.revisions[0].endedAt],
+    [editedStart, editedStart, editedStart + 60 * 60 * 1000]
+  );
+  assert.deepEqual(
+    [nextRule.revisions[0].frequency, nextRule.revisions[0].interval, nextRule.revisions[0].weekdays],
+    ['weekly', 2, [new Date(editedStart).getDay()]]
+  );
+  assert.equal(nextRule.revisions[0].taskId, newTask.id);
+  assert.equal(projectRule(oldRule, firstStart, boundary - 1, []).length, 2);
+  assert.equal(projectRule(oldRule, boundary, futureStart, []).length, 0);
+  assert.deepEqual(
+    snapshot.occurrenceExceptions.map((item) => [item.ruleId, item.occurrenceStart]),
+    [[rule.id, firstStart]]
+  );
+  assert.equal(result.occurrence.ruleId, nextRule.id);
+  assert.equal(result.occurrence.startedAt, editedStart);
+  assert.equal(storage.setCalls.length, 1);
+});
+
+test('从首个固定日程编辑会删除旧规则，新模式不命中生效槽位时不伪造首项', () => {
   const { service } = createHarness();
+  const firstStart = new Date(2026, 7, 20, 9, 0, 0, 0).getTime();
+  const task = service.createTask({ title: '编辑首项任务' });
+  const { rule } = createRecurringPlanForTask(service, {
+    title: '编辑首项',
+    taskId: task.id,
+    startedAt: firstStart,
+    endedAt: firstStart + 30 * 60 * 1000,
+    frequency: 'daily',
+    interval: 1
+  });
+  const editedStart = new Date(2026, 7, 20, 10, 0, 0, 0).getTime();
+  const otherWeekday = (new Date(editedStart).getDay() + 1) % 7;
+
+  const result = service.editRuleFollowing(rule.id, firstStart, {
+    title: '编辑后的首项',
+    taskId: task.id,
+    startedAt: editedStart,
+    endedAt: editedStart + 30 * 60 * 1000,
+    priority: 2,
+    frequency: 'weekly',
+    interval: 1,
+    weekdays: [otherWeekday]
+  });
+
+  assert.equal(result.removedPreviousRule, true);
+  assert.equal(result.occurrence, null);
+  assert.equal(service.snapshot().repeatRules.some((item) => item.id === rule.id), false);
+  assert.equal(service.snapshot().repeatRules.some((item) => item.id === result.rule.id), true);
+});
+
+test('只有过去记录不阻止编辑；边界及后续的候选、实际、活动计时和恢复草稿分别阻止编辑', () => {
+  const createCase = () => {
+    const harness = createHarness();
+    const firstStart = new Date(2026, 7, 20, 9, 0, 0, 0).getTime();
+    const boundary = new Date(2026, 7, 21, 9, 0, 0, 0).getTime();
+    const future = new Date(2026, 7, 22, 9, 0, 0, 0).getTime();
+    const task = harness.service.createTask({ title: '关联阻止任务' });
+    const { rule } = createRecurringPlanForTask(harness.service, {
+      title: '关联阻止规则',
+      taskId: task.id,
+      startedAt: firstStart,
+      endedAt: firstStart + 30 * 60 * 1000,
+      frequency: 'daily',
+      interval: 1
+    });
+    const occurrences = projectRule(rule, firstStart, future, []);
+    const editInput = {
+      title: '不应写入',
+      taskId: task.id,
+      startedAt: boundary,
+      endedAt: boundary + 60 * 60 * 1000,
+      priority: 2,
+      frequency: 'daily',
+      interval: 1
+    };
+    return { ...harness, task, rule, firstStart, boundary, future, occurrences, editInput };
+  };
+
+  const past = createCase();
+  const pastOccurrence = past.occurrences.find((item) => item.occurrenceStart === past.firstStart);
+  past.service.createManualLog({
+    startedAt: pastOccurrence.startedAt,
+    endedAt: pastOccurrence.endedAt,
+    originRuleId: past.rule.id,
+    originOccurrenceId: pastOccurrence.originOccurrenceId
+  });
+  assert.equal(past.service.canEditRuleFollowing(past.rule.id, past.boundary), true);
+
+  const cases = [{
+    label: '候选记录',
+    setup(context) {
+      const occurrence = context.occurrences.find((item) => item.occurrenceStart === context.boundary);
+      const log = context.service.createManualLog({
+        startedAt: occurrence.startedAt,
+        endedAt: occurrence.endedAt,
+        originRuleId: context.rule.id,
+        originOccurrenceId: occurrence.originOccurrenceId
+      }).log;
+      context.repository.transaction((database) => {
+        database.timeLogs.find((item) => item.id === log.id).status = LOG_STATUS.CANDIDATE;
+      });
+    }
+  }, {
+    label: '实际记录',
+    setup(context) {
+      const occurrence = context.occurrences.find((item) => item.occurrenceStart === context.future);
+      context.service.createManualLog({
+        startedAt: occurrence.startedAt,
+        endedAt: occurrence.endedAt,
+        originRuleId: context.rule.id,
+        originOccurrenceId: occurrence.originOccurrenceId
+      });
+    }
+  }, {
+    label: '活动计时',
+    setup(context) {
+      const occurrence = context.occurrences.find((item) => item.occurrenceStart === context.boundary);
+      context.service.startTimer({
+        originRuleId: context.rule.id,
+        originOccurrenceId: occurrence.originOccurrenceId
+      });
+    }
+  }, {
+    label: '恢复草稿',
+    setup(context) {
+      const occurrence = context.occurrences.find((item) => item.occurrenceStart === context.future);
+      context.repository.transaction((database) => {
+        database.recoveryDraft = {
+          reason: '待恢复',
+          createdAt: context.now(),
+          timer: {
+            ...createIdleTimer(),
+            draft: {
+              originRuleId: context.rule.id,
+              originOccurrenceId: occurrence.originOccurrenceId,
+              tags: []
+            }
+          }
+        };
+      });
+    }
+  }];
+
+  cases.forEach(({ label, setup }) => {
+    const context = createCase();
+    setup(context);
+    const before = context.service.snapshot();
+    context.storage.resetCalls();
+    assert.equal(context.service.canEditRuleFollowing(context.rule.id, context.boundary), false, label);
+    assert.throws(
+      () => context.service.editRuleFollowing(
+        context.rule.id,
+        context.boundary,
+        context.editInput
+      ),
+      (error) => error.code === 'RULE_FOLLOWING_HAS_EXECUTION_REFERENCES',
+      label
+    );
+    assert.deepEqual(context.service.snapshot(), before, label);
+    assert.deepEqual(context.storage.setCalls, [], label);
+  });
+});
+
+test('固定日程编辑拒绝无效、已跳过边界和早于边界自然日的开始时间，写入失败完整回滚', () => {
+  const { service, storage, now } = createHarness();
+  const firstStart = new Date(2026, 7, 20, 9, 0, 0, 0).getTime();
+  const boundary = new Date(2026, 7, 21, 9, 0, 0, 0).getTime();
+  const task = service.createTask({ title: '编辑校验任务' });
+  const { rule } = createRecurringPlanForTask(service, {
+    title: '编辑校验规则',
+    taskId: task.id,
+    startedAt: firstStart,
+    endedAt: firstStart + 30 * 60 * 1000,
+    frequency: 'daily',
+    interval: 1
+  });
+  const validInput = {
+    title: '有效编辑',
+    taskId: task.id,
+    startedAt: boundary,
+    endedAt: boundary + 30 * 60 * 1000,
+    priority: 1,
+    frequency: 'daily',
+    interval: 1
+  };
+  const before = service.snapshot();
+  storage.resetCalls();
+
+  assert.throws(
+    () => service.editRuleFollowing(rule.id, boundary + 1, validInput),
+    (error) => error.code === 'OCCURRENCE_NOT_FOUND'
+  );
+  assert.throws(
+    () => service.editRuleFollowing(rule.id, boundary, {
+      ...validInput,
+      startedAt: firstStart,
+      endedAt: firstStart + 30 * 60 * 1000
+    }),
+    (error) => error.code === 'RULE_EDIT_START_BEFORE_BOUNDARY'
+  );
+  assert.deepEqual(service.snapshot(), before);
+  assert.deepEqual(storage.setCalls, []);
+
+  service.skipOccurrence(rule.id, boundary);
+  const skipped = service.snapshot();
+  storage.resetCalls();
+  assert.equal(service.canEditRuleFollowing(rule.id, boundary), false);
+  assert.throws(
+    () => service.editRuleFollowing(rule.id, boundary, validInput),
+    (error) => error.code === 'OCCURRENCE_NOT_FOUND'
+  );
+  assert.deepEqual(service.snapshot(), skipped);
+  assert.deepEqual(storage.setCalls, []);
+
+  const rollback = createHarness(now());
+  const rollbackTask = rollback.service.createTask({ title: '回滚任务' });
+  const rollbackStart = new Date(2026, 8, 1, 9, 0, 0, 0).getTime();
+  const { rule: rollbackRule } = createRecurringPlanForTask(rollback.service, {
+    title: '回滚规则',
+    taskId: rollbackTask.id,
+    startedAt: rollbackStart,
+    endedAt: rollbackStart + 30 * 60 * 1000,
+    frequency: 'daily',
+    interval: 1
+  });
+  rollback.service.skipOccurrence(rollbackRule.id, rollbackStart + 2 * 24 * 60 * 60 * 1000);
+  const rollbackBefore = rollback.service.snapshot();
+  rollback.storage.failNextSet = true;
+  assert.throws(
+    () => rollback.service.editRuleFollowing(rollbackRule.id, rollbackStart, {
+      title: '失败编辑',
+      taskId: rollbackTask.id,
+      startedAt: rollbackStart,
+      endedAt: rollbackStart + 60 * 60 * 1000,
+      priority: 2,
+      frequency: 'daily',
+      interval: 1
+    }),
+    (error) => error.code === 'WRITE_FAILED'
+  );
+  assert.deepEqual(rollback.service.snapshot(), rollbackBefore);
+});
+
+test('固定日程 v1 只新增本次及后续编辑入口，不提供单次 override 或多 revision 写入口', () => {
+  const { service } = createHarness();
+  assert.equal(typeof service.editRuleFollowing, 'function');
+  assert.equal(typeof service.canEditRuleFollowing, 'function');
   assert.equal(typeof service.overrideOccurrence, 'undefined');
   assert.equal(typeof service.reviseRuleFollowing, 'undefined');
   assert.equal(typeof service.saveOccurrenceException, 'undefined');

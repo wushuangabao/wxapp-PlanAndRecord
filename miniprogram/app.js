@@ -5,7 +5,8 @@ App({
   globalData: {
     bootstrap: null,
     storageWarningShown: false,
-    calendarHandoff: null
+    calendarHandoff: null,
+    visiblePageRoute: null
   },
 
   onLaunch() {

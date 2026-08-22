@@ -6,14 +6,23 @@ const {
   formatDateTime,
   getPreferenceStore,
   getService,
+  markPageVisible,
   showError,
   showSaved
 } = require('../../utils/page');
 const { getRuntimeWindowWidth } = require('../../utils/wechat-runtime');
+const { displayLogTitle } = require('../../utils/log-presentation');
+const {
+  captureTargetRectFromTouch,
+  shouldCommitLongPressRelease
+} = require('../../utils/long-press-release');
 const {
   revealPlanTargetId,
   setCalendarHandoff
 } = require('../../utils/calendar-handoff');
+
+const TASK_TITLE_LONG_PRESS_SELECTOR = '.todo-title-button';
+const TASK_TIMER_LONG_PRESS_SELECTOR = '.todo-timer-icon';
 
 const HORIZONTAL_COLUMN_SIZE = 3;
 const TODO_SWIPE_DISTANCE_RATIO = 0.15;
@@ -28,9 +37,9 @@ const TODO_TITLE_LINKED_FONT_SIZE = 28;
 const TODO_TITLE_MIN_FONT_SIZE = 18;
 const TODO_TITLE_WIDTH_PADDING = 4;
 const PROJECT_TASK_PREVIEW_LIMIT = 3;
-const TASK_PLAN_OPTION_ROW_HEIGHT_RPX = 96;
-const TASK_PLAN_OPTION_GAP_RPX = 12;
-const TASK_PLAN_PICKER_MAX_LIST_HEIGHT_RPX = 600;
+const TASK_TIMELINE_OPTION_ROW_HEIGHT_RPX = 96;
+const TASK_TIMELINE_OPTION_GAP_RPX = 12;
+const TASK_TIMELINE_PICKER_MAX_LIST_HEIGHT_RPX = 600;
 const TODO_SORT_FIELDS = new Set(['createdAt', 'title', 'project', 'status']);
 const TODO_SORT_FIELD_OPTIONS = Object.freeze([
   { field: 'createdAt', label: '创建时间' },
@@ -233,11 +242,11 @@ function taskHasPlanAssociations(task) {
   ));
 }
 
-function taskPlanPickerListHeight(count) {
+function taskTimelinePickerListHeight(count) {
   if (!count) return 0;
   return Math.min(
-    TASK_PLAN_PICKER_MAX_LIST_HEIGHT_RPX,
-    count * TASK_PLAN_OPTION_ROW_HEIGHT_RPX + (count - 1) * TASK_PLAN_OPTION_GAP_RPX
+    TASK_TIMELINE_PICKER_MAX_LIST_HEIGHT_RPX,
+    count * TASK_TIMELINE_OPTION_ROW_HEIGHT_RPX + (count - 1) * TASK_TIMELINE_OPTION_GAP_RPX
   );
 }
 
@@ -246,6 +255,23 @@ function taskPlanPickerItems(candidates) {
     ...candidate,
     timeText: `${formatDateTime(candidate.startedAt)} – ${formatDateTime(candidate.endedAt)}`
   }));
+}
+
+function taskRecordPickerItems(records) {
+  return (records || []).map((record) => ({
+    id: record.id,
+    title: displayLogTitle(record),
+    startedAt: record.startedAt,
+    endedAt: record.endedAt,
+    timeText: `${formatDateTime(record.startedAt)} – ${formatDateTime(record.endedAt)}`
+  }));
+}
+
+function taskPlanCandidateIsTiming(task, candidate) {
+  if (!task || !candidate || !task.timerMatchesTask) return false;
+  if (task.timerCandidateId) return task.timerCandidateId === candidate.id;
+  const candidates = task.planCandidates || [];
+  return candidates.length === 1 && candidates[0].id === candidate.id;
 }
 
 function switchToCalendar(handoff) {
@@ -279,9 +305,13 @@ function buildTaskViewModels(tasks, projects, planStates = new Map()) {
       topVisible: planState ? planState.topVisible : true,
       controlKind: planState ? planState.controlKind : 'checkbox',
       timerMatchesTask: Boolean(planState && planState.timerMatchesTask),
+      timerCandidateId: planState && planState.timerCandidateId ? planState.timerCandidateId : '',
       timerStatus: planState ? planState.timerStatus : 'idle',
       recordedToday: Boolean(planState && planState.recordedToday),
       planCandidates: planState ? planState.candidates : [],
+      confirmedRecords: planState && Array.isArray(planState.confirmedRecords)
+        ? planState.confirmedRecords
+        : [],
       entityPlanCount: planState ? planState.entityPlans.length : 0,
       repeatRuleCount: planState ? planState.repeatRules.length : 0,
       hasPlanAssociations: Boolean(
@@ -466,7 +496,7 @@ Page({
     projectEditorTitle: '',
     projectEditorDate: '',
     projectEditorTime: '',
-    taskPlanPicker: null
+    taskTimelinePicker: null
   },
 
   onLoad() {
@@ -491,6 +521,7 @@ Page({
   },
 
   onShow() {
+    markPageVisible('pages/plans/index');
     this.refreshStatusesForCurrentDay();
     this.refresh();
     this.scheduleNextLocalDayRefresh();
@@ -526,7 +557,7 @@ Page({
 
   onHide() {
     this.clearNextLocalDayRefresh();
-    this.pendingCalendarHandoff = null;
+    this.clearPendingTaskTitleLongPress();
   },
 
   onReady() {
@@ -1077,25 +1108,71 @@ Page({
     });
   },
 
+  captureTaskTitleLongPressRect(event, key) {
+    const token = (this.taskTitleLongPressToken || 0) + 1;
+    this.taskTitleLongPressToken = token;
+    captureTargetRectFromTouch(TASK_TITLE_LONG_PRESS_SELECTOR, event, key, (rect) => {
+      if (this.taskTitleLongPressToken !== token) return;
+      this.taskTitleLongPressRect = rect;
+    });
+  },
+
+  onTaskTitleTouchStart(event) {
+    this.taskTitleLongPressRect = null;
+    this.captureTaskTitleLongPressRect(event, 'touches');
+  },
+
   onTaskTitleLongPress(event) {
     const task = this.data.tasks.find((item) => item.id === event.currentTarget.dataset.id);
     if (!task) return;
-    const candidates = taskPlanPickerItems(task.planCandidates);
-    if (!candidates.length) {
+    if (!this.taskTitleLongPressRect) this.captureTaskTitleLongPressRect(event, 'touches');
+    this.pendingTaskTitleLongPress = { taskId: task.id };
+  },
+
+  executeTaskTitleLongPress(taskId) {
+    const task = this.data.tasks.find((item) => item.id === taskId);
+    if (!task) return;
+    const planCandidates = taskPlanPickerItems(task.planCandidates);
+    if (planCandidates.length === 1) {
+      this.queueCalendarHandoffAfterTouch(this.revealPlanHandoff(planCandidates[0]));
+      return;
+    }
+    if (planCandidates.length > 1) {
+      this.setData({
+        taskTimelinePicker: {
+          taskId: task.id,
+          kind: 'plan',
+          title: '查看计划',
+          itemAriaPrefix: '查看计划',
+          items: planCandidates,
+          listHeight: taskTimelinePickerListHeight(planCandidates.length)
+        }
+      });
+      return;
+    }
+
+    const recordCandidates = taskRecordPickerItems(task.confirmedRecords);
+    if (recordCandidates.length === 1) {
+      this.queueCalendarHandoffAfterTouch(this.revealRecordHandoff(recordCandidates[0]));
+      return;
+    }
+    if (recordCandidates.length > 1) {
+      this.setData({
+        taskTimelinePicker: {
+          taskId: task.id,
+          kind: 'record',
+          title: '查看记录',
+          itemAriaPrefix: '查看记录',
+          items: recordCandidates,
+          listHeight: taskTimelinePickerListHeight(recordCandidates.length)
+        }
+      });
+      return;
+    }
+
+    if (task.status !== TASK_STATUS.COMPLETED) {
       this.confirmCreatePlanForTask(task.id);
-      return;
     }
-    if (candidates.length === 1) {
-      this.queueCalendarHandoffAfterTouch(this.revealPlanHandoff(candidates[0]));
-      return;
-    }
-    this.setData({
-      taskPlanPicker: {
-        taskId: task.id,
-        plans: candidates,
-        listHeight: taskPlanPickerListHeight(candidates.length)
-      }
-    });
   },
 
   queueCalendarHandoffAfterTouch(handoff) {
@@ -1110,22 +1187,38 @@ Page({
     switchToCalendar(handoff);
   },
 
-  onTaskTitleTouchEnd() {
+  clearPendingTaskTitleLongPress() {
+    this.pendingTaskTitleLongPress = null;
+    this.pendingCalendarHandoff = null;
+    this.taskTitleLongPressRect = null;
+  },
+
+  onTaskTitleTouchEnd(event) {
+    const pending = this.pendingTaskTitleLongPress;
+    this.pendingTaskTitleLongPress = null;
+    if (pending && shouldCommitLongPressRelease(event, this.taskTitleLongPressRect)) {
+      this.executeTaskTitleLongPress(pending.taskId);
+    } else {
+      this.pendingCalendarHandoff = null;
+    }
     this.flushPendingCalendarHandoff();
+    this.taskTitleLongPressRect = null;
   },
 
-  closeTaskPlanPicker() {
-    this.setData({ taskPlanPicker: null });
+  closeTaskTimelinePicker() {
+    this.setData({ taskTimelinePicker: null });
   },
 
-  selectTaskPlan(event) {
-    const picker = this.data.taskPlanPicker;
-    const planId = event.currentTarget.dataset.id;
-    const plan = picker && picker.plans
-      ? picker.plans.find((item) => item.id === planId)
+  selectTaskTimelineItem(event) {
+    const picker = this.data.taskTimelinePicker;
+    const itemId = event.currentTarget.dataset.id;
+    const item = picker && picker.items
+      ? picker.items.find((candidate) => candidate.id === itemId)
       : null;
-    this.setData({ taskPlanPicker: null });
-    if (plan) this.jumpToPlanCandidate(plan);
+    this.setData({ taskTimelinePicker: null });
+    if (!item) return;
+    if (picker.kind === 'record') this.jumpToRecord(item);
+    else this.jumpToPlanCandidate(item);
   },
 
   revealPlanHandoff(candidate) {
@@ -1147,12 +1240,50 @@ Page({
     if (handoff) switchToCalendar(handoff);
   },
 
+  revealRecordHandoff(record) {
+    if (!record || !record.id
+      || !Number.isFinite(record.startedAt) || !Number.isFinite(record.endedAt)) {
+      wx.showToast({ title: '无法定位该记录', icon: 'none' });
+      return null;
+    }
+    return {
+      type: 'reveal-record',
+      id: record.id,
+      startedAt: record.startedAt,
+      endedAt: record.endedAt
+    };
+  },
+
+  jumpToRecord(record) {
+    const handoff = this.revealRecordHandoff(record);
+    if (handoff) switchToCalendar(handoff);
+  },
+
   confirmCreatePlanForTask(taskId) {
     wx.showModal({
-      title: '是否创建实施计划？',
+      title: '创建计划？',
       success: (result) => {
         if (!result.confirm) return;
-        switchToCalendar({ type: 'create-plan', taskId });
+        this.openPlanForExistingTask(taskId);
+      }
+    });
+  },
+
+  openPlanForExistingTask(taskId) {
+    const task = this.data.tasks.find((item) => item.id === taskId);
+    if (!task) return;
+    this.setData({
+      todoEditorSnapshot: null,
+      isTaskEditorOpen: false,
+      isPlanSheetOpen: true,
+      planEditorInitialValue: {
+        title: task.title || '',
+        anchorDate: Date.now(),
+        priority: 1,
+        hasAnyTasks: false,
+        taskOptions: [],
+        taskIndex: 0,
+        existingTaskId: task.id
       }
     });
   },
@@ -1269,12 +1400,13 @@ Page({
       planEditorInitialValue: null,
       taskEditor: snapshot ? snapshot.taskEditor : this.data.taskEditor,
       taskTitle: snapshot ? snapshot.taskTitle : this.data.taskTitle,
-      isTaskEditorOpen: true,
+      isTaskEditorOpen: Boolean(snapshot),
       todoEditorSnapshot: null
     });
   },
 
-  onPlanEditorSuccess() {
+  onPlanEditorSuccess(event) {
+    const operation = event && event.detail && event.detail.operation;
     this.setData({
       isPlanSheetOpen: false,
       planEditorInitialValue: null,
@@ -1283,7 +1415,7 @@ Page({
       taskTitle: '',
       isTaskEditorOpen: false
     }, () => {
-      showSaved('计划块已创建');
+      showSaved(operation === 'create-recurring' ? '固定日程已创建' : '计划块已创建');
       this.refresh({ resetTodoColumn: true });
     });
   },
@@ -1302,6 +1434,7 @@ Page({
   },
 
   toggleTask(event) {
+    if (this.skipTaskToggle) return;
     const id = event.currentTarget.dataset.id;
     const task = this.data.tasks.find((item) => item.id === id);
     if (!task) return;
@@ -1382,6 +1515,98 @@ Page({
     } catch (error) {
       showError(error);
     }
+  },
+
+  captureTaskTimerLongPressRect(event, key) {
+    const token = (this.taskTimerLongPressToken || 0) + 1;
+    this.taskTimerLongPressToken = token;
+    captureTargetRectFromTouch(TASK_TIMER_LONG_PRESS_SELECTOR, event, key, (rect) => {
+      if (this.taskTimerLongPressToken !== token) return;
+      this.taskTimerLongPressRect = rect;
+    });
+  },
+
+  onTaskTimerTouchStart(event) {
+    this.taskTimerLongPressRect = null;
+    this.captureTaskTimerLongPressRect(event, 'touches');
+  },
+
+  onTaskTimerLongPress(event) {
+    const task = this.data.tasks.find((item) => item.id === event.currentTarget.dataset.id);
+    if (!task || task.status === TASK_STATUS.COMPLETED) return;
+    if (!this.taskTimerLongPressRect) this.captureTaskTimerLongPressRect(event, 'touches');
+    this.pendingTaskTimerLongPress = { taskId: task.id };
+    this.skipTaskToggle = true;
+  },
+
+  executeTaskTimerLongPress(taskId) {
+    const task = this.data.tasks.find((item) => item.id === taskId);
+    if (!task || task.status === TASK_STATUS.COMPLETED) return;
+    if (task.controlKind === 'recorded') {
+      wx.showToast({ title: '今天的固定日程已记录', icon: 'none' });
+      return;
+    }
+    if (task.controlKind === 'schedule') {
+      wx.showToast({ title: '今天没有这项固定日程', icon: 'none' });
+      return;
+    }
+    const candidates = task.planCandidates || [];
+    if (!candidates.length) {
+      wx.showToast({ title: '当前没有可确认的计划', icon: 'none' });
+      return;
+    }
+    if (candidates.length === 1) {
+      this.confirmTaskPlanCandidateIfIdle(task, candidates[0]);
+      return;
+    }
+    wx.showActionSheet({
+      itemList: candidates.map((candidate) => candidate.title || '未命名计划'),
+      success: (result) => {
+        const candidate = candidates[result.tapIndex];
+        if (candidate) this.confirmTaskPlanCandidateIfIdle(task, candidate);
+      }
+    });
+  },
+
+  confirmTaskPlanCandidateIfIdle(task, candidate) {
+    const current = this.data.tasks.find((item) => item.id === task.id) || task;
+    if (taskPlanCandidateIsTiming(current, candidate)) {
+      wx.showToast({ title: '该计划已经在计时了', icon: 'none' });
+      return;
+    }
+    this.confirmTaskPlanCandidateWithModal(current.id, candidate);
+  },
+
+  confirmTaskPlanCandidateWithModal(taskId, candidate) {
+    wx.showModal({
+      title: '直接完成？',
+      success: (result) => {
+        if (!result.confirm) return;
+        this.commitTaskPlanCandidate(taskId, candidate);
+      }
+    });
+  },
+
+  commitTaskPlanCandidate(taskId, candidate) {
+    try {
+      getService().confirmTaskPlanCandidate(taskId, candidate.id);
+      showSaved(candidate.kind === 'occurrence' ? '固定日程已完成' : '计划已记录');
+      this.refresh();
+    } catch (error) {
+      showError(error);
+    }
+  },
+
+  onTaskTimerTouchEnd(event) {
+    const pending = this.pendingTaskTimerLongPress;
+    this.pendingTaskTimerLongPress = null;
+    if (pending && shouldCommitLongPressRelease(event, this.taskTimerLongPressRect)) {
+      this.executeTaskTimerLongPress(pending.taskId);
+    }
+    this.taskTimerLongPressRect = null;
+    setTimeout(() => {
+      this.skipTaskToggle = false;
+    }, 0);
   },
 
   toggleProjectTodoExpansion(event) {
@@ -1698,6 +1923,7 @@ Page({
     this.clearNextLocalDayRefresh();
     this.clearTodoScrollAnimation();
     this.clearWishScrollAnimation();
+    this.clearPendingTaskTitleLongPress();
   },
 
   onResize() {

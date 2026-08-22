@@ -27,6 +27,14 @@ function getRecoveryService() {
   return bootstrap.recoveryService;
 }
 
+function markPageVisible(route) {
+  const app = getApp();
+  if (!app.globalData) app.globalData = {};
+  const previousRoute = app.globalData.visiblePageRoute || '';
+  app.globalData.visiblePageRoute = route;
+  return previousRoute;
+}
+
 function showStorageCapacityExit() {
   let bootstrap = null;
   try {
@@ -140,6 +148,7 @@ module.exports = {
   getService,
   getRecoveryService,
   getPreferenceStore,
+  markPageVisible,
   showStorageCapacityExit,
   showError,
   showSaved,

@@ -46,7 +46,11 @@ const {
 const { normalizeJsonSnapshot, parseJsonSnapshot, persistedValueEquals } = require('../repository/json-snapshot');
 const { displayLogTitle } = require('../utils/log-presentation');
 const { exportJson } = require('./export-service');
-const { buildTaskPlanStates, activeTimerMatchesOccurrence } = require('./task-plan-state');
+const {
+  buildTaskPlanStates,
+  activeTimerMatchesEvent,
+  activeTimerMatchesOccurrence
+} = require('./task-plan-state');
 
 function firstRuleOccurrence(rule) {
   const revision = rule.revisions[0];
@@ -56,6 +60,12 @@ function firstRuleOccurrence(rule) {
     revision.effectiveFrom,
     []
   )[0] || null;
+}
+
+function localDayStart(timestamp) {
+  const date = new Date(timestamp);
+  date.setHours(0, 0, 0, 0);
+  return date.getTime();
 }
 
 class ApplicationService {
@@ -186,6 +196,51 @@ class ApplicationService {
         };
       return this.startTimerInDatabase(database, association, now);
     }, { updatedAt: now }).result;
+  }
+
+  confirmTaskPlanCandidate(taskId, candidateId) {
+    const now = this.now();
+    return this.repository.transaction((database) => {
+      this.requireEntity(database.tasks, taskId, '任务');
+      const state = buildTaskPlanStates(database, now).get(taskId);
+      const candidate = state && candidateId
+        ? state.candidates.find((item) => item.id === candidateId)
+        : null;
+      if (!candidate) {
+        throw new DomainError('TASK_PLAN_CANDIDATE_UNAVAILABLE', '该计划已记录或不再可执行');
+      }
+      if (candidate.kind === 'occurrence') {
+        return this.confirmVirtualOccurrenceInDatabase(database, {
+          ruleId: candidate.originRuleId,
+          originOccurrenceId: candidate.originOccurrenceId,
+          startedAt: candidate.startedAt
+        }, now);
+      }
+      return this.confirmCalendarEventInDatabase(database, candidate.calendarEventId, now);
+    }, { updatedAt: now }).result;
+  }
+
+  confirmCalendarEventInDatabase(database, eventId, now, input = {}) {
+    const event = this.requireEntity(database.calendarEvents, eventId, '计划块');
+    if (activeTimerMatchesEvent(database, event.id)) {
+      throw new DomainError('PLAN_TIMER_ACTIVE', '该计划已经在计时了');
+    }
+    const association = this.resolveNewRecordAssociations(database, {
+      calendarEventId: event.id
+    });
+    const log = createTimeLog({
+      ...association,
+      startedAt: event.startedAt,
+      endedAt: event.endedAt,
+      durationMinutes: calculateLogDurationMinutes(event.startedAt, event.endedAt, []),
+      note: input.note || event.title,
+      status: LOG_STATUS.CONFIRMED,
+      source: LOG_SOURCE.MANUAL,
+      tags: input.tags
+    }, now);
+    database.timeLogs.push(log);
+    this.reconcileTaskPlanStatuses(database, now, this.taskIdsForRecord(database, log));
+    return log;
   }
 
   taskCompletionUndoPreview(taskId) {
@@ -417,6 +472,14 @@ class ApplicationService {
     return true;
   }
 
+  calendarEventHasExecutionReferences(database, eventId) {
+    const referencesEvent = (target) => Boolean(target && target.calendarEventId === eventId);
+    return database.timeLogs.some(referencesEvent)
+      || referencesEvent(database.timer && database.timer.draft)
+      || referencesEvent(database.recoveryDraft && database.recoveryDraft.timer
+        && database.recoveryDraft.timer.draft);
+  }
+
   detachRepeatRuleReference(target, rule, options = {}) {
     if (!target) return false;
     let changed = false;
@@ -435,6 +498,39 @@ class ApplicationService {
     if (!target || target.originRuleId !== ruleId) return false;
     const targetStart = logicalOccurrenceStart(ruleId, target.originOccurrenceId);
     return targetStart !== null && targetStart >= occurrenceStart;
+  }
+
+  ruleFollowingReferenceBlocksEdit(target, ruleId, occurrenceStart) {
+    if (!target || target.originRuleId !== ruleId) return false;
+    const targetStart = logicalOccurrenceStart(ruleId, target.originOccurrenceId);
+    return targetStart === null || targetStart >= occurrenceStart;
+  }
+
+  ruleFollowingHasExecutionReferences(database, ruleId, occurrenceStart) {
+    const blocksEdit = (target) => this.ruleFollowingReferenceBlocksEdit(
+      target,
+      ruleId,
+      occurrenceStart
+    );
+    const activeTimerDraft = database.timer
+      && database.timer.status !== TIMER_STATUS.IDLE
+      ? database.timer.draft
+      : null;
+    const recoveryDraft = database.recoveryDraft
+      && database.recoveryDraft.timer
+      && database.recoveryDraft.timer.draft;
+    return database.timeLogs.some(blocksEdit)
+      || blocksEdit(activeTimerDraft)
+      || blocksEdit(recoveryDraft);
+  }
+
+  projectedRuleOccurrence(database, rule, occurrenceStart) {
+    return projectRule(
+      rule,
+      occurrenceStart,
+      occurrenceStart,
+      database.occurrenceExceptions
+    ).find((item) => item.occurrenceStart === occurrenceStart) || null;
   }
 
   detachAbandonedProjectDraftReferences(target, project, deletingTasks, invalidatedEvents, deletedRules) {
@@ -1154,6 +1250,64 @@ class ApplicationService {
     }).result;
   }
 
+  enableRecurringForCalendarEvent(id, input) {
+    const now = this.now();
+    this.rejectDirectPlanProject(input);
+    const title = requiredTitle(input.title, '固定日程标题');
+    const startedAt = Number(input.startedAt);
+    const endedAt = Number(input.endedAt);
+    validTimeRange(startedAt, endedAt, '固定日程时间');
+    const priority = validPriority(input.priority);
+    const pattern = canonicalizeRepeatPattern(input);
+    return this.repository.transaction((database) => {
+      const event = this.requireEntity(database.calendarEvents, id, '计划块');
+      const previousTaskId = event.taskId;
+      const eventTaskExists = event.taskId
+        && database.tasks.some((task) => task.id === event.taskId);
+      if (!eventTaskExists && event.endedAt <= now) {
+        throw new DomainError(
+          'CALENDAR_EVENT_READ_ONLY',
+          '历史计划块关联的任务已失效，只能查看，不能编辑'
+        );
+      }
+      const association = this.resolvePlanTaskAssociation(
+        database,
+        input.taskId === undefined ? event.taskId : input.taskId
+      );
+      const originalEventPreserved = this.calendarEventHasExecutionReferences(database, event.id);
+      const rule = createRepeatRule({
+        ...input,
+        ...association,
+        title,
+        startedAt,
+        endedAt,
+        priority,
+        ...pattern
+      }, now);
+
+      event.title = title;
+      event.startedAt = startedAt;
+      event.endedAt = endedAt;
+      event.priority = priority;
+      event.projectId = association.projectId;
+      event.projectNameSnapshot = association.projectNameSnapshot;
+      event.taskId = association.taskId;
+      event.taskNameSnapshot = association.taskNameSnapshot;
+      event.updatedAt = now;
+      if (!originalEventPreserved) {
+        database.calendarEvents = database.calendarEvents.filter((item) => item.id !== event.id);
+      }
+      database.repeatRules.push(rule);
+      this.reconcileTaskPlanStatuses(database, now, [previousTaskId, association.taskId]);
+      return {
+        event: originalEventPreserved ? event : null,
+        rule,
+        occurrence: firstRuleOccurrence(rule),
+        originalEventPreserved
+      };
+    }).result;
+  }
+
   deleteCalendarEvent(id, confirmed) {
     if (!confirmed) {
       throw new DomainError('DELETE_CONFIRMATION_REQUIRED', '删除计划块需要二次确认');
@@ -1212,7 +1366,8 @@ class ApplicationService {
     validTimeRange(startedAt, endedAt, '固定日程时间');
     const pattern = canonicalizeRepeatPattern(input);
     return this.repository.transaction((database) => {
-      const task = this.createPlanTaskFromTitle(database, title, now);
+      const taskAssociation = this.resolveActiveTaskProjectAssociation(database, input.taskProjectId);
+      const task = this.createPlanTaskFromTitle(database, title, now, taskAssociation);
       const association = this.resolvePlanTaskAssociation(database, task.id);
       const rule = createRepeatRule({
         ...input,
@@ -1226,6 +1381,93 @@ class ApplicationService {
       database.repeatRules.push(rule);
       this.reconcileTaskPlanStatuses(database, now, [task.id]);
       return { task, rule, occurrence: firstRuleOccurrence(rule) };
+    }).result;
+  }
+
+  canEditRuleFollowing(ruleId, occurrenceStart, snapshot = null) {
+    const database = snapshot || this.snapshot();
+    const boundary = Number(occurrenceStart);
+    if (!isFiniteTimestamp(boundary)) return false;
+    const rule = database.repeatRules.find((item) => item.id === ruleId);
+    if (!rule || !this.projectedRuleOccurrence(database, rule, boundary)) return false;
+    return !this.ruleFollowingHasExecutionReferences(database, rule.id, boundary);
+  }
+
+  editRuleFollowing(ruleId, occurrenceStart, input) {
+    const now = this.now();
+    this.rejectDirectPlanProject(input);
+    const boundary = Number(occurrenceStart);
+    if (!isFiniteTimestamp(boundary)) {
+      throw new DomainError('OCCURRENCE_NOT_FOUND', '找不到需要编辑的重复实例');
+    }
+    const title = requiredTitle(input.title, '固定日程标题');
+    const startedAt = Number(input.startedAt);
+    const endedAt = Number(input.endedAt);
+    validTimeRange(startedAt, endedAt, '固定日程时间');
+    if (localDayStart(startedAt) < localDayStart(boundary)) {
+      throw new DomainError(
+        'RULE_EDIT_START_BEFORE_BOUNDARY',
+        '编辑后的开始日期不能早于所选固定日程'
+      );
+    }
+    const priority = validPriority(input.priority);
+    const pattern = canonicalizeRepeatPattern(input);
+
+    return this.repository.transaction((database) => {
+      const rule = this.requireEntity(database.repeatRules, ruleId, '重复规则');
+      const occurrence = this.projectedRuleOccurrence(database, rule, boundary);
+      if (!occurrence) {
+        throw new DomainError('OCCURRENCE_NOT_FOUND', '找不到需要编辑的重复实例');
+      }
+      if (this.ruleFollowingHasExecutionReferences(database, rule.id, boundary)) {
+        throw new DomainError(
+          'RULE_FOLLOWING_HAS_EXECUTION_REFERENCES',
+          '本次及后续已有记录或计时关联，不能编辑固定日程'
+        );
+      }
+
+      const previousRevision = rule.revisions[0];
+      const previousTaskIds = (rule.revisions || []).map((revision) => revision.taskId);
+      const association = this.resolvePlanTaskAssociation(database, input.taskId);
+      const hasPastOccurrence = projectRule(
+        rule,
+        previousRevision.effectiveFrom,
+        boundary - 1,
+        []
+      ).length > 0;
+
+      if (hasPastOccurrence) {
+        previousRevision.effectiveUntil = boundary - 1;
+        rule.updatedAt = now;
+      } else {
+        database.repeatRules = database.repeatRules.filter((item) => item.id !== rule.id);
+      }
+      database.occurrenceExceptions = database.occurrenceExceptions.filter((item) => (
+        item.ruleId !== rule.id || item.occurrenceStart < boundary
+      ));
+
+      const nextRule = createRepeatRule({
+        ...input,
+        ...association,
+        title,
+        startedAt,
+        endedAt,
+        priority,
+        ...pattern
+      }, now);
+      database.repeatRules.push(nextRule);
+      this.reconcileTaskPlanStatuses(
+        database,
+        now,
+        previousTaskIds.concat(association.taskId)
+      );
+      return {
+        previousRuleId: rule.id,
+        occurrenceStart: boundary,
+        removedPreviousRule: !hasPastOccurrence,
+        rule: nextRule,
+        occurrence: firstRuleOccurrence(nextRule)
+      };
     }).result;
   }
 
@@ -1378,50 +1620,54 @@ class ApplicationService {
 
   confirmVirtualOccurrence(input) {
     const now = this.now();
-    return this.repository.transaction((database) => {
-      const rule = this.requireEntity(database.repeatRules, input.ruleId, '重复规则');
-      const occurrenceStart = input.occurrenceStart === undefined
-        ? (logicalOccurrenceStart(input.ruleId, input.originOccurrenceId) || input.startedAt)
-        : input.occurrenceStart;
-      const occurrence = projectRule(rule, occurrenceStart, occurrenceStart, database.occurrenceExceptions)
-        .find((item) => item.originOccurrenceId === input.originOccurrenceId);
-      if (!occurrence) {
-        throw new DomainError('OCCURRENCE_NOT_FOUND', '该重复实例已跳过、已修改或不再有效');
-      }
-      if (activeTimerMatchesOccurrence(database, rule.id, occurrence.originOccurrenceId)) {
-        throw new DomainError('OCCURRENCE_TIMER_ACTIVE', '该计划正在计时，请先结束当前计时');
-      }
-      const occurrenceLogicalKey = occurrenceKey(rule.id, occurrence.occurrenceStart);
-      if (database.timeLogs.some((log) => (
-        log.originRuleId === rule.id
-        && (
-          log.originOccurrenceId === occurrence.originOccurrenceId
-          || logicalOccurrenceKey(log.originRuleId, log.originOccurrenceId) === occurrenceLogicalKey
-        )
-      ))) {
-        throw new DomainError('OCCURRENCE_ALREADY_CONFIRMED', '该重复实例已确认，不能重复生成记录');
-      }
-      const association = this.resolveNewRecordAssociations(database, {
-        originRuleId: rule.id,
-        originOccurrenceId: occurrence.originOccurrenceId
-      });
-      const log = createTimeLog({
-        ...association,
-        startedAt: occurrence.startedAt,
-        endedAt: occurrence.endedAt,
-        durationMinutes: calculateLogDurationMinutes(occurrence.startedAt, occurrence.endedAt, []),
-        note: input.note || occurrence.title,
-        status: LOG_STATUS.CONFIRMED,
-        source: LOG_SOURCE.RULE,
-        originRuleId: rule.id,
-        originOccurrenceId: occurrence.originOccurrenceId,
-        originRuleSummarySnapshot: rule.title,
-        tags: input.tags
-      }, now);
-      database.timeLogs.push(log);
-      this.reconcileTaskPlanStatuses(database, now, this.taskIdsForRecord(database, log));
-      return log;
-    }).result;
+    return this.repository.transaction((database) => (
+      this.confirmVirtualOccurrenceInDatabase(database, input, now)
+    )).result;
+  }
+
+  confirmVirtualOccurrenceInDatabase(database, input, now) {
+    const rule = this.requireEntity(database.repeatRules, input.ruleId, '重复规则');
+    const occurrenceStart = input.occurrenceStart === undefined
+      ? (logicalOccurrenceStart(input.ruleId, input.originOccurrenceId) || input.startedAt)
+      : input.occurrenceStart;
+    const occurrence = projectRule(rule, occurrenceStart, occurrenceStart, database.occurrenceExceptions)
+      .find((item) => item.originOccurrenceId === input.originOccurrenceId);
+    if (!occurrence) {
+      throw new DomainError('OCCURRENCE_NOT_FOUND', '该重复实例已跳过、已修改或不再有效');
+    }
+    if (activeTimerMatchesOccurrence(database, rule.id, occurrence.originOccurrenceId)) {
+      throw new DomainError('OCCURRENCE_TIMER_ACTIVE', '该计划已经在计时了');
+    }
+    const occurrenceLogicalKey = occurrenceKey(rule.id, occurrence.occurrenceStart);
+    if (database.timeLogs.some((log) => (
+      log.originRuleId === rule.id
+      && (
+        log.originOccurrenceId === occurrence.originOccurrenceId
+        || logicalOccurrenceKey(log.originRuleId, log.originOccurrenceId) === occurrenceLogicalKey
+      )
+    ))) {
+      throw new DomainError('OCCURRENCE_ALREADY_CONFIRMED', '该重复实例已确认，不能重复生成记录');
+    }
+    const association = this.resolveNewRecordAssociations(database, {
+      originRuleId: rule.id,
+      originOccurrenceId: occurrence.originOccurrenceId
+    });
+    const log = createTimeLog({
+      ...association,
+      startedAt: occurrence.startedAt,
+      endedAt: occurrence.endedAt,
+      durationMinutes: calculateLogDurationMinutes(occurrence.startedAt, occurrence.endedAt, []),
+      note: input.note || occurrence.title,
+      status: LOG_STATUS.CONFIRMED,
+      source: LOG_SOURCE.RULE,
+      originRuleId: rule.id,
+      originOccurrenceId: occurrence.originOccurrenceId,
+      originRuleSummarySnapshot: rule.title,
+      tags: input.tags
+    }, now);
+    database.timeLogs.push(log);
+    this.reconcileTaskPlanStatuses(database, now, this.taskIdsForRecord(database, log));
+    return log;
   }
 
   createManualLog(input) {

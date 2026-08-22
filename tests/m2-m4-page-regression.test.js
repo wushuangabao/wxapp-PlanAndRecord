@@ -261,12 +261,13 @@ test('M4：日历详情层提供原有操作，画布块不显示状态文字且
   const wxss = fs.readFileSync(calendarWxssPath, 'utf8');
   assert.match(wxml, /openPlanEditor/);
   assert.match(wxml, /class="detail-actions-start">[\s\S]*bindtap="deletePlan">删除计划[\s\S]*bindtap="deleteRuleFollowing">删除本次及后续[\s\S]*bindtap="skipVirtualOccurrence"[\s\S]*class="detail-actions-end">/);
-  assert.match(wxml, /class="detail-actions-end">[\s\S]*bindtap="openPlanEditor">编辑计划[\s\S]*bindtap="startTimerFromPlan">开始计时[\s\S]*detailItem\.virtual && detailItem\.canConfirmVirtual[^>]*bindtap="confirmItem">确认完成/);
+  assert.match(wxml, /class="detail-actions-end">[\s\S]*bindtap="openPlanEditor">编辑计划[\s\S]*bindtap="startTimerFromPlan">\{\{detailItem\.confirmedRecordCount \? '再次开始计时' : '开始计时'\}\}[\s\S]*detailItem\.canDirectComplete[^>]*bindtap="confirmItem">直接完成[\s\S]*detailItem\.virtual && detailItem\.canConfirmVirtual[^>]*bindtap="confirmItem">确认完成/);
   assert.match(wxml, /detailItem\.type === 'plan' && !detailItem\.virtual && detailItem\.canEditPlan/);
   assert.match(wxml, /detailItem\.type === 'plan' && detailItem\.canAssociate/);
+  assert.match(wxml, /detailItem\.type === 'plan' && !detailItem\.virtual && detailItem\.canDirectComplete[^>]*bindtap="confirmItem">直接完成/);
   assert.match(wxml, /detailItem\.type === 'plan' && !detailItem\.virtual[^>]*bindtap="deletePlan"/);
   assert.match(wxml, /detailItem\.virtual[^>]*bindtap="confirmItem"/);
-  assert.match(wxml, /detailItem\.virtual[^>]*class="detail-action danger-action"[^>]*bindtap="deleteRuleFollowing">删除本次及后续/);
+  assert.match(wxml, /detailItem\.virtual[^>]*class="detail-action danger-action rule-delete-action"[^>]*bindtap="deleteRuleFollowing">删除本次及后续/);
   assert.match(wxml, /detailItem\.virtual[^>]*bindtap="skipVirtualOccurrence"/);
   assert.match(wxss, /\.detail-actions\s*\{[^}]*justify-content:\s*space-between;/s);
   assert.match(wxss, /\.detail-actions-start\s*\{[^}]*justify-content:\s*flex-start;/s);
@@ -291,7 +292,7 @@ test('M4：日历详情层提供原有操作，画布块不显示状态文字且
   assert.match(wxss, /\.calendar-block\.aggregate\s*\{[^}]*#a9bdae[^}]*#e6ece7/s);
   const componentWxml = fs.readFileSync(planEditorWxmlPath, 'utf8');
   assert.match(componentWxml, /bind:confirm="submitPlanForm"/);
-  assert.match(componentWxml, /title="\{\{planEditor \? '编辑计划' : '新增计划'\}\}"/);
+  assert.match(componentWxml, /title="\{\{isRecurringEditor \? '编辑固定日程' : planEditor \? '编辑计划' : '新增计划'\}\}"/);
   assert.doesNotMatch(wxml, /编辑计划块|bindtap="closePlanEditor"/);
   assert.equal((wxml.match(/<plan-editor-sheet\b/g) || []).length, 1);
   assert.doesNotMatch(wxml, /修改本次|修改本次及后续|submitOccurrenceEditor/);
@@ -415,6 +416,45 @@ test('日历固定日程用完整句式解释重复间隔', () => {
   assert.match(wxss, /\.repeat-interval-input\s*\{[^}]*width:\s*116rpx;[^}]*height:\s*64rpx;[^}]*padding:\s*0 12rpx;[^}]*line-height:\s*64rpx;[^}]*text-align:\s*center;/s);
   assert.match(wxss, /\.repeat-frequency-picker\s*\{[^}]*width:\s*116rpx;/s);
   assert.equal(page.data.repeatGap, '0');
+});
+
+test('日历新增与编辑计划都显示固定日程开关及其表单', () => {
+  const wxml = fs.readFileSync(planEditorWxmlPath, 'utf8');
+
+  assert.match(wxml, /<view class="switch-row"><view>固定日程<\/view><switch[^>]*checked="\{\{repeatEnabled\}\}"/);
+  assert.match(wxml, /<view wx:if="\{\{repeatEnabled\}\}" class="repeat-options">/);
+  assert.doesNotMatch(wxml, /wx:if="\{\{!planEditor\}\}"[^>]*class="switch-row"/);
+  assert.doesNotMatch(wxml, /wx:if="\{\{!planEditor && repeatEnabled\}\}"[^>]*class="repeat-options"/);
+});
+
+test('日历编辑计划打开固定日程时默认选中计划开始日', () => {
+  const startedAt = new Date(2026, 7, 19, 9, 30).getTime();
+  const component = loadPlanEditorSheet({
+    mode: 'edit',
+    initialValue: {
+      plan: {
+        id: 'event_edit_repeat_defaults',
+        title: '编辑固定日程默认值',
+        startedAt,
+        endedAt: startedAt + 60 * 60 * 1_000,
+        priority: 2
+      },
+      taskOptions: [{ id: 'task_edit', title: '编辑任务', optionType: 'task' }],
+      taskIndex: 0
+    }
+  });
+
+  assert.equal(component.data.repeatEnabled, false);
+  assert.deepEqual(component.data.repeatWeekdays, [new Date(startedAt).getDay()]);
+  assert.deepEqual(component.data.repeatMonthDays, [new Date(startedAt).getDate()]);
+  assert.deepEqual(
+    component.data.weekdayOptions.filter((item) => item.checked).map((item) => item.value),
+    [new Date(startedAt).getDay()]
+  );
+  assert.deepEqual(
+    component.data.monthDayOptions.filter((item) => item.checked).map((item) => item.value),
+    [new Date(startedAt).getDate()]
+  );
 });
 
 test('日历每周固定日程默认选择今天并按周一到周日展示', () => {
@@ -829,6 +869,33 @@ test('日历长按年、月、周左列会下钻到对应粒度', () => {
   } finally {
     Date.now = originalNow;
   }
+});
+
+test('日历长按左列后若松手已离开控件则取消下钻', () => {
+  const now = new Date(2026, 7, 20, 9, 30).getTime();
+  const marchStart = new Date(2026, 2, 1).getTime();
+  const page = loadCalendarPage();
+  page.refresh = () => {};
+  page.focusCurrentTime = () => {};
+  page.focusCurrentHour = () => {};
+  page.cancelPageTurn = () => {};
+  page.data.view = 'year';
+  page.data.anchor = now;
+  page.coarseLabelLongPressRect = { left: 0, top: 80, right: 70, bottom: 120 };
+  page.drillDownFromCoarseLabel({ currentTarget: { dataset: { rowStart: String(marchStart) } } });
+  page.onCoarseLabelTouchEnd({
+    changedTouches: [{ clientX: 90, clientY: 100 }]
+  });
+  assert.equal(page.data.view, 'year');
+  assert.equal(page.data.anchor, now);
+
+  page.coarseLabelLongPressRect = { left: 0, top: 80, right: 70, bottom: 120 };
+  page.drillDownFromCoarseLabel({ currentTarget: { dataset: { rowStart: String(marchStart) } } });
+  page.onCoarseLabelTouchEnd({
+    changedTouches: [{ clientX: 20, clientY: 90 }]
+  });
+  assert.equal(page.data.view, 'month');
+  assert.equal(page.data.anchor, marchStart);
 });
 
 test('日历点击今天会在刷新完成后定位各粒度的当前时间行', () => {
@@ -1605,6 +1672,44 @@ test('计划页跳转已有计划时范围内不重置滚动，并保护目标�
   }
 });
 
+test('计划页跳转关联记录时切换记录筛选，并保护和高亮目标记录块', () => {
+  const originalWx = global.wx;
+  global.wx = {};
+  let page;
+  try {
+    page = loadCalendarPage();
+    page.data.view = 'month';
+    page.data.anchor = new Date(2026, 7, 8, 12, 0).getTime();
+    page.data.timelineFilter = 'plan';
+    const layoutOptions = [];
+    const revealedIds = [];
+    page.refresh = (callback, options) => {
+      layoutOptions.push(options);
+      if (callback) callback();
+    };
+    page.scrollCreatedPlanIntoView = (id) => { revealedIds.push(id); };
+
+    page.applyRevealTimelineItemHandoff({
+      type: 'reveal-record',
+      id: 'log_visible',
+      startedAt: new Date(2026, 7, 8, 18, 0).getTime(),
+      endedAt: new Date(2026, 7, 8, 19, 0).getTime()
+    });
+
+    assert.equal(page.data.view, 'day');
+    assert.equal(page.data.timelineFilter, 'record');
+    assert.equal(page.data.highlightedPlanId, 'log_visible');
+    assert.deepEqual(revealedIds, ['log_visible']);
+    assert.deepEqual(layoutOptions, [{ protectedItemId: 'log_visible' }]);
+
+    const pageJs = fs.readFileSync(calendarScriptPath, 'utf8');
+    assert.match(pageJs, /handoff\.type === 'reveal-plan' \|\| handoff\.type === 'reveal-record'/);
+  } finally {
+    global.wx = originalWx;
+    if (page) clearTimeout(page.handoffHighlightTimer);
+  }
+});
+
 test('日历接收计划页长按跳转时不创建覆盖点击与横滑的全屏手势层', () => {
   const originalWx = global.wx;
   global.wx = {};
@@ -1629,6 +1734,121 @@ test('日历接收计划页长按跳转时不创建覆盖点击与横滑的全�
     assert.doesNotMatch(wxml, /handoff-gesture-lock|onHandoffGestureLockTouch|releaseHandoffGestureLock/);
     assert.doesNotMatch(wxss, /\.handoff-gesture-lock/);
   } finally {
+    global.wx = originalWx;
+  }
+});
+
+test('日历固定日程只在未来范围无记录或计时关联时显示编辑按钮，并预填本次及后续编辑器', () => {
+  const originalGetApp = global.getApp;
+  const originalWx = global.wx;
+  const wxml = fs.readFileSync(calendarWxmlPath, 'utf8');
+  const startedAt = new Date(2026, 7, 21, 9, 0).getTime();
+  const task = { id: 'task_rule_edit', title: '规则编辑任务', status: 'todo', projectId: null };
+  const revision = {
+    id: 'revision_rule_edit',
+    revision: 1,
+    effectiveFrom: startedAt,
+    effectiveUntil: null,
+    frequency: 'weekly',
+    interval: 2,
+    weekdays: [5],
+    monthDays: [],
+    startedAt,
+    endedAt: startedAt + 60 * 60 * 1000,
+    priority: 2,
+    projectId: null,
+    projectNameSnapshot: null,
+    taskId: task.id,
+    taskNameSnapshot: task.title
+  };
+  const rule = {
+    id: 'rule_edit',
+    title: '可编辑规则',
+    revisions: [revision],
+    createdAt: startedAt,
+    updatedAt: startedAt
+  };
+  const editable = {
+    id: 'rule_edit:1:editable',
+    type: 'plan',
+    virtual: true,
+    title: rule.title,
+    ruleId: rule.id,
+    ruleRevision: 1,
+    originOccurrenceId: `rule_edit:1:${startedAt}`,
+    occurrenceStart: startedAt,
+    taskId: task.id,
+    taskNameSnapshot: task.title,
+    startedAt,
+    endedAt: startedAt + 60 * 60 * 1000,
+    priority: 2
+  };
+  const blockedStart = startedAt + 2 * 60 * 60 * 1000;
+  const blocked = {
+    ...editable,
+    id: 'rule_edit:1:blocked',
+    title: '已有关联的规则',
+    occurrenceStart: blockedStart,
+    originOccurrenceId: `rule_edit:1:${blockedStart}`,
+    startedAt: blockedStart,
+    endedAt: blockedStart + 60 * 60 * 1000
+  };
+  const snapshot = {
+    tasks: [task],
+    projects: [],
+    calendarEvents: [],
+    repeatRules: [rule],
+    occurrenceExceptions: [],
+    timeLogs: [],
+    timer: { status: 'idle', startedAt: null, pausedAt: null, pauses: [], draft: {} },
+    recoveryDraft: null
+  };
+  const checks = [];
+  const service = {
+    snapshot() { return snapshot; },
+    timeline() { return [editable, blocked]; },
+    canEditRuleFollowing(ruleId, occurrenceStart, receivedSnapshot) {
+      checks.push([ruleId, occurrenceStart, receivedSnapshot]);
+      return occurrenceStart === startedAt;
+    }
+  };
+  const toasts = [];
+  global.getApp = () => ({ globalData: { bootstrap: { applicationService: service } } });
+  global.wx = { showToast(options) { toasts.push(options); } };
+
+  try {
+    assert.match(
+      wxml,
+      /detailItem\.virtual && detailItem\.canEditRuleFollowing[^>]*aria-label="编辑本次及后续固定日程"[^>]*bindtap="openRecurringEditor">编辑/
+    );
+    const page = loadCalendarPage();
+    page.data.anchor = startedAt;
+    page.refresh();
+    const itemByTitle = new Map(page.data.timeline.map((item) => [item.title, item]));
+    assert.equal(itemByTitle.get('可编辑规则').canEditRuleFollowing, true);
+    assert.equal(itemByTitle.get('已有关联的规则').canEditRuleFollowing, false);
+    assert.equal(checks.length, 2);
+    assert.equal(checks.every((entry) => entry[2] === snapshot), true);
+
+    page.openRecurringEditor({
+      currentTarget: { dataset: { item: itemByTitle.get('可编辑规则') } }
+    });
+    assert.equal(page.data.isCreateOpen, true);
+    assert.equal(page.data.planEditorMode, 'edit-recurring');
+    assert.equal(page.data.detailItem, null);
+    assert.equal(page.data.planEditorInitialValue.ruleId, rule.id);
+    assert.equal(page.data.planEditorInitialValue.occurrenceStart, startedAt);
+    assert.equal(page.data.planEditorInitialValue.revision, revision);
+    assert.equal(page.data.planEditorInitialValue.taskOptions.some((item) => item.id === task.id), true);
+
+    const revealTarget = { id: 'rule_new:1:new', startedAt, endedAt: startedAt + 60 * 60 * 1000 };
+    let revealed;
+    page.revealCreatedPlan = (item) => { revealed = item; };
+    page.onPlanEditorSuccess({ detail: { operation: 'update-recurring', revealTarget } });
+    assert.equal(revealed, revealTarget);
+    assert.equal(toasts.at(-1).title, '固定日程已更新');
+  } finally {
+    global.getApp = originalGetApp;
     global.wx = originalWx;
   }
 });
@@ -1840,6 +2060,226 @@ test('日历对正在计时的重复实例隐藏确认完成，并在刷新时�
   }
 });
 
+test('日历实体计划仅在尚未记录且未计时时显示直接完成，并按计划生成记录', () => {
+  const originalGetApp = global.getApp;
+  const originalWx = global.wx;
+  const now = Math.floor(Date.now() / 60_000) * 60_000;
+  const calls = [];
+  const toasts = [];
+  const snapshot = {
+    localProfile: { id: 'profile_calendar_direct_complete' },
+    projects: [],
+    tasks: [{ id: 'task_plan', title: '计划任务', status: 'todo', projectId: null }],
+    calendarEvents: [],
+    timeLogs: [{
+      id: 'log_recorded',
+      status: 'confirmed',
+      calendarEventId: 'event_recorded'
+    }],
+    timer: {
+      status: 'running',
+      draft: { calendarEventId: 'event_timing' }
+    }
+  };
+  const timeline = ['event_pending', 'event_recorded', 'event_timing'].map((id, index) => ({
+    id,
+    type: 'plan',
+    virtual: false,
+    taskId: 'task_plan',
+    title: id,
+    startedAt: now + index * 60 * 60 * 1000,
+    endedAt: now + (index + 1) * 60 * 60 * 1000,
+    priority: 1
+  }));
+  const service = {
+    snapshot() { return snapshot; },
+    timeline() { return timeline; },
+    confirmTaskPlanCandidate(taskId, candidateId) {
+      calls.push([taskId, candidateId]);
+      const log = {
+        id: 'log_direct_complete',
+        status: 'confirmed',
+        calendarEventId: 'event_pending'
+      };
+      snapshot.timeLogs.push(log);
+      return log;
+    }
+  };
+  global.getApp = () => ({
+    globalData: { bootstrap: { applicationService: service } }
+  });
+  global.wx = {
+    showToast(options) { toasts.push(options); }
+  };
+
+  try {
+    const page = loadCalendarPage();
+    page.refresh();
+    const itemById = new Map(page.data.timeline.map((item) => [item.id, item]));
+    assert.equal(itemById.get('event_pending').canDirectComplete, true);
+    assert.equal(itemById.get('event_recorded').canDirectComplete, false);
+    assert.equal(itemById.get('event_timing').canDirectComplete, false);
+
+    const pending = itemById.get('event_pending');
+    page.setData({ detailItem: pending });
+    page.confirmItem({ currentTarget: { dataset: { item: pending } } });
+
+    assert.deepEqual(calls, [['task_plan', 'event:event_pending']]);
+    assert.equal(page.data.detailItem, null);
+    assert.equal(toasts.at(-1).title, '计划已记录');
+    assert.equal(
+      page.data.timeline.find((item) => item.id === 'event_pending').canDirectComplete,
+      false
+    );
+  } finally {
+    global.getApp = originalGetApp;
+    global.wx = originalWx;
+  }
+});
+
+test('日历实体计划详情由早到晚列出已确认记录并显示再次开始计时', () => {
+  const originalGetApp = global.getApp;
+  const startedAt = new Date(2026, 7, 19, 9, 0).getTime();
+  const snapshot = {
+    projects: [],
+    tasks: [{ id: 'task_records', title: '分段任务', status: 'completed', projectId: null }],
+    calendarEvents: [],
+    timeLogs: [{
+      id: 'log_late',
+      status: 'confirmed',
+      calendarEventId: 'event_records',
+      note: '第二段',
+      startedAt: startedAt + 2 * 60 * 60 * 1000,
+      endedAt: startedAt + 3 * 60 * 60 * 1000,
+      durationMinutes: 60
+    }, {
+      id: 'log_candidate',
+      status: 'candidate',
+      calendarEventId: 'event_records',
+      note: '候选段',
+      startedAt: startedAt + 60 * 60 * 1000,
+      endedAt: startedAt + 90 * 60 * 1000,
+      durationMinutes: 30
+    }, {
+      id: 'log_early',
+      status: 'confirmed',
+      calendarEventId: 'event_records',
+      note: '第一段',
+      startedAt,
+      endedAt: startedAt + 30 * 60 * 1000,
+      durationMinutes: 30
+    }, {
+      id: 'log_other',
+      status: 'confirmed',
+      calendarEventId: 'event_other',
+      note: '其他计划',
+      startedAt,
+      endedAt: startedAt + 30 * 60 * 1000,
+      durationMinutes: 30
+    }],
+    timer: { status: 'idle', draft: null }
+  };
+  const plan = {
+    id: 'event_records',
+    type: 'plan',
+    virtual: false,
+    taskId: 'task_records',
+    title: '分段任务',
+    startedAt,
+    endedAt: startedAt + 60 * 60 * 1000,
+    priority: 1
+  };
+  global.getApp = () => ({
+    globalData: { bootstrap: { applicationService: {
+      snapshot() { return snapshot; },
+      timeline() { return [plan]; }
+    } } }
+  });
+
+  try {
+    const page = loadCalendarPage();
+    page.data.anchor = startedAt;
+    page.refresh();
+    const detail = page.data.timeline.find((item) => item.id === plan.id);
+
+    assert.equal(detail.confirmedRecordCount, 2);
+    assert.equal(detail.confirmedRecordListHeight, 248);
+    assert.deepEqual(detail.confirmedRecords.map((item) => item.id), ['log_early', 'log_late']);
+    assert.deepEqual(detail.confirmedRecords.map((item) => item.displayTitle), ['第一段', '第二段']);
+    assert.equal(detail.confirmedRecords[0].durationText, '30 分钟');
+    assert.equal(detail.canDirectComplete, false);
+
+    const wxml = fs.readFileSync(calendarWxmlPath, 'utf8');
+    const wxss = fs.readFileSync(calendarWxssPath, 'utf8');
+    assert.match(wxml, /已有记录（\{\{detailItem\.confirmedRecordCount\}\}）/);
+    assert.match(wxml, /class="plan-record-list"[\s\S]*scroll-y="\{\{true\}\}"/);
+    assert.match(wxml, /bindtouchstart="onPlanRecordTouchStart"[\s\S]*bindlongpress="onPlanRecordLongPress"[\s\S]*bindtouchend="onPlanRecordTouchEnd"[\s\S]*bindtouchcancel="onPlanRecordTouchCancel"/);
+    assert.match(wxml, /detailItem\.confirmedRecordCount \? '再次开始计时' : '开始计时'/);
+    assert.match(wxss, /\.plan-record-item\s*\{[^}]*min-height:\s*124rpx;/s);
+  } finally {
+    global.getApp = originalGetApp;
+  }
+});
+
+test('日历详情记录长按仅在行内松手时保持当前粒度并定位记录', () => {
+  const originalWx = global.wx;
+  global.wx = {};
+  const record = {
+    id: 'log_locate',
+    startedAt: new Date(2026, 8, 8, 9, 0).getTime(),
+    endedAt: new Date(2026, 8, 8, 10, 0).getTime()
+  };
+  let page;
+  try {
+    page = loadCalendarPage();
+    page.data.view = 'month';
+    page.data.anchor = new Date(2026, 7, 8, 9, 0).getTime();
+    page.data.timelineFilter = 'plan';
+    page.data.detailItem = { id: 'event_records', type: 'plan' };
+    const layoutOptions = [];
+    const revealedIds = [];
+    page.refresh = (callback, options) => {
+      layoutOptions.push(options);
+      if (callback) callback();
+    };
+    page.scrollCreatedPlanIntoView = (id) => { revealedIds.push(id); };
+    page.planRecordLongPressRect = { left: 10, top: 10, right: 210, bottom: 110 };
+
+    page.onPlanRecordLongPress({ currentTarget: { dataset: { record } } });
+    page.onPlanRecordTouchEnd({ changedTouches: [{ clientX: 100, clientY: 80 }] });
+
+    assert.equal(page.data.view, 'month');
+    assert.equal(page.data.anchor, record.startedAt);
+    assert.equal(page.data.timelineFilter, 'record');
+    assert.equal(page.data.detailItem, null);
+    assert.equal(page.data.highlightedPlanId, record.id);
+    assert.deepEqual(revealedIds, [record.id]);
+    assert.deepEqual(layoutOptions, [{ protectedItemId: record.id }]);
+
+    clearTimeout(page.handoffHighlightTimer);
+    page = loadCalendarPage();
+    page.data.view = 'week';
+    page.data.anchor = new Date(2026, 7, 8, 9, 0).getTime();
+    page.data.timelineFilter = 'all';
+    page.data.detailItem = { id: 'event_records', type: 'plan' };
+    page.planRecordLongPressRect = { left: 10, top: 10, right: 210, bottom: 110 };
+    page.onPlanRecordLongPress({ currentTarget: { dataset: { record } } });
+    page.onPlanRecordTouchEnd({ changedTouches: [{ clientX: 260, clientY: 80 }] });
+
+    assert.equal(page.data.view, 'week');
+    assert.notEqual(page.data.anchor, record.startedAt);
+    assert.equal(page.data.timelineFilter, 'all');
+    assert.notEqual(page.data.detailItem, null);
+
+    const pageJs = fs.readFileSync(calendarScriptPath, 'utf8');
+    assert.match(pageJs, /captureTargetRectFromTouch\(PLAN_RECORD_LONG_PRESS_SELECTOR/);
+    assert.match(pageJs, /shouldCommitLongPressRelease\(event, this\.planRecordLongPressRect\)/);
+  } finally {
+    global.wx = originalWx;
+    if (page) clearTimeout(page.handoffHighlightTimer);
+  }
+});
+
 test('日历编辑尚未结束的失效任务计划时预填原值并可补绑任务，历史失效计划保持只读', () => {
   const originalGetApp = global.getApp;
   const originalWx = global.wx;
@@ -1947,6 +2387,102 @@ test('日历编辑尚未结束的失效任务计划时预填原值并可补绑�
     assert.equal(updates[0].input.endedAt, repairablePlan.endedAt);
     assert.equal(updates[0].input.priority, repairablePlan.priority);
     assert.equal(component.events.at(-1).detail.operation, 'update-event');
+  } finally {
+    global.getApp = originalGetApp;
+    global.wx = originalWx;
+  }
+});
+
+test('日历编辑计划时打开固定日程只调用一次原子转换并定位首次投影', () => {
+  const originalGetApp = global.getApp;
+  const originalWx = global.wx;
+  const startedAt = new Date(2026, 7, 19, 9, 30).getTime();
+  const endedAt = new Date(2026, 7, 19, 10, 45).getTime();
+  const createdOccurrence = {
+    id: 'rule_from_event:1:1787103000000',
+    virtual: true,
+    ruleId: 'rule_from_event',
+    startedAt,
+    endedAt
+  };
+  const converted = [];
+  const updated = [];
+  const toasts = [];
+  global.getApp = () => ({
+    globalData: {
+      bootstrap: {
+        applicationService: {
+          enableRecurringForCalendarEvent(id, input) {
+            converted.push({ id, input });
+            return {
+              event: null,
+              rule: { id: 'rule_from_event' },
+              occurrence: createdOccurrence,
+              originalEventPreserved: false
+            };
+          },
+          updateCalendarEvent(id, input) { updated.push({ id, input }); }
+        }
+      }
+    }
+  });
+  global.wx = {
+    showToast(options) { toasts.push(options); }
+  };
+
+  try {
+    const component = loadPlanEditorSheet({
+      mode: 'edit',
+      initialValue: {
+        plan: {
+          id: 'event_to_repeat',
+          title: '每周复盘',
+          startedAt,
+          endedAt,
+          priority: 3
+        },
+        taskOptions: [{ id: 'task_review', title: '复盘任务', optionType: 'task' }],
+        taskIndex: 0
+      }
+    });
+    Object.assign(component.data, {
+      repeatEnabled: true,
+      frequencyIndex: 1,
+      repeatGap: '2',
+      repeatWeekdays: [1, 5],
+      repeatMonthDays: [19]
+    });
+
+    component.savePlanEditor();
+
+    assert.equal(updated.length, 0);
+    assert.equal(converted.length, 1);
+    assert.equal(converted[0].id, 'event_to_repeat');
+    assert.deepEqual(converted[0].input, {
+      title: '每周复盘',
+      startedAt,
+      endedAt,
+      priority: 3,
+      taskId: 'task_review',
+      frequency: 'weekly',
+      interval: 3,
+      weekdays: [1, 5],
+      monthDays: []
+    });
+
+    const success = component.events.find((event) => event.name === 'success').detail;
+    assert.equal(success.operation, 'create-recurring');
+    assert.equal(success.result.originalEventPreserved, false);
+    assert.equal(success.revealTarget, createdOccurrence);
+
+    const page = loadCalendarPage();
+    page.data.isCreateOpen = true;
+    let revealed;
+    page.revealCreatedPlan = (item) => { revealed = item; };
+    page.onPlanEditorSuccess({ detail: success });
+    assert.equal(revealed, createdOccurrence);
+    assert.equal(page.data.isCreateOpen, false);
+    assert.equal(toasts.at(-1).title, '固定日程已创建');
   } finally {
     global.getApp = originalGetApp;
     global.wx = originalWx;

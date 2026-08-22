@@ -1,4 +1,4 @@
-const { getRecoveryService, showError } = require('../../utils/page');
+const { getRecoveryService, markPageVisible, showError } = require('../../utils/page');
 
 const RECOVERY_COPY = {
   DATA_VERSION_UNSUPPORTED: [
@@ -55,6 +55,10 @@ Page({
       title,
       explanation
     });
+  },
+
+  onShow() {
+    markPageVisible('pages/data-recovery/index');
   },
 
   onUnload() {

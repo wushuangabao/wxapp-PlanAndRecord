@@ -33,11 +33,11 @@
       <view class="todo-columns {{todoBoundaryIsDragging ? 'is-boundary-dragging' : ''}}" style="transform: translateX({{todoBoundaryOffset}}px);">
         <view wx:for="{{todoListColumns}}" wx:for-item="column" wx:key="id" class="todo-column">
           <view wx:for="{{column.tasks}}" wx:for-item="task" wx:key="id" class="item todo-row {{task.status === 'completed' ? 'is-completed' : ''}} {{task.recordedToday ? 'is-recorded-today' : ''}} {{task.timerMatchesTask ? 'is-timer-active' : ''}}">
-            <view class="todo-control" role="button" aria-label="{{task.status === 'completed' ? '重新打开任务' : (task.controlKind === 'timer' ? (task.timerMatchesTask ? '查看任务计时' : '从关联计划开始计时') : (task.controlKind === 'recorded' ? '今天的固定日程已记录' : (task.controlKind === 'schedule' ? '今天没有这项固定日程' : '完成任务')))}}" data-id="{{task.id}}" data-status="{{task.status}}" bindtap="toggleTask">
+            <view class="todo-control" role="button" aria-label="{{task.status === 'completed' ? '重新打开任务' : (task.controlKind === 'timer' ? (task.timerMatchesTask ? '查看任务计时' : '从关联计划开始计时，长按可按计划生成记录') : (task.controlKind === 'recorded' ? '今天的固定日程已记录' : (task.controlKind === 'schedule' ? '今天没有这项固定日程' : '完成任务')))}}" data-id="{{task.id}}" data-status="{{task.status}}" bindtap="toggleTask">
               <view wx:if="{{task.status === 'completed' || task.controlKind === 'checkbox'}}" class="todo-check">{{task.status === 'completed' ? '✓' : ''}}</view>
-              <view wx:else class="todo-timer-icon {{task.controlKind === 'schedule' ? 'is-schedule' : ''}} {{task.controlKind === 'recorded' ? 'is-recorded' : ''}} {{task.timerStatus === 'running' ? 'is-running' : ''}} {{task.timerStatus === 'paused' ? 'is-paused' : ''}}" aria-hidden="true"><view class="todo-timer-crown"></view><view class="todo-timer-hand"></view><view wx:if="{{task.timerStatus === 'paused'}}" class="todo-timer-pause">Ⅱ</view></view>
+              <view wx:else class="todo-timer-icon {{task.controlKind === 'schedule' ? 'is-schedule' : ''}} {{task.controlKind === 'recorded' ? 'is-recorded' : ''}} {{task.timerStatus === 'running' ? 'is-running' : ''}} {{task.timerStatus === 'paused' ? 'is-paused' : ''}}" aria-hidden="true" data-id="{{task.id}}" bindtouchstart="onTaskTimerTouchStart" bindlongpress="onTaskTimerLongPress" bindtouchend="onTaskTimerTouchEnd" bindtouchcancel="onTaskTimerTouchEnd"><view class="todo-timer-crown"></view><view class="todo-timer-hand"></view><view wx:if="{{task.timerStatus === 'paused'}}" class="todo-timer-pause">Ⅱ</view></view>
             </view>
-            <view class="todo-main"><input wx:if="{{todoTitleEditTaskId === task.id && todoTitleEditSource === 'todo'}}" class="todo-title-input" data-id="{{task.id}}" data-edit-source="todo" focus="{{true}}" maxlength="-1" value="{{todoTitleEditValue}}" style="font-size: {{task.todoTitleFontSize}}rpx;" aria-label="编辑 TODO 标题" catchtap="noop" bindinput="onTodoTitleInput" bindblur="saveTodoTitle" bindconfirm="saveTodoTitle" /><view wx:else class="todo-title todo-title-button" role="button" aria-label="编辑 TODO 标题" data-id="{{task.id}}" data-edit-source="todo" style="font-size: {{task.todoTitleFontSize}}rpx;" bindtap="openTodoTitleEditor" bindlongpress="onTaskTitleLongPress" bindtouchend="onTaskTitleTouchEnd" bindtouchcancel="onTaskTitleTouchEnd">{{task.title}}</view><view wx:if="{{task.projectDisplayName}}" class="todo-project">{{task.projectDisplayName}}</view></view>
+            <view class="todo-main"><input wx:if="{{todoTitleEditTaskId === task.id && todoTitleEditSource === 'todo'}}" class="todo-title-input" data-id="{{task.id}}" data-edit-source="todo" focus="{{true}}" maxlength="-1" value="{{todoTitleEditValue}}" style="font-size: {{task.todoTitleFontSize}}rpx;" aria-label="编辑 TODO 标题" catchtap="noop" bindinput="onTodoTitleInput" bindblur="saveTodoTitle" bindconfirm="saveTodoTitle" /><view wx:else class="todo-title todo-title-button" role="button" aria-label="编辑 TODO 标题" data-id="{{task.id}}" data-edit-source="todo" style="font-size: {{task.todoTitleFontSize}}rpx;" bindtap="openTodoTitleEditor" bindtouchstart="onTaskTitleTouchStart" bindlongpress="onTaskTitleLongPress" bindtouchend="onTaskTitleTouchEnd" bindtouchcancel="onTaskTitleTouchEnd">{{task.title}}</view><view wx:if="{{task.projectDisplayName}}" class="todo-project">{{task.projectDisplayName}}</view></view>
             <view class="todo-actions">
               <view class="todo-icon-button todo-link-button" role="button" aria-label="关联项目" data-id="{{task.id}}" bindtap="chooseTaskProject"><view class="todo-link-icon"><view class="todo-folder-icon"><view class="todo-folder-tab"></view><view class="todo-folder-body"></view></view><view class="todo-link-arrow"></view></view></view>
               <view class="todo-icon-button todo-delete-button" role="button" aria-label="删除" data-id="{{task.id}}" bindtap="confirmDeleteTask"><delete-icon /></view>
@@ -61,8 +61,8 @@
             <view wx:if="{{item.hasNoTodoTasks}}" class="project-task-empty">还没有子任务</view>
             <view wx:else class="project-task-list">
               <view wx:for="{{item.todoTasks}}" wx:for-item="task" wx:key="id" class="project-task-row {{task.status === 'completed' ? 'is-completed' : ''}} {{task.recordedToday ? 'is-recorded-today' : ''}} {{task.timerMatchesTask ? 'is-timer-active' : ''}}">
-                <view class="project-task-check" role="button" aria-label="{{task.status === 'completed' ? '重新打开子任务' : (task.controlKind === 'timer' ? '从关联计划开始计时' : '完成子任务')}}" data-id="{{task.id}}" data-status="{{task.status}}" bindtap="toggleTask"><view wx:if="{{task.status === 'completed' || task.controlKind === 'checkbox'}}" class="todo-check" aria-hidden="true">{{task.status === 'completed' ? '✓' : ''}}</view><view wx:else class="todo-timer-icon {{task.controlKind === 'schedule' ? 'is-schedule' : ''}} {{task.controlKind === 'recorded' ? 'is-recorded' : ''}} {{task.timerStatus === 'running' ? 'is-running' : ''}} {{task.timerStatus === 'paused' ? 'is-paused' : ''}}" aria-hidden="true"><view class="todo-timer-crown"></view><view class="todo-timer-hand"></view><view wx:if="{{task.timerStatus === 'paused'}}" class="todo-timer-pause">Ⅱ</view></view></view>
-                <view class="todo-main"><input wx:if="{{todoTitleEditTaskId === task.id && todoTitleEditSource === 'project'}}" class="todo-title-input" data-id="{{task.id}}" data-edit-source="project" focus="{{true}}" maxlength="-1" value="{{todoTitleEditValue}}" aria-label="编辑 TODO 标题" catchtap="noop" bindinput="onTodoTitleInput" bindblur="saveTodoTitle" bindconfirm="saveTodoTitle" /><view wx:else class="todo-title todo-title-button project-task-title-button" role="button" aria-label="编辑 TODO 标题" data-id="{{task.id}}" data-edit-source="project" bindtap="openTodoTitleEditor" bindlongpress="onTaskTitleLongPress" bindtouchend="onTaskTitleTouchEnd" bindtouchcancel="onTaskTitleTouchEnd">{{task.title}}</view></view>
+                <view class="project-task-check" role="button" aria-label="{{task.status === 'completed' ? '重新打开子任务' : (task.controlKind === 'timer' ? '从关联计划开始计时，长按可按计划生成记录' : '完成子任务')}}" data-id="{{task.id}}" data-status="{{task.status}}" bindtap="toggleTask"><view wx:if="{{task.status === 'completed' || task.controlKind === 'checkbox'}}" class="todo-check" aria-hidden="true">{{task.status === 'completed' ? '✓' : ''}}</view><view wx:else class="todo-timer-icon {{task.controlKind === 'schedule' ? 'is-schedule' : ''}} {{task.controlKind === 'recorded' ? 'is-recorded' : ''}} {{task.timerStatus === 'running' ? 'is-running' : ''}} {{task.timerStatus === 'paused' ? 'is-paused' : ''}}" aria-hidden="true" data-id="{{task.id}}" bindtouchstart="onTaskTimerTouchStart" bindlongpress="onTaskTimerLongPress" bindtouchend="onTaskTimerTouchEnd" bindtouchcancel="onTaskTimerTouchEnd"><view class="todo-timer-crown"></view><view class="todo-timer-hand"></view><view wx:if="{{task.timerStatus === 'paused'}}" class="todo-timer-pause">Ⅱ</view></view></view>
+                <view class="todo-main"><input wx:if="{{todoTitleEditTaskId === task.id && todoTitleEditSource === 'project'}}" class="todo-title-input" data-id="{{task.id}}" data-edit-source="project" focus="{{true}}" maxlength="-1" value="{{todoTitleEditValue}}" aria-label="编辑 TODO 标题" catchtap="noop" bindinput="onTodoTitleInput" bindblur="saveTodoTitle" bindconfirm="saveTodoTitle" /><view wx:else class="todo-title todo-title-button project-task-title-button" role="button" aria-label="编辑 TODO 标题" data-id="{{task.id}}" data-edit-source="project" bindtap="openTodoTitleEditor" bindtouchstart="onTaskTitleTouchStart" bindlongpress="onTaskTitleLongPress" bindtouchend="onTaskTitleTouchEnd" bindtouchcancel="onTaskTitleTouchEnd">{{task.title}}</view></view>
               </view>
             </view>
             <view class="project-todo-footer">
@@ -75,7 +75,7 @@
             <view wx:if="{{item.isCompletedExpanded}}" class="project-completed-list">
               <view wx:for="{{item.completedTasks}}" wx:for-item="task" wx:key="id" class="project-task-row is-completed">
                 <view class="project-task-check" role="button" aria-label="{{task.status === 'completed' ? '重新打开子任务' : '完成子任务'}}" data-id="{{task.id}}" data-status="{{task.status}}" bindtap="toggleTask"><view class="todo-check" aria-hidden="true">✓</view></view>
-                <view class="todo-main"><input wx:if="{{todoTitleEditTaskId === task.id && todoTitleEditSource === 'project'}}" class="todo-title-input" data-id="{{task.id}}" data-edit-source="project" focus="{{true}}" maxlength="-1" value="{{todoTitleEditValue}}" aria-label="编辑 TODO 标题" catchtap="noop" bindinput="onTodoTitleInput" bindblur="saveTodoTitle" bindconfirm="saveTodoTitle" /><view wx:else class="todo-title todo-title-button project-task-title-button" role="button" aria-label="编辑 TODO 标题" data-id="{{task.id}}" data-edit-source="project" bindtap="openTodoTitleEditor" bindlongpress="onTaskTitleLongPress" bindtouchend="onTaskTitleTouchEnd" bindtouchcancel="onTaskTitleTouchEnd">{{task.title}}</view></view>
+                <view class="todo-main"><input wx:if="{{todoTitleEditTaskId === task.id && todoTitleEditSource === 'project'}}" class="todo-title-input" data-id="{{task.id}}" data-edit-source="project" focus="{{true}}" maxlength="-1" value="{{todoTitleEditValue}}" aria-label="编辑 TODO 标题" catchtap="noop" bindinput="onTodoTitleInput" bindblur="saveTodoTitle" bindconfirm="saveTodoTitle" /><view wx:else class="todo-title todo-title-button project-task-title-button" role="button" aria-label="编辑 TODO 标题" data-id="{{task.id}}" data-edit-source="project" bindtap="openTodoTitleEditor" bindtouchstart="onTaskTitleTouchStart" bindlongpress="onTaskTitleLongPress" bindtouchend="onTaskTitleTouchEnd" bindtouchcancel="onTaskTitleTouchEnd">{{task.title}}</view></view>
               </view>
             </view>
           </view>
@@ -103,23 +103,23 @@
 
   <plan-editor-sheet visible="{{isPlanSheetOpen}}" variant="plans-todo" mode="create" initial-value="{{planEditorInitialValue}}" bind:success="onPlanEditorSuccess" bind:cancel="onPlanEditorCancel" />
 
-  <view wx:if="{{taskPlanPicker}}" class="modal-mask task-picker-mask" bindtap="closeTaskPlanPicker">
+  <view wx:if="{{taskTimelinePicker}}" class="modal-mask task-picker-mask" bindtap="closeTaskTimelinePicker">
     <view class="modal task-picker-modal" catchtap="noop">
-      <sheet-header title="查看计划" bind:cancel="closeTaskPlanPicker" />
-      <scroll-view class="task-option-list" scroll-y="{{true}}" enable-flex="{{true}}" style="height: {{taskPlanPicker.listHeight}}rpx;">
+      <sheet-header title="{{taskTimelinePicker.title}}" bind:cancel="closeTaskTimelinePicker" />
+      <scroll-view class="task-option-list" scroll-y="{{true}}" enable-flex="{{true}}" style="height: {{taskTimelinePicker.listHeight}}rpx;">
         <view
-          wx:for="{{taskPlanPicker.plans}}"
-          wx:for-item="plan"
+          wx:for="{{taskTimelinePicker.items}}"
+          wx:for-item="timelineItem"
           wx:key="id"
           class="task-option"
           role="button"
-          aria-label="查看计划{{plan.title}}"
-          data-id="{{plan.id}}"
-          bindtap="selectTaskPlan"
+          aria-label="{{taskTimelinePicker.itemAriaPrefix}}{{timelineItem.title}}"
+          data-id="{{timelineItem.id}}"
+          bindtap="selectTaskTimelineItem"
         >
           <view class="task-option-copy">
-            <view class="task-option-title">{{plan.title}}</view>
-            <view class="task-option-meta">{{plan.timeText}}</view>
+            <view class="task-option-title">{{timelineItem.title}}</view>
+            <view class="task-option-meta">{{timelineItem.timeText}}</view>
           </view>
         </view>
       </scroll-view>

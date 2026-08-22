@@ -1,7 +1,9 @@
-const { MAX_TAGS_PER_LOG } = require('../../domain/constants');
+const { LOG_STATUS, MAX_TAGS_PER_LOG } = require('../../domain/constants');
 const { normalizeTags } = require('../../domain/tags');
 const { resolveEditedTimestamp, timePickerState } = require('../../utils/log-time-editor');
+const { displayLogTitle } = require('../../utils/log-presentation');
 const { rangeForView, shiftAnchor } = require('../../utils/date-range');
+const { calendarRelativeLabel } = require('../../utils/calendar-relative-label');
 const {
   buildCalendarBlocks,
   buildCoarseCalendarRows,
@@ -15,12 +17,20 @@ const {
   defaultDateTime,
   formatDateTime,
   getService,
+  markPageVisible,
   showError,
   showSaved,
   writeRecentLogHighlight
 } = require('../../utils/page');
-const { activeTimerMatchesOccurrence } = require('../../services/task-plan-state');
+const {
+  activeTimerMatchesEvent,
+  activeTimerMatchesOccurrence
+} = require('../../services/task-plan-state');
 const { takeCalendarHandoff } = require('../../utils/calendar-handoff');
+const {
+  captureTargetRectFromTouch,
+  shouldCommitLongPressRelease
+} = require('../../utils/long-press-release');
 
 const DAY_MS = 24 * 60 * 60 * 1_000;
 const PLAN_WINDOW_PADDING_MS = DAY_MS;
@@ -33,6 +43,11 @@ const CREATE_TASK_OPTION_ID = '__create_same_title_task__';
 const CREATED_PLAN_VISIBLE_EDGE_PX = 8;
 const CREATED_PLAN_VISIBLE_BOTTOM_INSET_PX = 72;
 const HANDOFF_HIGHLIGHT_MS = 3_000;
+const PAGE_TURN_RELATIVE_LABEL_MS = 3_000;
+const COARSE_LABEL_LONG_PRESS_SELECTOR = '.coarse-time-label';
+const PLAN_RECORD_LONG_PRESS_SELECTOR = '.plan-record-item';
+const PLAN_RECORD_ROW_HEIGHT_RPX = 124;
+const PLAN_RECORD_LIST_MAX_HEIGHT_RPX = 372;
 const TIMELINE_FILTERS = [{
   value: 'all',
   label: '查看全部',
@@ -70,6 +85,12 @@ function timelineItemMatchesFilter(item, filter) {
     return item.type === 'candidate' || item.type === 'confirmed';
   }
   return true;
+}
+
+function canEditRuleFollowing(service, snapshot, item) {
+  return Boolean(item && item.virtual)
+    && typeof service.canEditRuleFollowing === 'function'
+    && service.canEditRuleFollowing(item.ruleId, item.occurrenceStart, snapshot);
 }
 
 function coarseRowCollapseKey(view, row) {
@@ -223,6 +244,56 @@ function overlapLabel(overlapMeta) {
   return counts.length ? `与其他记录重叠：${counts.join('、')}` : '';
 }
 
+function comparePlanRecords(first, second) {
+  const firstStart = Number.isFinite(first.startedAt) ? first.startedAt : Number.MAX_SAFE_INTEGER;
+  const secondStart = Number.isFinite(second.startedAt) ? second.startedAt : Number.MAX_SAFE_INTEGER;
+  return firstStart - secondStart || String(first.id).localeCompare(String(second.id));
+}
+
+function planRecordDisplayItem(log) {
+  const hasTime = Number.isFinite(log.startedAt) && Number.isFinite(log.endedAt);
+  const displayTime = hasTime
+    ? `${formatDateTime(log.startedAt)} – ${formatDateTime(log.endedAt)}`
+    : '';
+  const durationText = Number.isFinite(log.durationMinutes)
+    ? `${log.durationMinutes} 分钟`
+    : '';
+  return {
+    ...log,
+    displayTitle: displayLogTitle(log),
+    displayTime,
+    durationText,
+    displayMeta: [displayTime, durationText].filter(Boolean).join(' · ')
+  };
+}
+
+function confirmedPlanRecordsByEvent(timeLogs) {
+  const recordsByEvent = new Map();
+  (timeLogs || []).forEach((log) => {
+    if (log.status !== LOG_STATUS.CONFIRMED || !log.calendarEventId) return;
+    if (!recordsByEvent.has(log.calendarEventId)) recordsByEvent.set(log.calendarEventId, []);
+    recordsByEvent.get(log.calendarEventId).push(log);
+  });
+  recordsByEvent.forEach((records, eventId) => {
+    recordsByEvent.set(eventId, records.sort(comparePlanRecords).map(planRecordDisplayItem));
+  });
+  return recordsByEvent;
+}
+
+function planRecordContext(item, recordsByEvent) {
+  const confirmedRecords = item && item.type === 'plan' && !item.virtual
+    ? (recordsByEvent.get(item.id) || []).map((record) => ({ ...record }))
+    : [];
+  return {
+    confirmedRecords,
+    confirmedRecordCount: confirmedRecords.length,
+    confirmedRecordListHeight: Math.min(
+      PLAN_RECORD_LIST_MAX_HEIGHT_RPX,
+      confirmedRecords.length * PLAN_RECORD_ROW_HEIGHT_RPX
+    )
+  };
+}
+
 Page({
   data: {
     view: 'day',
@@ -237,6 +308,7 @@ Page({
     currentTimeLineRowIndex: -1,
     currentTimeLineStyle: '',
     pageTurnClass: '',
+    pageTurnRelativeLabel: '',
     maxTagsPerLog: MAX_TAGS_PER_LOG,
     timeline: [],
     hasTimelineItems: false,
@@ -270,20 +342,27 @@ Page({
   },
 
   onShow() {
+    const previousPageRoute = markPageVisible('pages/calendar/index');
+    const shouldShowRelativeLabel = Boolean(
+      previousPageRoute && previousPageRoute !== 'pages/calendar/index'
+    );
+    const showRelativeLabel = shouldShowRelativeLabel
+      ? () => this.showPageTurnRelativeLabel(this.data.anchor, this.data.view)
+      : null;
     const handoff = takeCalendarHandoff();
-    if (handoff && handoff.type === 'reveal-plan' && handoff.id
+    if (handoff && (handoff.type === 'reveal-plan' || handoff.type === 'reveal-record') && handoff.id
       && Number.isFinite(handoff.startedAt) && Number.isFinite(handoff.endedAt)) {
-      this.applyRevealPlanHandoff(handoff);
-    } else if (handoff && handoff.type === 'create-plan' && handoff.taskId) {
-      this.applyCreatePlanHandoff(handoff);
+      this.applyRevealTimelineItemHandoff(handoff, showRelativeLabel);
     } else {
-      this.refresh();
+      this.refresh(showRelativeLabel);
     }
     this.startCurrentTimeTicker();
   },
 
   onHide() {
     this.clearPendingCoarseDrillDown();
+    this.clearPendingPlanRecordLongPress();
+    this.clearPageTurnRelativeLabel();
     this.clearHandoffHighlight();
     this.releaseLocateScrollLock();
     this.stopCurrentTimeTicker();
@@ -294,6 +373,8 @@ Page({
     clearTimeout(this.pageTurnEndTimer);
     clearTimeout(this.createdPlanScrollVerifyTimer);
     this.clearPendingCoarseDrillDown();
+    this.clearPendingPlanRecordLongPress();
+    this.clearPageTurnRelativeLabel();
     this.releaseLocateScrollLock();
     this.clearHandoffHighlight();
     this.stopCurrentTimeTicker();
@@ -306,6 +387,8 @@ Page({
       const range = rangeForView(this.data.anchor, this.data.view);
       const now = Date.now();
       const knownTaskIds = new Set(snapshot.tasks.map((item) => item.id));
+      const confirmedRecordsByEventId = confirmedPlanRecordsByEvent(snapshot.timeLogs);
+      const confirmedEventIds = new Set(confirmedRecordsByEventId.keys());
       const tasks = createPlanTaskOptions(snapshot);
       const planTasks = taskOptions(snapshot);
       const selectedTaskId = this.data.tasks[this.data.taskIndex] && this.data.tasks[this.data.taskIndex].id;
@@ -321,6 +404,7 @@ Page({
         const task = this.taskById.get(item.taskId);
         return {
           ...item,
+          ...planRecordContext(item, confirmedRecordsByEventId),
           displayTime: `${formatDateTime(item.startedAt)} – ${formatDateTime(item.endedAt)}`,
           displayKind: item.virtual
             ? '重复计划·待确认'
@@ -337,8 +421,14 @@ Page({
           displayTags: Array.isArray(item.tags) ? item.tags.join('、') : '',
           priority: item.priority || 1,
           canAssociate,
+          canDirectComplete: item.type === 'plan'
+            && !item.virtual
+            && canAssociate
+            && !confirmedEventIds.has(item.id)
+            && !activeTimerMatchesEvent(snapshot, item.id),
           canConfirmVirtual: Boolean(item.virtual)
             && !activeTimerMatchesOccurrence(snapshot, item.ruleId, item.originOccurrenceId),
+          canEditRuleFollowing: canEditRuleFollowing(service, snapshot, item),
           canEditPlan: item.type === 'plan'
             && !item.virtual
             && (canAssociate || item.endedAt > now)
@@ -416,9 +506,22 @@ Page({
             snapshot,
             this.data.detailItem.ruleId,
             this.data.detailItem.originOccurrenceId
+          ),
+          canEditRuleFollowing: canEditRuleFollowing(
+            service,
+            snapshot,
+            this.data.detailItem
           )
         }
-        : this.data.detailItem;
+        : this.data.detailItem && this.data.detailItem.type === 'plan'
+          ? {
+            ...this.data.detailItem,
+            ...planRecordContext(this.data.detailItem, confirmedRecordsByEventId),
+            canDirectComplete: knownTaskIds.has(this.data.detailItem.taskId)
+              && !confirmedEventIds.has(this.data.detailItem.id)
+              && !activeTimerMatchesEvent(snapshot, this.data.detailItem.id)
+          }
+          : this.data.detailItem;
       this.setData({
         tasks,
         planTasks,
@@ -449,6 +552,20 @@ Page({
     this.applyViewChange(event.currentTarget.dataset.view);
   },
 
+  captureCoarseLabelLongPressRect(event, key) {
+    const token = (this.coarseLabelLongPressToken || 0) + 1;
+    this.coarseLabelLongPressToken = token;
+    captureTargetRectFromTouch(COARSE_LABEL_LONG_PRESS_SELECTOR, event, key, (rect) => {
+      if (this.coarseLabelLongPressToken !== token) return;
+      this.coarseLabelLongPressRect = rect;
+    });
+  },
+
+  onCoarseLabelTouchStart(event) {
+    this.coarseLabelLongPressRect = null;
+    this.captureCoarseLabelLongPressRect(event, 'touches');
+  },
+
   drillDownFromCoarseLabel(event) {
     const nextView = this.data.view === 'year'
       ? 'month'
@@ -458,23 +575,27 @@ Page({
     if (!nextView) return;
     const rowStart = Number(event.currentTarget.dataset.rowStart);
     if (!Number.isFinite(rowStart)) return;
+    if (!this.coarseLabelLongPressRect) this.captureCoarseLabelLongPressRect(event, 'touches');
     this.pendingCoarseDrillDown = { nextView, rowStart };
   },
 
-  onCoarseLabelTouchEnd() {
-    this.flushPendingCoarseDrillDown();
+  onCoarseLabelTouchEnd(event) {
+    this.flushPendingCoarseDrillDown(event);
+    this.coarseLabelLongPressRect = null;
   },
 
   clearPendingCoarseDrillDown() {
     this.pendingCoarseDrillDown = null;
     this.coarseDrillDownConsumedTouch = false;
+    this.coarseLabelLongPressRect = null;
   },
 
-  flushPendingCoarseDrillDown() {
+  flushPendingCoarseDrillDown(event) {
     const pending = this.pendingCoarseDrillDown;
     if (!pending) return;
     this.pendingCoarseDrillDown = null;
     this.coarseDrillDownConsumedTouch = true;
+    if (!shouldCommitLongPressRelease(event, this.coarseLabelLongPressRect)) return;
     this.applyViewChange(pending.nextView, pending.rowStart);
   },
 
@@ -720,9 +841,9 @@ Page({
     });
   },
 
-  revealCreatedPlan(event) {
+  revealCreatedPlan(event, afterReveal) {
     if (!event) {
-      this.refresh();
+      this.refresh(afterReveal);
       return;
     }
     const range = rangeForView(this.data.anchor, this.data.view);
@@ -734,6 +855,7 @@ Page({
       } else {
         reveal();
       }
+      if (typeof afterReveal === 'function') afterReveal();
     };
     if (isInCurrentRange) {
       this.refresh(revealAfterRefresh, { protectedItemId: event.id });
@@ -766,13 +888,18 @@ Page({
     }, HANDOFF_HIGHLIGHT_MS);
   },
 
-  applyRevealPlanHandoff(handoff) {
+  applyRevealPlanHandoff(handoff, afterReveal) {
+    this.applyRevealTimelineItemHandoff(handoff, afterReveal);
+  },
+
+  applyRevealTimelineItemHandoff(handoff, afterReveal) {
     clearTimeout(this.handoffHighlightTimer);
     this.handoffHighlightTimer = null;
     this.cancelPageTurn();
-    const timelineFilter = this.data.timelineFilter === 'record'
-      ? 'plan'
-      : this.data.timelineFilter;
+    const isRecordTarget = handoff.type === 'reveal-record';
+    let timelineFilter = this.data.timelineFilter;
+    if (isRecordTarget && timelineFilter === 'plan') timelineFilter = 'record';
+    if (!isRecordTarget && timelineFilter === 'record') timelineFilter = 'plan';
     this.setData({
       view: 'day',
       timelineFilter,
@@ -785,48 +912,8 @@ Page({
         id: handoff.id,
         startedAt: handoff.startedAt,
         endedAt: handoff.endedAt
-      });
+      }, afterReveal);
       this.startHandoffHighlight(handoff.id);
-    });
-  },
-
-  applyCreatePlanHandoff(handoff) {
-    this.clearHandoffHighlight();
-    const now = Date.now();
-    this.cancelPageTurn();
-    this.currentCalendarScrollTop = 0;
-    if (!this.viewScrollTops) this.viewScrollTops = {};
-    this.viewScrollTops.day = 0;
-    this.setData({
-      view: 'day',
-      anchor: now,
-      calendarScrollTop: 0,
-      calendarScrollWithAnimation: false,
-      scrollIntoView: '',
-      detailItem: null
-    }, () => this.refresh(() => this.openCreatePlanForTask(handoff.taskId)));
-  },
-
-  openCreatePlanForTask(taskId) {
-    const tasks = this.data.tasks.slice();
-    const existing = this.taskById && this.taskById.get(taskId);
-    if (existing && !tasks.some((task) => task.id === existing.id)) {
-      tasks.push({ ...existing, optionType: 'task' });
-    }
-    const taskIndex = existing ? findOptionIndex(tasks, existing.id) : this.data.taskIndex;
-    this.setData({
-      tasks,
-      taskIndex,
-      isCreateOpen: true,
-      planEditorMode: 'create',
-      planEditorInitialValue: {
-        title: '',
-        anchorDate: this.data.anchor,
-        priority: 1,
-        hasAnyTasks: this.data.hasAnyTasks || tasks.length > 1,
-        taskOptions: tasks,
-        taskIndex
-      }
     });
   },
 
@@ -849,8 +936,9 @@ Page({
 
   onCanvasTouchEnd(event) {
     const skipSwipe = Boolean(this.pendingCoarseDrillDown) || this.coarseDrillDownConsumedTouch;
-    this.flushPendingCoarseDrillDown();
+    this.flushPendingCoarseDrillDown(event);
     this.coarseDrillDownConsumedTouch = false;
+    this.coarseLabelLongPressRect = null;
     const start = this.canvasTouchStart;
     const touch = event.changedTouches && event.changedTouches[0];
     this.canvasTouchStart = null;
@@ -863,6 +951,7 @@ Page({
   onCanvasTouchCancel() {
     this.flushPendingCoarseDrillDown();
     this.coarseDrillDownConsumedTouch = false;
+    this.coarseLabelLongPressRect = null;
     this.canvasTouchStart = null;
   },
 
@@ -871,7 +960,26 @@ Page({
     clearTimeout(this.pageTurnEndTimer);
     this.pageTurnSwapTimer = null;
     this.pageTurnEndTimer = null;
+    this.clearPageTurnRelativeLabel();
     if (this.data.pageTurnClass) this.setData({ pageTurnClass: '' });
+  },
+
+  clearPageTurnRelativeLabel() {
+    clearTimeout(this.pageTurnRelativeLabelTimer);
+    this.pageTurnRelativeLabelTimer = null;
+    if (this.data.pageTurnRelativeLabel) this.setData({ pageTurnRelativeLabel: '' });
+  },
+
+  showPageTurnRelativeLabel(anchor, view) {
+    clearTimeout(this.pageTurnRelativeLabelTimer);
+    const label = calendarRelativeLabel(anchor, view);
+    this.setData({ pageTurnRelativeLabel: label });
+    this.pageTurnRelativeLabelTimer = setTimeout(() => {
+      this.pageTurnRelativeLabelTimer = null;
+      if (this.data.pageTurnRelativeLabel === label) {
+        this.setData({ pageTurnRelativeLabel: '' });
+      }
+    }, PAGE_TURN_RELATIVE_LABEL_MS);
   },
 
   animateRangeChange(offset) {
@@ -882,7 +990,10 @@ Page({
     this.setData({ pageTurnClass });
     this.pageTurnSwapTimer = setTimeout(() => {
       this.pageTurnSwapTimer = null;
-      this.setData({ anchor: targetAnchor }, () => this.refresh());
+      this.setData({ anchor: targetAnchor }, () => {
+        this.refresh();
+        this.showPageTurnRelativeLabel(targetAnchor, this.data.view);
+      });
     }, PAGE_TURN_SWAP_MS);
     this.pageTurnEndTimer = setTimeout(() => {
       this.pageTurnEndTimer = null;
@@ -891,11 +1002,73 @@ Page({
   },
 
   openItemDetail(event) {
+    this.clearPendingPlanRecordLongPress();
     this.setData({ detailItem: event.currentTarget.dataset.item });
   },
 
   closeItemDetail() {
+    this.clearPendingPlanRecordLongPress();
     this.setData({ detailItem: null });
+  },
+
+  capturePlanRecordLongPressRect(event, key) {
+    const token = (this.planRecordLongPressToken || 0) + 1;
+    this.planRecordLongPressToken = token;
+    captureTargetRectFromTouch(PLAN_RECORD_LONG_PRESS_SELECTOR, event, key, (rect) => {
+      if (this.planRecordLongPressToken !== token) return;
+      this.planRecordLongPressRect = rect;
+    });
+  },
+
+  onPlanRecordTouchStart(event) {
+    this.pendingPlanRecordLongPress = null;
+    this.planRecordLongPressRect = null;
+    this.capturePlanRecordLongPressRect(event, 'touches');
+  },
+
+  onPlanRecordLongPress(event) {
+    const record = event.currentTarget.dataset.record;
+    if (!record || !record.id) return;
+    if (!this.planRecordLongPressRect) {
+      this.capturePlanRecordLongPressRect(event, 'touches');
+    }
+    this.pendingPlanRecordLongPress = record;
+  },
+
+  onPlanRecordTouchEnd(event) {
+    const record = this.pendingPlanRecordLongPress;
+    this.pendingPlanRecordLongPress = null;
+    if (record && shouldCommitLongPressRelease(event, this.planRecordLongPressRect)) {
+      this.locatePlanRecord(record);
+    }
+    this.planRecordLongPressRect = null;
+  },
+
+  onPlanRecordTouchCancel() {
+    this.clearPendingPlanRecordLongPress();
+  },
+
+  clearPendingPlanRecordLongPress() {
+    this.pendingPlanRecordLongPress = null;
+    this.planRecordLongPressRect = null;
+  },
+
+  locatePlanRecord(record) {
+    if (!record || !record.id
+      || !Number.isFinite(record.startedAt) || !Number.isFinite(record.endedAt)) return;
+    this.clearHandoffHighlight();
+    this.cancelPageTurn();
+    const timelineFilter = this.data.timelineFilter === 'plan'
+      ? 'record'
+      : this.data.timelineFilter;
+    this.setData({
+      timelineFilter,
+      highlightedPlanId: record.id,
+      detailItem: null
+    }, () => {
+      this.revealCreatedPlan(record);
+      this.startHandoffHighlight(record.id);
+    });
   },
 
   openCreatePlan() {
@@ -935,6 +1108,15 @@ Page({
         this.refresh();
         return;
       }
+      if (operation === 'update-recurring') {
+        showSaved('固定日程已更新');
+        if (revealTarget) {
+          this.revealCreatedPlan(revealTarget);
+        } else {
+          this.refresh();
+        }
+        return;
+      }
       showSaved(operation === 'create-recurring' ? '固定日程已创建' : '计划块已创建');
       this.revealCreatedPlan(revealTarget);
     });
@@ -960,10 +1142,16 @@ Page({
       const service = getService();
       const log = item.virtual
         ? service.confirmVirtualOccurrence(item)
-        : service.confirmCandidateLog(item.id);
+        : item.type === 'plan'
+          ? service.confirmTaskPlanCandidate(item.taskId, `event:${item.id}`)
+          : service.confirmCandidateLog(item.id);
       writeRecentLogHighlight(this.currentSnapshot, log && log.id);
       this.closeItemDetail();
-      showSaved(item.virtual ? '固定日程已完成' : '候选记录已确认');
+      showSaved(item.virtual
+        ? '固定日程已完成'
+        : item.type === 'plan'
+          ? '计划已记录'
+          : '候选记录已确认');
       this.refresh();
     } catch (error) {
       showError(error);
@@ -1014,6 +1202,44 @@ Page({
         plan: item,
         taskOptions: planTasks,
         taskIndex: planTaskIndex
+      }
+    });
+  },
+
+  openRecurringEditor(event) {
+    const item = event.currentTarget.dataset.item;
+    const service = this.currentService || getService();
+    const snapshot = this.currentSnapshot || service.snapshot();
+    if (!service.canEditRuleFollowing(item.ruleId, item.occurrenceStart, snapshot)) {
+      showError(new Error('本次及后续已有记录或计时关联，不能编辑固定日程'));
+      this.refresh();
+      return;
+    }
+    const rule = snapshot.repeatRules.find((candidate) => candidate.id === item.ruleId);
+    const revision = rule && rule.revisions.find(
+      (candidate) => candidate.revision === item.ruleRevision
+    );
+    if (!rule || !revision) {
+      showError(new Error('固定日程不存在或已被修改'));
+      this.refresh();
+      return;
+    }
+    const planTasks = this.data.planTasks.slice();
+    const existingTask = this.taskById && this.taskById.get(revision.taskId);
+    if (existingTask && !planTasks.some((task) => task.id === existingTask.id)) {
+      planTasks.push({ ...existingTask, optionType: 'task' });
+    }
+    this.setData({
+      detailItem: null,
+      isCreateOpen: true,
+      planEditorMode: 'edit-recurring',
+      planEditorInitialValue: {
+        plan: item,
+        ruleId: rule.id,
+        occurrenceStart: item.occurrenceStart,
+        revision,
+        taskOptions: planTasks,
+        taskIndex: existingTask ? findOptionIndex(planTasks, existingTask.id) : 0
       }
     });
   },

@@ -280,6 +280,22 @@ test('粗粒度布局允许后续短块回填前序长块留下的行空隙', ()
   assert.equal(friday.blocks.find((block) => block.id === 'long').coarseWidth <= 300, true);
 });
 
+test('粗粒度短标题在不扩大块宽的前提下保留字体渲染容差', () => {
+  const range = rangeForView(new Date(2026, 7, 19, 12, 0).getTime(), 'week');
+  const grid = buildTimeRows(range, 'week');
+  const startedAt = new Date(2026, 7, 19, 9, 0).getTime();
+  const rows = buildCoarseCalendarRows([{
+    id: 'short-digits',
+    title: '111',
+    type: 'plan',
+    startedAt,
+    endedAt: startedAt + 60 * 60 * 1_000
+  }], range, 'week', grid);
+  const block = rows.flatMap((row) => row.blocks).find((item) => item.id === 'short-digits');
+
+  assert.equal(block.coarseWidth, 73);
+});
+
 test('周视图折叠后仍保留前两行，月和年只保留第一行', () => {
   assert.equal(coarseCollapsedVisibleLineCount('week'), 2);
   assert.equal(coarseCollapsedVisibleLineCount('month'), 1);

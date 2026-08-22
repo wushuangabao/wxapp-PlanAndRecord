@@ -8,7 +8,11 @@ const {
   createRepeatRule,
   createTimeLog
 } = require('../miniprogram/domain/entities');
-const { createSkipOccurrenceException, projectRuleIntersectingRange } = require('../miniprogram/domain/recurrence');
+const {
+  createSkipOccurrenceException,
+  projectRule,
+  projectRuleIntersectingRange
+} = require('../miniprogram/domain/recurrence');
 const {
   buildTaskPlanStates,
   inferCompletionUndoLog
@@ -121,6 +125,45 @@ test('任务计划状态：过期与未来实体计划都可执行，只有 conf
   assert.deepEqual(state.pendingEntityPlans, []);
   assert.equal(state.canAutoComplete, true);
   assert.equal(state.controlKind, 'checkbox');
+});
+
+test('任务计划状态：只按有效计划关系派生任务的 confirmed 时间记录', () => {
+  const now = localTimestamp(2026, 8, 12, 12);
+  const database = createInitialDatabase(now);
+  const value = task('task_records', '记录任务');
+  const other = task('task_other', '其他任务');
+  const event = eventFor(value, 'event_records', now - 4 * HOUR_MS, now - 3 * HOUR_MS);
+  const otherEvent = eventFor(other, 'event_other', now - 2 * HOUR_MS, now - HOUR_MS);
+  const rule = ruleFor(value, 'rule_records', now - 2 * 24 * HOUR_MS, now - 2 * 24 * HOUR_MS + HOUR_MS);
+  const occurrence = projectRule(rule, now, now, [])[0];
+  database.tasks.push(value, other);
+  database.calendarEvents.push(event, otherEvent);
+  database.repeatRules.push(rule);
+
+  const eventRecord = logForEvent(event, 'log_event', LOG_STATUS.CONFIRMED, now - 2 * HOUR_MS);
+  const occurrenceRecord = logForOccurrence(occurrence, 'log_occurrence', LOG_STATUS.CONFIRMED, now);
+  const candidate = logForEvent(event, 'log_candidate', LOG_STATUS.CANDIDATE, now + 10);
+  const foreignRecord = logForEvent(otherEvent, 'log_other', LOG_STATUS.CONFIRMED, now + 20);
+  const legacyDirectRecord = {
+    ...createTimeLog({
+      startedAt: now + 30,
+      endedAt: now + MINUTE_MS + 30,
+      taskId: value.id,
+      status: LOG_STATUS.CONFIRMED,
+      source: LOG_SOURCE.MANUAL
+    }, now + 30),
+    id: 'log_legacy_direct'
+  };
+  database.timeLogs.push(
+    occurrenceRecord,
+    candidate,
+    foreignRecord,
+    legacyDirectRecord,
+    eventRecord
+  );
+
+  const state = buildTaskPlanStates(database, now).get(value.id);
+  assert.deepEqual(state.confirmedRecords.map((item) => item.id), ['log_event', 'log_occurrence']);
 });
 
 test('任务计划状态：固定日程只在今天真实发生时进入顶部且全部记录后变淡', () => {

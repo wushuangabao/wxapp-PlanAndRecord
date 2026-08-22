@@ -535,6 +535,64 @@ test('计时页最近记录以单条横向列展示并保留滑动尾部空间',
   assert.match(wxss, /\.recent-scroll-tail\s*\{[^}]*flex:\s*0\s+0\s+20%;/s);
 });
 
+test('计时页最近记录标题按下变色，长按仅在标题内松手后定位日历记录块', () => {
+  const originalGetApp = global.getApp;
+  const originalWx = global.wx;
+  const app = { globalData: {} };
+  const switchTabCalls = [];
+  const startedAt = NOW - 3_600_000;
+  global.getApp = () => app;
+  global.wx = {
+    showToast() {},
+    switchTab(options) { switchTabCalls.push(options); }
+  };
+  try {
+    const page = loadTimerPage();
+    page.data.recentLogs = [{
+      id: 'log_recent',
+      startedAt,
+      endedAt: NOW,
+      displayTitle: '整理会议纪要'
+    }];
+    const longPressEvent = { currentTarget: { dataset: { id: 'log_recent' } } };
+
+    page.recentLogTitleLongPressRect = { left: 8, top: 12, right: 160, bottom: 64 };
+    page.onRecentLogTitleLongPress(longPressEvent);
+    assert.equal(switchTabCalls.length, 0);
+    assert.equal(app.globalData.calendarHandoff, undefined);
+
+    page.onRecentLogTitleTouchEnd({ changedTouches: [{ clientX: 200, clientY: 80 }] });
+    assert.equal(switchTabCalls.length, 0);
+    assert.equal(app.globalData.calendarHandoff, undefined);
+
+    page.recentLogTitleLongPressRect = { left: 8, top: 12, right: 160, bottom: 64 };
+    page.onRecentLogTitleLongPress(longPressEvent);
+    page.onRecentLogTitleTouchCancel();
+    page.onRecentLogTitleTouchEnd({ changedTouches: [{ clientX: 24, clientY: 28 }] });
+    assert.equal(switchTabCalls.length, 0);
+
+    page.recentLogTitleLongPressRect = { left: 8, top: 12, right: 160, bottom: 64 };
+    page.onRecentLogTitleLongPress(longPressEvent);
+    page.onRecentLogTitleTouchEnd({ changedTouches: [{ clientX: 24, clientY: 28 }] });
+    assert.equal(switchTabCalls.length, 1);
+    assert.equal(switchTabCalls[0].url, '/pages/calendar/index');
+    assert.deepEqual(app.globalData.calendarHandoff, {
+      type: 'reveal-record',
+      id: 'log_recent',
+      startedAt,
+      endedAt: NOW
+    });
+
+    const wxml = fs.readFileSync(timerWxmlPath, 'utf8');
+    const wxss = fs.readFileSync(timerWxssPath, 'utf8');
+    assert.match(wxml, /class="recent-log-note-text"[^>]*data-id="\{\{item\.id\}\}"[^>]*bindtouchstart="onRecentLogTitleTouchStart"[^>]*bindlongpress="onRecentLogTitleLongPress"[^>]*bindtouchend="onRecentLogTitleTouchEnd"[^>]*bindtouchcancel="onRecentLogTitleTouchCancel"/);
+    assert.match(wxss, /\.recent-log-note-text:active\s*\{[^}]*background:\s*#e6ece7;/s);
+  } finally {
+    global.getApp = originalGetApp;
+    global.wx = originalWx;
+  }
+});
+
 test('计时页最近记录展示备注、时间、标签、自动标识与操作按钮', () => {
   const originalGetApp = global.getApp;
   const originalWx = global.wx;

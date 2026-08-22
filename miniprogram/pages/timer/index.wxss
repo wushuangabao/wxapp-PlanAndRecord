@@ -61,7 +61,8 @@
 .recent-log-row { display: flex; flex-direction: column; box-sizing: border-box; padding: 12rpx 0 0; border-bottom: 0; gap: 8rpx; }
 .recent-log-note, .recent-log-time, .recent-log-tags { flex: 0 0 auto; }
 .recent-log-note { display: flex; align-items: center; min-width: 0; gap: 8rpx; color: #343a36; font-size: 28rpx; font-weight: 500; line-height: 1.4; }
-.recent-log-note-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.recent-log-note-text { box-sizing: border-box; flex: 1; min-width: 0; min-height: 52rpx; overflow: hidden; border-radius: 12rpx; line-height: 52rpx; text-overflow: ellipsis; white-space: nowrap; }
+.recent-log-note-text:active { background: #e6ece7; }
 .recent-auto-badge, .recent-new-badge { position: relative; top: -6rpx; flex: 0 0 auto; font-size: 18rpx; font-weight: 400; line-height: 1.2; }
 .recent-auto-badge { color: #795d32; }
 .recent-new-badge { color: #9a5550; }

@@ -11,7 +11,7 @@
         <view wx:for="{{recentLogs}}" wx:key="id" class="recent-column">
           <view class="recent-log-row">
             <view class="recent-log-note">
-              <view class="recent-log-note-text">{{item.displayTitle}}</view>
+              <view class="recent-log-note-text" role="button" aria-label="记录{{item.displayTitle}}，长按在日历中定位" data-id="{{item.id}}" bindtouchstart="onRecentLogTitleTouchStart" bindlongpress="onRecentLogTitleLongPress" bindtouchend="onRecentLogTitleTouchEnd" bindtouchcancel="onRecentLogTitleTouchCancel">{{item.displayTitle}}</view>
               <text wx:if="{{item.isCandidate}}" class="recent-auto-badge" aria-label="自动生成，待确认">auto</text>
               <text wx:if="{{item.isNew}}" class="recent-new-badge" aria-label="新记录">new</text>
               <view class="recent-log-actions">

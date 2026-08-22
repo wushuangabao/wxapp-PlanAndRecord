@@ -89,7 +89,8 @@ test('日历粗粒度视图使用定高内容块换行并允许时间格自然�
   assert.match(coarseRowStyle, /display:\s*flex;/);
   assert.doesNotMatch(coarseRowStyle, /(?:^|[;\s])height:/);
   assert.match(wxss, /\.coarse-block-list\s*\{[^}]*display:\s*flex;[^}]*flex-wrap:\s*wrap;[^}]*gap:/s);
-  assert.match(wxss, /\.calendar-block\.coarse-calendar-block\s*\{[^}]*position:\s*relative;[^}]*display:\s*flex;[^}]*flex:\s*0 1 auto;[^}]*width:\s*auto;[^}]*max-width:\s*40vw;[^}]*height:\s*54rpx;[^}]*min-height:\s*54rpx;/s);
+  assert.match(wxss, /\.calendar-block\.coarse-calendar-block\s*\{[^}]*position:\s*relative;[^}]*display:\s*flex;[^}]*flex:\s*0 1 auto;[^}]*align-items:\s*center;[^}]*width:\s*auto;[^}]*max-width:\s*40vw;[^}]*height:\s*54rpx;[^}]*min-height:\s*54rpx;/s);
+  assert.match(wxss, /\.coarse-calendar-block \.block-title\s*\{[^}]*flex:\s*1 1 auto;[^}]*min-width:\s*0;[^}]*width:\s*100%;[^}]*max-width:\s*100%;[^}]*padding:\s*0 8rpx;[^}]*text-align:\s*center;/s);
   assert.match(wxss, /\.coarse-time-label\s*\{[^}]*user-select:\s*none;/s);
   assert.match(wxss, /\.coarse-time-label\.is-collapsible:active[\s\S]*?background:\s*#ece9e4;/);
   assert.match(wxss, /\.coarse-time-label\.is-drillable:active[\s\S]*?background:\s*#ece9e4;/);
@@ -183,13 +184,20 @@ test('日历详情弹窗危险操作左对齐、绿色主操作右对齐', () =>
   assert.match(startGroup, /danger-action[\s\S]*deleteRuleFollowing/);
   assert.match(startGroup, /danger-action[\s\S]*skipVirtualOccurrence/);
   assert.doesNotMatch(startGroup, /primary-action/);
-  assert.match(endGroup, /primary-action[\s\S]*startTimerFromPlan">开始计时/);
+  assert.match(endGroup, /primary-action[\s\S]*startTimerFromPlan">\{\{detailItem\.confirmedRecordCount \? '再次开始计时' : '开始计时'\}\}/);
+  assert.match(endGroup, /aria-label="编辑本次及后续固定日程"[\s\S]*openRecurringEditor">编辑/);
+  assert.match(endGroup, /detailItem\.type === 'plan' && !detailItem\.virtual && detailItem\.canDirectComplete[^>]*bindtap="confirmItem">直接完成/);
   assert.match(endGroup, /detailItem\.virtual && detailItem\.canConfirmVirtual[^>]*bindtap="confirmItem">确认完成/);
   assert.match(endGroup, /detailItem\.type === 'candidate' && !detailItem\.virtual[^>]*bindtap="confirmItem">确认</);
   assert.doesNotMatch(endGroup, /danger-action/);
   assert.match(wxss, /\.detail-actions\s*\{[^}]*justify-content:\s*space-between;/s);
   assert.match(wxss, /\.detail-actions-start\s*\{[^}]*justify-content:\s*flex-start;/s);
   assert.match(wxss, /\.detail-actions-end\s*\{[^}]*justify-content:\s*flex-end;[^}]*margin-left:\s*auto;/s);
+  assert.match(wxml, /class="detail-actions \{\{detailItem\.virtual \? 'virtual-detail-actions' : ''\}\}"/);
+  assert.match(wxss, /\.detail-actions\.virtual-detail-actions,[\s\S]*?\.virtual-detail-actions \.detail-actions-start,[\s\S]*?\.virtual-detail-actions \.detail-actions-end\s*\{[^}]*flex-wrap:\s*nowrap;[^}]*gap:\s*8rpx;/s);
+  assert.match(wxss, /\.virtual-detail-actions \.detail-action\s*\{[^}]*padding-right:\s*12rpx;[^}]*padding-left:\s*12rpx;[^}]*white-space:\s*nowrap;/s);
+  assert.match(wxss, /\.virtual-detail-actions \.rule-delete-action\s*\{[^}]*font-size:\s*20rpx;/s);
+  assert.match(wxss, /\.detail-action\s*\{[^}]*min-height:\s*68rpx;[^}]*padding:\s*16rpx 22rpx;/s);
 });
 
 test('所有页面和共享控件使用莫兰迪绿色主色板', () => {

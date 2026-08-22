@@ -1,5 +1,9 @@
 const { LOG_STATUS, TIMER_STATUS } = require('../domain/constants');
-const { projectRuleIntersectingRange } = require('../domain/recurrence');
+const {
+  logicalOccurrenceStart,
+  projectRule,
+  projectRuleIntersectingRange
+} = require('../domain/recurrence');
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -31,6 +35,28 @@ function pushMapValue(map, key, value) {
     map.set(key, []);
   }
   map.get(key).push(value);
+}
+
+function confirmedRecordsByTask(confirmedLogs, eventById, ruleById, exceptions) {
+  const recordsByTask = new Map();
+  confirmedLogs.forEach((log) => {
+    let taskId = null;
+    if (log.calendarEventId) {
+      const event = eventById.get(log.calendarEventId);
+      taskId = event ? event.taskId : null;
+    } else if (log.originRuleId && log.originOccurrenceId) {
+      const rule = ruleById.get(log.originRuleId);
+      const occurrenceStart = logicalOccurrenceStart(log.originRuleId, log.originOccurrenceId);
+      const occurrence = rule && occurrenceStart !== null
+        ? projectRule(rule, occurrenceStart, occurrenceStart, exceptions)
+          .find((item) => item.originOccurrenceId === log.originOccurrenceId)
+        : null;
+      taskId = occurrence ? occurrence.taskId : null;
+    }
+    pushMapValue(recordsByTask, taskId, log);
+  });
+  recordsByTask.forEach((records) => records.sort(compareStartedAt));
+  return recordsByTask;
 }
 
 function revisionsForTask(rule, taskId) {
@@ -78,6 +104,11 @@ function activeTimerMatchesOccurrence(database, ruleId, originOccurrenceId) {
   );
 }
 
+function activeTimerMatchesEvent(database, eventId) {
+  const association = timerAssociation(database);
+  return Boolean(association && association.kind === 'event' && association.id === eventId);
+}
+
 function inferCompletionUndoLog(state) {
   if (!state || !state.entityPlanEvidence || !state.entityPlanEvidence.length) {
     return null;
@@ -104,6 +135,12 @@ function buildTaskPlanStates(database, now = Date.now()) {
   const confirmedByOccurrence = new Map();
   const eventById = new Map(events.map((event) => [event.id, event]));
   const ruleById = new Map(rules.map((rule) => [rule.id, rule]));
+  const confirmedRecordsByTaskId = confirmedRecordsByTask(
+    confirmedLogs,
+    eventById,
+    ruleById,
+    exceptions
+  );
   const today = localDayRange(now);
   const activeTimerAssociation = timerAssociation(database);
 
@@ -199,6 +236,7 @@ function buildTaskPlanStates(database, now = Date.now()) {
       pendingEntityPlans,
       pendingTodayOccurrences,
       entityPlanEvidence,
+      confirmedRecords: (confirmedRecordsByTaskId.get(task.id) || []).slice(),
       candidates,
       hasPlanAssociations: entityPlans.length > 0 || repeatRules.length > 0,
       canAutoComplete,
@@ -223,5 +261,6 @@ module.exports = {
   buildTaskPlanStates,
   inferCompletionUndoLog,
   occurrenceAssociationKey,
+  activeTimerMatchesEvent,
   activeTimerMatchesOccurrence
 };

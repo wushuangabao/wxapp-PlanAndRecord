@@ -1,5 +1,10 @@
 const { rangeForView } = require('../../utils/date-range');
-const { getService, showError, showSaved } = require('../../utils/page');
+const {
+  getService,
+  markPageVisible,
+  showError,
+  showSaved
+} = require('../../utils/page');
 const {
   CURRENT_EXPORT_TEMP_FILE_NAME,
   LEGACY_EXPORT_FILE_NAMES,
@@ -596,6 +601,7 @@ Page({
   },
 
   onShow() {
+    markPageVisible('pages/profile/index');
     this.refresh();
   },
 

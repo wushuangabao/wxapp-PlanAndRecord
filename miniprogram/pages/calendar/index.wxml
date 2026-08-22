@@ -27,6 +27,13 @@
     </view>
   </view>
 
+  <view
+    wx:if="{{pageTurnRelativeLabel}}"
+    class="page-turn-relative-label"
+    role="status"
+    aria-label="翻页后时间：{{pageTurnRelativeLabel}}"
+  >{{pageTurnRelativeLabel}}</view>
+
   <scroll-view
     class="calendar-scroll {{pageTurnClass}} {{isCreateOpen ? 'is-sheet-open' : ''}}"
     scroll-y="{{!isCreateOpen}}"
@@ -84,6 +91,7 @@
           aria-label="{{row.label}}{{row.restDayAria}}{{row.drillDownAria}}，{{row.isCollapsed ? '已折叠，点击展开' : '已展开，点击折叠'}}"
           data-collapse-key="{{row.collapseKey}}"
           data-row-start="{{row.start}}"
+          bindtouchstart="onCoarseLabelTouchStart"
           bindtap="toggleCoarseRow"
           bindlongpress="drillDownFromCoarseLabel"
           bindtouchend="onCoarseLabelTouchEnd"
@@ -100,6 +108,7 @@
           role="button"
           aria-label="{{row.label}}{{row.restDayAria}}{{row.drillDownAria}}"
           data-row-start="{{row.start}}"
+          bindtouchstart="onCoarseLabelTouchStart"
           bindlongpress="drillDownFromCoarseLabel"
           bindtouchend="onCoarseLabelTouchEnd"
           bindtouchcancel="onCoarseLabelTouchEnd"
@@ -118,7 +127,7 @@
               wx:for-item="block"
               wx:if="{{!row.isCollapsed || block.coarseLineIndex < row.collapsedVisibleLineCount}}"
               id="{{block.domId}}"
-              class="calendar-block coarse-calendar-block {{block.visualType}} {{block.priorityClass}} {{block.continuesBefore ? 'continues-before' : ''}} {{block.continuesAfter ? 'continues-after' : ''}} {{block.overlapMeta ? 'is-overlapping' : ''}}"
+              class="calendar-block coarse-calendar-block {{block.visualType}} {{block.priorityClass}} {{block.continuesBefore ? 'continues-before' : ''}} {{block.continuesAfter ? 'continues-after' : ''}} {{block.overlapMeta ? 'is-overlapping' : ''}} {{block.id === highlightedPlanId ? 'is-handoff-highlight' : ''}}"
               style="width: {{block.coarseWidth}}rpx;"
               role="button"
               aria-label="{{block.ariaLabel}}"
@@ -176,17 +185,46 @@
         <view wx:if="{{detailItem.note}}" class="detail-row detail-row-stack"><text>备注</text><text>{{detailItem.note}}</text></view>
         <view wx:if="{{detailItem.displayTags}}" class="detail-row detail-row-stack"><text>标签</text><text>{{detailItem.displayTags}}</text></view>
         <view wx:if="{{detailItem.displayOverlap}}" class="detail-overlap">{{detailItem.displayOverlap}}</view>
-        <view class="detail-actions">
+        <view wx:if="{{detailItem.type === 'plan' && !detailItem.virtual && detailItem.confirmedRecordCount}}" class="plan-records">
+          <view class="plan-records-heading">已有记录（{{detailItem.confirmedRecordCount}}）</view>
+          <scroll-view
+            class="plan-record-list"
+            scroll-y="{{true}}"
+            enable-flex="{{true}}"
+            show-scrollbar="{{false}}"
+            style="height: {{detailItem.confirmedRecordListHeight}}rpx;"
+          >
+            <view
+              wx:for="{{detailItem.confirmedRecords}}"
+              wx:for-item="record"
+              wx:key="id"
+              class="plan-record-item"
+              role="button"
+              aria-label="时间记录{{record.displayTitle}}，{{record.displayMeta}}，长按定位"
+              data-record="{{record}}"
+              bindtouchstart="onPlanRecordTouchStart"
+              bindlongpress="onPlanRecordLongPress"
+              bindtouchend="onPlanRecordTouchEnd"
+              bindtouchcancel="onPlanRecordTouchCancel"
+            >
+              <view class="plan-record-title">{{record.displayTitle}}</view>
+              <view class="plan-record-meta">{{record.displayMeta}}</view>
+            </view>
+          </scroll-view>
+        </view>
+        <view class="detail-actions {{detailItem.virtual ? 'virtual-detail-actions' : ''}}">
           <view class="detail-actions-start">
             <view wx:if="{{detailItem.type === 'plan' && !detailItem.virtual}}" class="detail-action danger-action" role="button" data-item="{{detailItem}}" bindtap="deletePlan">删除计划</view>
-            <view wx:if="{{detailItem.virtual}}" class="detail-action danger-action" role="button" aria-label="删除本次及后续" data-item="{{detailItem}}" bindtap="deleteRuleFollowing">删除本次及后续</view>
+            <view wx:if="{{detailItem.virtual}}" class="detail-action danger-action rule-delete-action" role="button" aria-label="删除本次及后续" data-item="{{detailItem}}" bindtap="deleteRuleFollowing">删除本次及后续</view>
             <view wx:if="{{detailItem.virtual}}" class="detail-action danger-action" role="button" data-item="{{detailItem}}" bindtap="skipVirtualOccurrence">跳过</view>
             <view wx:if="{{detailItem.type === 'candidate' && !detailItem.virtual}}" class="detail-action danger-action" role="button" data-item="{{detailItem}}" bindtap="discardCandidate">作废</view>
             <view wx:if="{{detailItem.type === 'confirmed'}}" class="detail-action danger-action" role="button" data-item="{{detailItem}}" bindtap="deleteConfirmed">删除</view>
           </view>
           <view class="detail-actions-end">
             <view wx:if="{{detailItem.type === 'plan' && !detailItem.virtual && detailItem.canEditPlan}}" class="detail-action" role="button" data-item="{{detailItem}}" bindtap="openPlanEditor">编辑计划</view>
-            <view wx:if="{{detailItem.type === 'plan' && detailItem.canAssociate}}" class="detail-action primary-action" role="button" data-item="{{detailItem}}" bindtap="startTimerFromPlan">开始计时</view>
+            <view wx:if="{{detailItem.virtual && detailItem.canEditRuleFollowing}}" class="detail-action" role="button" aria-label="编辑本次及后续固定日程" data-item="{{detailItem}}" bindtap="openRecurringEditor">编辑</view>
+            <view wx:if="{{detailItem.type === 'plan' && detailItem.canAssociate}}" class="detail-action primary-action" role="button" data-item="{{detailItem}}" bindtap="startTimerFromPlan">{{detailItem.confirmedRecordCount ? '再次开始计时' : '开始计时'}}</view>
+            <view wx:if="{{detailItem.type === 'plan' && !detailItem.virtual && detailItem.canDirectComplete}}" class="detail-action primary-action" role="button" data-item="{{detailItem}}" bindtap="confirmItem">直接完成</view>
             <view wx:if="{{detailItem.virtual && detailItem.canConfirmVirtual}}" class="detail-action primary-action" role="button" data-item="{{detailItem}}" bindtap="confirmItem">确认完成</view>
             <view wx:if="{{detailItem.type === 'candidate' && !detailItem.virtual}}" class="detail-action" role="button" data-item="{{detailItem}}" bindtap="openLogEditor">编辑确认</view>
             <view wx:if="{{detailItem.type === 'candidate' && !detailItem.virtual}}" class="detail-action primary-action" role="button" data-item="{{detailItem}}" bindtap="confirmItem">确认</view>
@@ -217,6 +255,6 @@
       <picker range="{{logEvents}}" range-key="title" value="{{logEventIndex}}" data-key="logEventIndex" bindchange="onPicker"><view class="picker">计划块：{{logEvents[logEventIndex].title || '计划外'}}</view></picker>
       <input class="input" placeholder="备注" value="{{logNote}}" data-key="logNote" bindinput="onEditorField" />
       <view class="tag-editor" aria-label="标签"><view wx:for="{{logTags}}" wx:key="*this" class="tag-chip tag-chip-removable" role="button" data-tags-key="logTags" data-input-visible-key="logTagInputVisible" data-index="{{index}}" bindtap="removeTag" aria-label="移除标签 {{item}}">{{item}}<text class="tag-chip-remove">×</text></view><input wx:if="{{logTagInputVisible}}" class="tag-chip tag-input" focus maxlength="10" placeholder="输入新标签" data-tags-key="logTags" data-input-visible-key="logTagInputVisible" bindconfirm="addTag" bindblur="onTagInputBlur" /><view wx:else class="tag-chip tag-add" role="button" data-tags-key="logTags" data-input-visible-key="logTagInputVisible" bindtap="openTagInput" aria-label="添加标签">+</view></view>
-      <view class="tag-hint">最多添加 {{maxTagsPerLog}} 个标签；每个最多 5 个汉字或 10 个英文字符（中英文折算）</view>
+      <view class="tag-hint">最多添加 {{maxTagsPerLog}} 个标签</view>
     </view>
   </view>

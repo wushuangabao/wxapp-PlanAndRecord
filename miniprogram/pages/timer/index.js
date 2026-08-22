@@ -6,10 +6,16 @@ const { normalizeTags } = require('../../domain/tags');
 const { calculateTimerDurationMinutes, sumPausedMilliseconds } = require('../../domain/time');
 const { displayLogTitle } = require('../../utils/log-presentation');
 const { resolveEditedTimestamp, timePickerState } = require('../../utils/log-time-editor');
+const { setCalendarHandoff } = require('../../utils/calendar-handoff');
+const {
+  captureTargetRectFromTouch,
+  shouldCommitLongPressRelease
+} = require('../../utils/long-press-release');
 const {
   defaultDateTime,
   formatDateTime,
   getService,
+  markPageVisible,
   readRecentLogHighlight,
   showError,
   showSaved,
@@ -26,6 +32,7 @@ const RECENT_SNAP_ANIMATION_DURATION = 420;
 const RECENT_RETURN_ANIMATION_FRAME = 16;
 const RECENT_BOUNDARY_PULL_RESISTANCE = 0.45;
 const RECENT_BOUNDARY_MAX_OFFSET = 72;
+const RECENT_LOG_TITLE_LONG_PRESS_SELECTOR = '.recent-log-note-text';
 const TIMER_DRAFT_DEBOUNCE_MS = 300;
 
 function formatDuration(seconds) {
@@ -393,6 +400,7 @@ Page({
   },
 
   onShow() {
+    markPageVisible('pages/timer/index');
     this.refresh();
   },
 
@@ -403,12 +411,14 @@ Page({
   onHide() {
     this.flushTimerDraftSync();
     this.stopTicker();
+    this.clearPendingRecentLogTitleLongPress();
     if (!this.data.recentScrollEnabled) this.setData({ recentScrollEnabled: true });
   },
 
   onUnload() {
     this.flushTimerDraftSync();
     this.stopTicker();
+    this.clearPendingRecentLogTitleLongPress();
     this.clearRecentScrollAnimation();
   },
 
@@ -673,6 +683,64 @@ Page({
       startScrollLeft: Math.max(0, currentScrollLeft),
       duration: RECENT_SNAP_ANIMATION_DURATION,
       easing: easeOutCubic
+    });
+  },
+
+  captureRecentLogTitleLongPressRect(event, key) {
+    const token = (this.recentLogTitleLongPressToken || 0) + 1;
+    this.recentLogTitleLongPressToken = token;
+    captureTargetRectFromTouch(RECENT_LOG_TITLE_LONG_PRESS_SELECTOR, event, key, (rect) => {
+      if (this.recentLogTitleLongPressToken !== token) return;
+      this.recentLogTitleLongPressRect = rect;
+    });
+  },
+
+  onRecentLogTitleTouchStart(event) {
+    this.pendingRecentLogTitleLongPress = null;
+    this.recentLogTitleLongPressRect = null;
+    this.captureRecentLogTitleLongPressRect(event, 'touches');
+  },
+
+  onRecentLogTitleLongPress(event) {
+    const logId = event.currentTarget.dataset.id;
+    if (!this.data.recentLogs.some((item) => item.id === logId)) return;
+    if (!this.recentLogTitleLongPressRect) {
+      this.captureRecentLogTitleLongPressRect(event, 'touches');
+    }
+    this.pendingRecentLogTitleLongPress = { logId };
+  },
+
+  onRecentLogTitleTouchEnd(event) {
+    const pending = this.pendingRecentLogTitleLongPress;
+    this.pendingRecentLogTitleLongPress = null;
+    if (pending && shouldCommitLongPressRelease(event, this.recentLogTitleLongPressRect)) {
+      this.revealRecentLogInCalendar(pending.logId);
+    }
+    this.recentLogTitleLongPressRect = null;
+  },
+
+  onRecentLogTitleTouchCancel() {
+    this.clearPendingRecentLogTitleLongPress();
+  },
+
+  clearPendingRecentLogTitleLongPress() {
+    this.pendingRecentLogTitleLongPress = null;
+    this.recentLogTitleLongPressRect = null;
+    this.recentLogTitleLongPressToken = (this.recentLogTitleLongPressToken || 0) + 1;
+  },
+
+  revealRecentLogInCalendar(logId) {
+    const log = this.data.recentLogs.find((item) => item.id === logId);
+    if (!log || !Number.isFinite(log.startedAt) || !Number.isFinite(log.endedAt)) return;
+    setCalendarHandoff({
+      type: 'reveal-record',
+      id: log.id,
+      startedAt: log.startedAt,
+      endedAt: log.endedAt
+    });
+    wx.switchTab({
+      url: '/pages/calendar/index',
+      fail: () => setCalendarHandoff(null)
     });
   },
 

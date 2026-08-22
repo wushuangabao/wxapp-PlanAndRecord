@@ -1,5 +1,6 @@
 .page {
   box-sizing: border-box;
+  position: relative;
   display: flex;
   flex-direction: column;
   height: 100vh;
@@ -487,7 +488,7 @@
   position: relative;
   display: flex;
   flex: 0 1 auto;
-  align-items: stretch;
+  align-items: center;
   width: auto;
   max-width: 40vw;
   height: 54rpx;
@@ -495,8 +496,12 @@
 }
 
 .coarse-calendar-block .block-title {
-  width: auto;
+  flex: 1 1 auto;
+  min-width: 0;
+  width: 100%;
   max-width: 100%;
+  padding: 0 8rpx;
+  text-align: center;
 }
 
 .calendar-block.is-segmented {
@@ -869,6 +874,85 @@
   line-height: 1.5;
 }
 
+.plan-records {
+  margin-top: 24rpx;
+}
+
+.plan-records-heading {
+  margin-bottom: 12rpx;
+  color: #626b65;
+  font-size: 24rpx;
+  font-weight: 700;
+  line-height: 34rpx;
+}
+
+.plan-record-list {
+  box-sizing: border-box;
+  overflow: hidden;
+  border: 1rpx solid #dedad3;
+  border-radius: 14rpx;
+  background: #f3f1ed;
+}
+
+.page-turn-relative-label {
+  position: absolute;
+  z-index: 10;
+  top: 156rpx;
+  left: 50%;
+  max-width: calc(100% - 48rpx);
+  padding: 6rpx 16rpx;
+  transform: translateX(-50%);
+  border-radius: 12rpx;
+  background: transparent;
+  color: #9a5550;
+  font-size: 52rpx;
+  font-weight: 700;
+  line-height: 1.25;
+  pointer-events: none;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.plan-record-item {
+  box-sizing: border-box;
+  display: flex;
+  min-height: 124rpx;
+  flex-direction: column;
+  justify-content: center;
+  gap: 8rpx;
+  padding: 16rpx 18rpx;
+  border-bottom: 1rpx solid #dedad3;
+}
+
+.plan-record-item:last-child {
+  border-bottom: 0;
+}
+
+.plan-record-item:active {
+  background: #e6ece7;
+}
+
+.plan-record-title {
+  display: -webkit-box;
+  overflow: hidden;
+  color: #343a36;
+  font-size: 26rpx;
+  font-weight: 600;
+  line-height: 34rpx;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.plan-record-meta {
+  overflow: hidden;
+  color: #626b65;
+  font-size: 22rpx;
+  line-height: 30rpx;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .detail-actions {
   display: flex;
   flex-wrap: wrap;
@@ -892,6 +976,24 @@
 .detail-actions-end {
   justify-content: flex-end;
   margin-left: auto;
+}
+
+.detail-actions.virtual-detail-actions,
+.virtual-detail-actions .detail-actions-start,
+.virtual-detail-actions .detail-actions-end {
+  flex-wrap: nowrap;
+  gap: 8rpx;
+}
+
+.virtual-detail-actions .detail-action {
+  flex: 0 0 auto;
+  padding-right: 12rpx;
+  padding-left: 12rpx;
+  white-space: nowrap;
+}
+
+.virtual-detail-actions .rule-delete-action {
+  font-size: 20rpx;
 }
 
 .detail-action {

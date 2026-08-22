@@ -78,7 +78,7 @@ function createHarness({
   const calls = {
     createProject: [], createTask: [], updateTask: [], deleteTask: [],
     createWish: [], updateWish: [], deleteWish: [], convertWishToProject: [],
-    startTaskPlanTimer: [], reopenTaskByRemovingCompletionLog: [],
+    startTaskPlanTimer: [], confirmTaskPlanCandidate: [], reopenTaskByRemovingCompletionLog: [],
     refreshTaskPlanStatuses: []
   };
   const planStates = providedPlanStates || new Map();
@@ -103,6 +103,10 @@ function createHarness({
     startTaskPlanTimer(id, candidateId) {
       calls.startTaskPlanTimer.push([id, candidateId]);
       return { status: 'running' };
+    },
+    confirmTaskPlanCandidate(id, candidateId) {
+      calls.confirmTaskPlanCandidate.push([id, candidateId]);
+      return { id: 'log_confirmed', status: 'confirmed' };
     },
     taskCompletionUndoPreview(id) {
       const state = planStates.get(id);
@@ -390,6 +394,20 @@ test('计划页：设定时间预填标题，取消恢复 TODO 名，成功后�
     callbacks[0]();
     assert.deepEqual(refreshCalls, [{ resetTodoColumn: true }]);
     assert.equal(harness.wxState.toast.title, '计划块已创建');
+
+    harness.wxState.toast = undefined;
+    callbacks.length = 0;
+    refreshCalls.length = 0;
+    harness.page.onPlanEditorSuccess({
+      detail: {
+        operation: 'create-recurring',
+        result: { task: { id: 't2', title: 'B' }, rule: { id: 'r1' }, occurrence: { id: 'o1' } },
+        revealTarget: { id: 'o1' }
+      }
+    });
+    callbacks[0]();
+    assert.equal(harness.wxState.toast.title, '固定日程已创建');
+    assert.deepEqual(refreshCalls, [{ resetTodoColumn: true }]);
   } finally {
     harness.restore();
   }
@@ -1860,10 +1878,288 @@ test('计划页：长按单条计划时等触摸结束后再跳转日历', () =>
     });
 
     const wxml = fs.readFileSync(plansWxmlPath, 'utf8');
-    assert.match(wxml, /bindlongpress="onTaskTitleLongPress" bindtouchend="onTaskTitleTouchEnd" bindtouchcancel="onTaskTitleTouchEnd"/);
+    assert.match(wxml, /bindtouchstart="onTaskTitleTouchStart" bindlongpress="onTaskTitleLongPress" bindtouchend="onTaskTitleTouchEnd" bindtouchcancel="onTaskTitleTouchEnd"/);
   } finally {
     global.setTimeout = originalSetTimeout;
     global.clearTimeout = originalClearTimeout;
+    harness.restore();
+  }
+});
+
+test('计划页：长按标题后若松手已离开控件则取消后续逻辑', () => {
+  const startedAt = 1_700_000_100_000;
+  const harness = createHarness();
+  try {
+    harness.page.data.tasks = [{
+      id: 'task_todo',
+      planCandidates: [{
+        kind: 'event',
+        title: '计划A',
+        startedAt,
+        endedAt: startedAt + 3_600_000,
+        calendarEventId: 'event_1'
+      }]
+    }];
+    harness.page.taskTitleLongPressRect = { left: 8, top: 12, right: 120, bottom: 40 };
+    harness.page.onTaskTitleLongPress(event('task_todo'));
+    harness.page.onTaskTitleTouchEnd({
+      changedTouches: [{ clientX: 200, clientY: 80 }]
+    });
+    assert.equal(harness.wxState.switchTab, undefined);
+    assert.equal(global.getApp().globalData.calendarHandoff, undefined);
+
+    harness.page.taskTitleLongPressRect = { left: 8, top: 12, right: 120, bottom: 40 };
+    harness.page.onTaskTitleLongPress(event('task_todo'));
+    harness.page.onTaskTitleTouchEnd({
+      changedTouches: [{ clientX: 24, clientY: 20 }]
+    });
+    assert.equal(harness.wxState.switchTab.url, '/pages/calendar/index');
+  } finally {
+    harness.restore();
+  }
+});
+
+test('计划页：已完成任务有一条关联记录时长按标题跳到日历记录块', () => {
+  const startedAt = 1_700_000_100_000;
+  const harness = createHarness();
+  try {
+    harness.page.data.tasks = [{
+      id: 'task_done',
+      title: '已完成任务',
+      status: TASK_STATUS.COMPLETED,
+      planCandidates: [],
+      confirmedRecords: [{
+        id: 'log_done',
+        note: '实际完成',
+        taskNameSnapshot: '已完成任务',
+        startedAt,
+        endedAt: startedAt + 3_600_000
+      }]
+    }];
+    harness.page.taskTitleLongPressRect = { left: 0, top: 0, right: 120, bottom: 40 };
+    harness.page.onTaskTitleLongPress(event('task_done'));
+    harness.page.onTaskTitleTouchEnd({ changedTouches: [{ clientX: 12, clientY: 20 }] });
+
+    assert.equal(harness.wxState.modal, undefined);
+    assert.equal(harness.wxState.switchTab.url, '/pages/calendar/index');
+    assert.deepEqual(global.getApp().globalData.calendarHandoff, {
+      type: 'reveal-record',
+      id: 'log_done',
+      startedAt,
+      endedAt: startedAt + 3_600_000
+    });
+  } finally {
+    harness.restore();
+  }
+});
+
+test('计划页：任务有多条关联记录时先选择，已完成且无记录时长按无动作', () => {
+  const startedAt = 1_700_000_100_000;
+  const harness = createHarness();
+  try {
+    harness.page.data.tasks = [{
+      id: 'task_multi_records',
+      title: '多记录任务',
+      status: TASK_STATUS.COMPLETED,
+      planCandidates: [],
+      confirmedRecords: [{
+        id: 'log_first',
+        note: '第一次投入',
+        taskNameSnapshot: '多记录任务',
+        startedAt,
+        endedAt: startedAt + 1_800_000
+      }, {
+        id: 'log_second',
+        note: '',
+        taskNameSnapshot: '多记录任务',
+        startedAt: startedAt + 3_600_000,
+        endedAt: startedAt + 5_400_000
+      }]
+    }, {
+      id: 'task_done_without_record',
+      title: '普通已完成任务',
+      status: TASK_STATUS.COMPLETED,
+      planCandidates: [],
+      confirmedRecords: []
+    }];
+
+    harness.page.executeTaskTitleLongPress('task_multi_records');
+    assert.equal(harness.page.data.taskTimelinePicker.title, '查看记录');
+    assert.equal(harness.page.data.taskTimelinePicker.kind, 'record');
+    assert.deepEqual(
+      harness.page.data.taskTimelinePicker.items.map((item) => [item.id, item.title]),
+      [['log_first', '第一次投入'], ['log_second', '多记录任务']]
+    );
+
+    harness.page.selectTaskTimelineItem(event('log_second'));
+    assert.equal(harness.page.data.taskTimelinePicker, null);
+    assert.deepEqual(global.getApp().globalData.calendarHandoff, {
+      type: 'reveal-record',
+      id: 'log_second',
+      startedAt: startedAt + 3_600_000,
+      endedAt: startedAt + 5_400_000
+    });
+
+    harness.wxState.modal = undefined;
+    harness.wxState.switchTab = undefined;
+    global.getApp().globalData.calendarHandoff = undefined;
+    harness.page.executeTaskTitleLongPress('task_done_without_record');
+    assert.equal(harness.wxState.modal, undefined);
+    assert.equal(harness.wxState.switchTab, undefined);
+    assert.equal(global.getApp().globalData.calendarHandoff, undefined);
+
+    const wxml = fs.readFileSync(plansWxmlPath, 'utf8');
+    assert.match(wxml, /sheet-header title="\{\{taskTimelinePicker\.title\}\}"/);
+    assert.match(wxml, /wx:for="\{\{taskTimelinePicker\.items\}\}"/);
+    assert.match(wxml, /bindtap="selectTaskTimelineItem"/);
+  } finally {
+    harness.restore();
+  }
+});
+
+test('计划页：无候选计划时长按标题确认后留在本页为既有任务创建计划', () => {
+  const harness = createHarness();
+  try {
+    harness.page.data.tasks = [{
+      id: 'task_todo',
+      title: '待安排任务',
+      status: TASK_STATUS.TODO,
+      planCandidates: [],
+      confirmedRecords: []
+    }];
+    harness.page.taskTitleLongPressRect = { left: 0, top: 0, right: 80, bottom: 32 };
+    harness.page.onTaskTitleLongPress(event('task_todo'));
+    assert.equal(harness.wxState.modal, undefined);
+
+    harness.page.onTaskTitleTouchEnd({
+      changedTouches: [{ clientX: 120, clientY: 40 }]
+    });
+    assert.equal(harness.wxState.modal, undefined);
+
+    harness.page.taskTitleLongPressRect = { left: 0, top: 0, right: 80, bottom: 32 };
+    harness.page.onTaskTitleLongPress(event('task_todo'));
+    harness.page.onTaskTitleTouchEnd({
+      changedTouches: [{ clientX: 10, clientY: 8 }]
+    });
+    assert.equal(harness.wxState.modal.title, '创建计划？');
+    harness.wxState.modal.success({ confirm: true });
+    assert.equal(harness.wxState.switchTab, undefined);
+    assert.equal(global.getApp().globalData.calendarHandoff, undefined);
+    assert.equal(harness.page.data.isPlanSheetOpen, true);
+    assert.equal(harness.page.data.planEditorInitialValue.title, '待安排任务');
+    assert.equal(harness.page.data.planEditorInitialValue.existingTaskId, 'task_todo');
+
+    harness.page.onPlanEditorCancel();
+    assert.equal(harness.page.data.isPlanSheetOpen, false);
+    assert.equal(harness.page.data.isTaskEditorOpen, false);
+  } finally {
+    harness.restore();
+  }
+});
+
+test('计划页：长按计时器 icon 在松手且仍落在控件内才弹出确认完成', () => {
+  const tasks = [{ id: 'task_plan', title: '计划任务', status: TASK_STATUS.TODO, projectId: null, updatedAt: 1 }];
+  const state = {
+    topVisible: true,
+    controlKind: 'timer',
+    timerMatchesTask: false,
+    timerStatus: 'idle',
+    candidates: [{
+      id: 'event:event_1',
+      kind: 'event',
+      title: '上午计划',
+      startedAt: 1,
+      endedAt: 2,
+      calendarEventId: 'event_1'
+    }],
+    entityPlans: [{ id: 'event_1' }],
+    repeatRules: [],
+    activeRepeatRules: []
+  };
+  const harness = createHarness({ tasks, planStates: new Map([['task_plan', state]]) });
+  try {
+    harness.page.refresh();
+    const wxml = fs.readFileSync(plansWxmlPath, 'utf8');
+    assert.match(wxml, /class="todo-timer-icon[^"]*"[^>]*data-id="\{\{task\.id\}\}" bindtouchstart="onTaskTimerTouchStart" bindlongpress="onTaskTimerLongPress" bindtouchend="onTaskTimerTouchEnd" bindtouchcancel="onTaskTimerTouchEnd"/);
+    assert.equal(
+      (wxml.match(/bindtouchstart="onTaskTimerTouchStart" bindlongpress="onTaskTimerLongPress" bindtouchend="onTaskTimerTouchEnd" bindtouchcancel="onTaskTimerTouchEnd"/g) || []).length,
+      2
+    );
+
+    harness.page.taskTimerLongPressRect = { left: 8, top: 12, right: 40, bottom: 44 };
+    harness.page.onTaskTimerLongPress(event('task_plan'));
+    assert.equal(harness.wxState.modal, undefined);
+    harness.page.onTaskTimerTouchEnd({
+      changedTouches: [{ clientX: 200, clientY: 80 }]
+    });
+    assert.equal(harness.wxState.modal, undefined);
+    assert.equal(harness.calls.confirmTaskPlanCandidate.length, 0);
+
+    harness.page.taskTimerLongPressRect = { left: 8, top: 12, right: 40, bottom: 44 };
+    harness.page.onTaskTimerLongPress(event('task_plan'));
+    harness.page.toggleTask(event('task_plan', TASK_STATUS.TODO));
+    assert.equal(harness.calls.startTaskPlanTimer.length, 0);
+    harness.page.onTaskTimerTouchEnd({
+      changedTouches: [{ clientX: 20, clientY: 24 }]
+    });
+    assert.equal(harness.wxState.modal.title, '直接完成？');
+    assert.equal(harness.calls.confirmTaskPlanCandidate.length, 0);
+
+    harness.wxState.modal.success({ confirm: false });
+    assert.equal(harness.calls.confirmTaskPlanCandidate.length, 0);
+
+    harness.wxState.modal.success({ confirm: true });
+    assert.deepEqual(harness.calls.confirmTaskPlanCandidate, [['task_plan', 'event:event_1']]);
+    assert.equal(harness.wxState.toast.title, '计划已记录');
+  } finally {
+    harness.restore();
+  }
+});
+
+test('计划页：长按计时器 icon 多候选先选择再确认，无候选只提示', () => {
+  const tasks = [{ id: 'task_plan', title: '计划任务', status: TASK_STATUS.TODO, projectId: null, updatedAt: 1 }];
+  const state = {
+    topVisible: true,
+    controlKind: 'timer',
+    timerMatchesTask: false,
+    timerStatus: 'idle',
+    candidates: [
+      { id: 'event:event_1', kind: 'event', title: '上午计划', startedAt: 1, endedAt: 2 },
+      { id: 'occurrence:rule_1:occ_1', kind: 'occurrence', title: '每日练习', startedAt: 3, endedAt: 4 }
+    ],
+    entityPlans: [{ id: 'event_1' }],
+    repeatRules: [{ id: 'rule_1' }],
+    activeRepeatRules: [{ id: 'rule_1' }]
+  };
+  const harness = createHarness({ tasks, planStates: new Map([['task_plan', state]]) });
+  try {
+    harness.page.refresh();
+    harness.page.taskTimerLongPressRect = { left: 0, top: 0, right: 40, bottom: 40 };
+    harness.page.onTaskTimerLongPress(event('task_plan'));
+    harness.page.onTaskTimerTouchEnd({
+      changedTouches: [{ clientX: 10, clientY: 10 }]
+    });
+    assert.deepEqual(harness.wxState.actionSheet.itemList, ['上午计划', '每日练习']);
+    assert.equal(harness.wxState.modal, undefined);
+
+    harness.wxState.actionSheet.success({ tapIndex: 1 });
+    harness.wxState.modal.success({ confirm: true });
+    assert.deepEqual(harness.calls.confirmTaskPlanCandidate, [['task_plan', 'occurrence:rule_1:occ_1']]);
+    assert.equal(harness.wxState.toast.title, '固定日程已完成');
+
+    state.controlKind = 'recorded';
+    state.candidates = [];
+    harness.page.refresh();
+    harness.wxState.modal = undefined;
+    harness.wxState.toast = undefined;
+    harness.page.taskTimerLongPressRect = { left: 0, top: 0, right: 40, bottom: 40 };
+    harness.page.onTaskTimerLongPress(event('task_plan'));
+    harness.page.onTaskTimerTouchEnd({
+      changedTouches: [{ clientX: 10, clientY: 10 }]
+    });
+    assert.equal(harness.wxState.modal, undefined);
+    assert.equal(harness.wxState.toast.title, '今天的固定日程已记录');
+  } finally {
     harness.restore();
   }
 });
