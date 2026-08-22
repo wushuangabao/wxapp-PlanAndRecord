@@ -1,0 +1,6 @@
+<view
+  class="pie-disc"
+  style="background: {{pieBackground}};"
+  role="img"
+  aria-label="投入占比饼图"
+></view>

@@ -274,6 +274,10 @@ function taskPlanCandidateIsTiming(task, candidate) {
   return candidates.length === 1 && candidates[0].id === candidate.id;
 }
 
+function confirmableTaskPlanCandidates(task, now = Date.now()) {
+  return (task && task.planCandidates || []).filter((candidate) => candidate.startedAt <= now);
+}
+
 function switchToCalendar(handoff) {
   setCalendarHandoff(handoff);
   wx.switchTab({
@@ -296,6 +300,10 @@ function buildTaskViewModels(tasks, projects, planStates = new Map()) {
       ? task.projectNameSnapshot
       : '';
     const planState = planStates.get(task.id) || null;
+    const planCandidates = planState ? planState.candidates : [];
+    const confirmablePlanCandidates = planState && Array.isArray(planState.confirmableCandidates)
+      ? planState.confirmableCandidates
+      : planCandidates;
     return {
       ...task,
       hasCurrentProject: Boolean(currentProject),
@@ -308,7 +316,9 @@ function buildTaskViewModels(tasks, projects, planStates = new Map()) {
       timerCandidateId: planState && planState.timerCandidateId ? planState.timerCandidateId : '',
       timerStatus: planState ? planState.timerStatus : 'idle',
       recordedToday: Boolean(planState && planState.recordedToday),
-      planCandidates: planState ? planState.candidates : [],
+      planCandidates,
+      confirmablePlanCandidates,
+      hasConfirmablePlanCandidates: confirmablePlanCandidates.length > 0,
       confirmedRecords: planState && Array.isArray(planState.confirmedRecords)
         ? planState.confirmedRecords
         : [],
@@ -1550,7 +1560,7 @@ Page({
       wx.showToast({ title: '今天没有这项固定日程', icon: 'none' });
       return;
     }
-    const candidates = task.planCandidates || [];
+    const candidates = confirmableTaskPlanCandidates(task);
     if (!candidates.length) {
       wx.showToast({ title: '当前没有可确认的计划', icon: 'none' });
       return;
@@ -1570,6 +1580,10 @@ Page({
 
   confirmTaskPlanCandidateIfIdle(task, candidate) {
     const current = this.data.tasks.find((item) => item.id === task.id) || task;
+    if (candidate.startedAt > Date.now()) {
+      wx.showToast({ title: '计划尚未开始，暂不能确认完成', icon: 'none' });
+      return;
+    }
     if (taskPlanCandidateIsTiming(current, candidate)) {
       wx.showToast({ title: '该计划已经在计时了', icon: 'none' });
       return;

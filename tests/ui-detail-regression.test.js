@@ -7,12 +7,16 @@ const pagesRoot = path.join(__dirname, '../miniprogram/pages');
 const miniprogramRoot = path.join(__dirname, '../miniprogram');
 
 test('页面主头部在滚动时固定在顶部', () => {
-  for (const page of ['timer', 'plans', 'profile']) {
+  for (const page of ['timer', 'plans']) {
     const source = fs.readFileSync(path.join(pagesRoot, page, 'index.wxss'), 'utf8');
     const wxml = fs.readFileSync(path.join(pagesRoot, page, 'index.wxml'), 'utf8');
     assert.match(source, /\.eyebrow\s*\{[^}]*position:\s*sticky;[^}]*top:\s*0;/s, page);
     assert.match(wxml, /<view class="page">\s*<view class="eyebrow">/s, page);
   }
+  const profileWxml = fs.readFileSync(path.join(pagesRoot, 'profile/index.wxml'), 'utf8');
+  const profileWxss = fs.readFileSync(path.join(pagesRoot, 'profile/index.wxss'), 'utf8');
+  assert.match(profileWxml, /<view class="page">\s*<view class="review-selector">/s);
+  assert.match(profileWxss, /\.review-selector\s*\{[^}]*position:\s*sticky;[^}]*top:\s*0;/s);
   const calendarWxml = fs.readFileSync(path.join(pagesRoot, 'calendar/index.wxml'), 'utf8');
   const calendarWxss = fs.readFileSync(path.join(pagesRoot, 'calendar/index.wxss'), 'utf8');
   assert.match(calendarWxml, /<view class="page">\s*<view class="calendar-toolbar \{\{view === 'day' && !hasTimelineItems \? 'has-compact-lunar' : ''\}\}">/s);
@@ -136,7 +140,7 @@ test('日历计划优先级使用三档灰蓝色呈现，并与灰绿实际记�
 });
 
 test('所有自定义底部弹窗复用共享头部组件', () => {
-  const expectedModalCounts = { plans: 6, calendar: 2 };
+  const expectedModalCounts = { plans: 6, calendar: 2, profile: 1 };
   const calendarModalBindings = [
     'closeItemDetail',
     'closeLogEditor'
@@ -240,4 +244,45 @@ test('用户页容量状态遵循安全百分比、灰琥珀预警和安全区�
   assert.match(wxss, /\.data-management-card\s*\{[^}]*safe-area-inset-bottom/s);
   assert.match(wxss, /\.storage-summary\s*\{[^}]*min-width:\s*0;/s);
   assert.match(wxss, /\.storage-value\s*\{[^}]*overflow-wrap:\s*anywhere;/s);
+});
+
+test('投入饼图使用普通视图绘制，遵循悬浮选择器和弹窗层级', () => {
+  const componentRoot = path.join(miniprogramRoot, 'components/pie-chart');
+  const wxml = fs.readFileSync(path.join(componentRoot, 'index.wxml'), 'utf8');
+  const js = fs.readFileSync(path.join(componentRoot, 'index.js'), 'utf8');
+  const wxss = fs.readFileSync(path.join(componentRoot, 'index.wxss'), 'utf8');
+  const profileJs = fs.readFileSync(path.join(pagesRoot, 'profile/index.js'), 'utf8');
+
+  assert.match(wxml, /<view[\s\S]*class="pie-disc"/);
+  assert.doesNotMatch(wxml, /<canvas|canvas-id=/);
+  assert.match(js, /conic-gradient/);
+  assert.match(wxss, /border-radius:\s*50%/);
+  assert.match(wxss, /width:\s*212rpx;[\s\S]*height:\s*212rpx;/);
+  assert.doesNotMatch(profileJs, /pieCanvasHidden|updatePieCanvasOcclusion|investment-pie/);
+});
+
+test('投入饼图图例保持横向布局，名称保持单行', () => {
+  const wxss = fs.readFileSync(path.join(pagesRoot, 'profile/index.wxss'), 'utf8');
+
+  assert.doesNotMatch(wxss, /\.pie-layout\s*\{[^}]*flex-direction:\s*column;/s);
+  assert.match(
+    wxss,
+    /\.pie-legend-label\s*\{[^}]*overflow:\s*hidden;[^}]*text-overflow:\s*ellipsis;[^}]*white-space:\s*nowrap;/s
+  );
+  assert.match(
+    wxss,
+    /\.pie-legend-value\s*\{[^}]*min-width:\s*48rpx;[^}]*text-align:\s*right;/s
+  );
+});
+
+test('投入饼图在图例左侧分区内水平居中', () => {
+  const wxml = fs.readFileSync(path.join(pagesRoot, 'profile/index.wxml'), 'utf8');
+  const wxss = fs.readFileSync(path.join(pagesRoot, 'profile/index.wxss'), 'utf8');
+  const chartSlots = wxml.match(/<view class="pie-chart-slot"><pie-chart/g) || [];
+
+  assert.equal(chartSlots.length, 2);
+  assert.match(
+    wxss,
+    /\.pie-chart-slot\s*\{[^}]*display:\s*flex;[^}]*flex:\s*1;[^}]*justify-content:\s*center;[^}]*min-width:\s*0;/s
+  );
 });

@@ -2063,7 +2063,9 @@ test('日历对正在计时的重复实例隐藏确认完成，并在刷新时�
 test('日历实体计划仅在尚未记录且未计时时显示直接完成，并按计划生成记录', () => {
   const originalGetApp = global.getApp;
   const originalWx = global.wx;
-  const now = Math.floor(Date.now() / 60_000) * 60_000;
+  const originalNow = Date.now;
+  const now = new Date(2026, 7, 22, 10, 0).getTime();
+  Date.now = () => now;
   const calls = [];
   const toasts = [];
   const snapshot = {
@@ -2081,7 +2083,7 @@ test('日历实体计划仅在尚未记录且未计时时显示直接完成，�
       draft: { calendarEventId: 'event_timing' }
     }
   };
-  const timeline = ['event_pending', 'event_recorded', 'event_timing'].map((id, index) => ({
+  const timeline = ['event_pending', 'event_recorded', 'event_timing', 'event_future'].map((id, index) => ({
     id,
     type: 'plan',
     virtual: false,
@@ -2119,6 +2121,7 @@ test('日历实体计划仅在尚未记录且未计时时显示直接完成，�
     assert.equal(itemById.get('event_pending').canDirectComplete, true);
     assert.equal(itemById.get('event_recorded').canDirectComplete, false);
     assert.equal(itemById.get('event_timing').canDirectComplete, false);
+    assert.equal(itemById.get('event_future').canDirectComplete, false);
 
     const pending = itemById.get('event_pending');
     page.setData({ detailItem: pending });
@@ -2132,8 +2135,70 @@ test('日历实体计划仅在尚未记录且未计时时显示直接完成，�
       false
     );
   } finally {
+    Date.now = originalNow;
     global.getApp = originalGetApp;
     global.wx = originalWx;
+  }
+});
+
+test('日历未来计划与固定日程在开始前隐藏确认入口，到点后打开详情即可恢复', () => {
+  const originalGetApp = global.getApp;
+  const originalNow = Date.now;
+  const now = new Date(2026, 7, 22, 20, 0).getTime();
+  let currentNow = now;
+  Date.now = () => currentNow;
+  const snapshot = {
+    projects: [],
+    tasks: [{ id: 'task_future', title: '未来任务', status: 'todo' }],
+    calendarEvents: [],
+    timeLogs: [],
+    timer: { status: 'idle', draft: null }
+  };
+  const timeline = [{
+    id: 'event_future_gate',
+    type: 'plan',
+    virtual: false,
+    taskId: 'task_future',
+    title: '未来普通计划',
+    startedAt: now + 60 * 60 * 1000,
+    endedAt: now + 2 * 60 * 60 * 1000
+  }, {
+    id: 'virtual_future_gate',
+    type: 'plan',
+    virtual: true,
+    taskId: 'task_future',
+    title: '未来固定日程',
+    ruleId: 'rule_future',
+    originOccurrenceId: 'rule_future:1:future',
+    startedAt: now + 2 * 60 * 60 * 1000,
+    endedAt: now + 3 * 60 * 60 * 1000
+  }];
+  global.getApp = () => ({
+    globalData: { bootstrap: { applicationService: {
+      snapshot() { return snapshot; },
+      timeline() { return timeline; }
+    } } }
+  });
+  try {
+    const page = loadCalendarPage();
+    page.data.anchor = now;
+    page.refresh();
+    const items = new Map(page.data.timeline.map((item) => [item.id, item]));
+    assert.equal(items.get('event_future_gate').canDirectComplete, false);
+    assert.equal(items.get('virtual_future_gate').canConfirmVirtual, false);
+
+    page.setData({ detailItem: items.get('event_future_gate') });
+    currentNow = timeline[0].startedAt;
+    page.refreshCurrentTimeLine(currentNow);
+    assert.equal(page.data.detailItem.canDirectComplete, true);
+
+    page.setData({ detailItem: items.get('virtual_future_gate') });
+    currentNow = timeline[1].startedAt;
+    page.refreshCurrentTimeLine(currentNow);
+    assert.equal(page.data.detailItem.canConfirmVirtual, true);
+  } finally {
+    Date.now = originalNow;
+    global.getApp = originalGetApp;
   }
 });
 

@@ -1,0 +1,8 @@
+.pie-disc {
+  box-sizing: border-box;
+  display: block;
+  width: 212rpx;
+  height: 212rpx;
+  border: 5rpx solid #faf9f7;
+  border-radius: 50%;
+}

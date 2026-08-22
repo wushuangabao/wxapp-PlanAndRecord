@@ -4,6 +4,7 @@ const {
   logicalOccurrenceKey,
   logicalOccurrenceStart,
   occurrenceKey,
+  projectRule,
   projectRuleIntersectingRange
 } = require('./recurrence');
 const { calculateDurationMinutes } = require('./time');
@@ -34,7 +35,11 @@ function accumulate(logs, idField, nameField, fallbackName) {
     current.count += 1;
     groups.set(id, current);
   });
-  return Array.from(groups.values()).sort((first, second) => second.durationMinutes - first.durationMinutes);
+  return Array.from(groups.values()).sort((first, second) => (
+    second.durationMinutes - first.durationMinutes
+    || first.name.localeCompare(second.name, 'zh-CN')
+    || first.id.localeCompare(second.id)
+  ));
 }
 
 function accumulateTags(logs) {
@@ -59,7 +64,11 @@ function accumulateTags(logs) {
     });
   });
   return Array.from(groups.values()).sort(
-    (first, second) => second.durationMinutes - first.durationMinutes
+    (first, second) => (
+      second.durationMinutes - first.durationMinutes
+      || first.name.localeCompare(second.name, 'zh-CN')
+      || first.id.localeCompare(second.id)
+    )
   );
 }
 
@@ -133,13 +142,17 @@ function calculatePlanVariance(database, logs, rangeStart, rangeEnd) {
   });
 
   const concreteEvents = database.calendarEvents
-    .filter((event) => intervalIntersectsRange(event, rangeStart, rangeEnd))
+    .filter((event) => (
+      intervalIntersectsRange(event, rangeStart, rangeEnd)
+      || actualMinutesByPlan.has(`event:${event.id}`)
+    ))
     .map((event) => {
       const plannedMinutes = Math.round((event.endedAt - event.startedAt) / (60 * 1000));
       const actualMinutes = actualMinutesByPlan.get(`event:${event.id}`) || 0;
       return {
         eventId: event.id,
         title: event.title,
+        startedAt: event.startedAt,
         plannedMinutes,
         actualMinutes,
         varianceMinutes: actualMinutes - plannedMinutes
@@ -147,8 +160,31 @@ function calculatePlanVariance(database, logs, rangeStart, rangeEnd) {
     });
 
   const taskIds = new Set(database.tasks.map((task) => task.id));
-  const recurringEvents = database.repeatRules
+  const recurringOccurrencesByKey = new Map();
+  const addRecurringOccurrence = (occurrence) => {
+    recurringOccurrencesByKey.set(
+      occurrenceKey(occurrence.ruleId, occurrence.occurrenceStart),
+      occurrence
+    );
+  };
+  database.repeatRules
     .flatMap((rule) => projectedRuleOccurrences(database, rule, rangeStart, rangeEnd))
+    .forEach(addRecurringOccurrence);
+  const rulesById = new Map(database.repeatRules.map((rule) => [rule.id, rule]));
+  logs.forEach((log) => {
+    if (!log.originRuleId || !log.originOccurrenceId) return;
+    const rule = rulesById.get(log.originRuleId);
+    const occurrenceStart = logicalOccurrenceStart(log.originRuleId, log.originOccurrenceId);
+    if (!rule || occurrenceStart === null) return;
+    const occurrence = projectRule(
+      rule,
+      occurrenceStart,
+      occurrenceStart,
+      database.occurrenceExceptions
+    ).find((item) => item.originOccurrenceId === log.originOccurrenceId);
+    if (occurrence) addRecurringOccurrence(occurrence);
+  });
+  const recurringEvents = Array.from(recurringOccurrencesByKey.values())
     .filter((occurrence) => occurrence.taskId && taskIds.has(occurrence.taskId))
     .map((occurrence) => {
       const plannedMinutes = calculateDurationMinutes(occurrence.startedAt, occurrence.endedAt, []);
@@ -157,6 +193,7 @@ function calculatePlanVariance(database, logs, rangeStart, rangeEnd) {
       return {
         eventId: occurrence.originOccurrenceId,
         title: occurrence.title,
+        startedAt: occurrence.startedAt,
         plannedMinutes,
         actualMinutes,
         varianceMinutes: actualMinutes - plannedMinutes
@@ -166,27 +203,75 @@ function calculatePlanVariance(database, logs, rangeStart, rangeEnd) {
   const nonPlannedMinutes = logs
     .filter((log) => !log.virtual && !planAssociationKey(log))
     .reduce((total, log) => total + log.durationMinutes, 0);
-  return { events: concreteEvents.concat(recurringEvents), nonPlannedMinutes };
+  const events = concreteEvents.concat(recurringEvents).sort((first, second) => (
+    Math.abs(second.varianceMinutes) - Math.abs(first.varianceMinutes)
+    || first.startedAt - second.startedAt
+    || first.eventId.localeCompare(second.eventId)
+  ));
+  return {
+    events,
+    nonPlannedMinutes,
+    planCount: events.length,
+    plannedMinutes: events.reduce((total, item) => total + item.plannedMinutes, 0)
+  };
+}
+
+function calculatePlanVarianceTrend(database, ranges, includeCandidates) {
+  const buckets = (Array.isArray(ranges) ? ranges : []).map((range) => {
+    const logs = deriveLogAssociations(
+      database,
+      includedLogs(database, range.rangeStart, range.rangeEnd, includeCandidates)
+    );
+    const variance = calculatePlanVariance(
+      database,
+      logs,
+      range.rangeStart,
+      range.rangeEnd
+    );
+    return {
+      id: range.id,
+      label: range.label,
+      rangeStart: range.rangeStart,
+      rangeEnd: range.rangeEnd,
+      planCount: variance.planCount,
+      plannedMinutes: variance.plannedMinutes,
+      varianceMinutes: variance.events.reduce(
+        (total, item) => total + item.varianceMinutes,
+        0
+      )
+    };
+  });
+  const firstComparableIndex = buckets.findIndex((bucket) => bucket.planCount > 0);
+  return firstComparableIndex < 0 ? [] : buckets.slice(firstComparableIndex);
 }
 
 function buildStatistics(database, options) {
-  const { rangeStart, rangeEnd, includeCandidates = false } = options;
+  const {
+    rangeStart,
+    rangeEnd,
+    includeCandidates = false,
+    trendRanges = []
+  } = options;
   const logs = deriveLogAssociations(
     database,
     includedLogs(database, rangeStart, rangeEnd, includeCandidates)
   );
   const totalMinutes = logs.reduce((total, log) => total + log.durationMinutes, 0);
   const completedTasks = database.tasks.filter((task) => task.status === 'completed' && task.completedAt >= rangeStart && task.completedAt <= rangeEnd);
+  const planVariance = calculatePlanVariance(database, logs, rangeStart, rangeEnd);
   return {
     totalMinutes,
     tags: accumulateTags(logs),
     projects: accumulate(logs, 'projectId', 'projectNameSnapshot', '未归属项目'),
-    planVariance: calculatePlanVariance(database, logs, rangeStart, rangeEnd),
+    planVariance,
+    planVarianceTrend: calculatePlanVarianceTrend(database, trendRanges, includeCandidates),
     weeklyReview: {
       totalMinutes,
       logCount: logs.length,
       completedTaskCount: completedTasks.length,
-      nonPlannedMinutes: calculatePlanVariance(database, logs, rangeStart, rangeEnd).nonPlannedMinutes
+      nonPlannedMinutes: planVariance.nonPlannedMinutes,
+      plannedMinutes: planVariance.plannedMinutes,
+      planCount: planVariance.planCount
     }
   };
 }

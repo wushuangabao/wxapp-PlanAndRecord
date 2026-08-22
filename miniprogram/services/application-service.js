@@ -225,6 +225,9 @@ class ApplicationService {
     if (activeTimerMatchesEvent(database, event.id)) {
       throw new DomainError('PLAN_TIMER_ACTIVE', '该计划已经在计时了');
     }
+    if (event.startedAt > now) {
+      throw new DomainError('PLAN_NOT_STARTED', '计划尚未开始，暂不能确认完成');
+    }
     const association = this.resolveNewRecordAssociations(database, {
       calendarEventId: event.id
     });
@@ -1637,6 +1640,9 @@ class ApplicationService {
     }
     if (activeTimerMatchesOccurrence(database, rule.id, occurrence.originOccurrenceId)) {
       throw new DomainError('OCCURRENCE_TIMER_ACTIVE', '该计划已经在计时了');
+    }
+    if (occurrence.startedAt > now) {
+      throw new DomainError('PLAN_NOT_STARTED', '计划尚未开始，暂不能确认完成');
     }
     const occurrenceLogicalKey = occurrenceKey(rule.id, occurrence.occurrenceStart);
     if (database.timeLogs.some((log) => (

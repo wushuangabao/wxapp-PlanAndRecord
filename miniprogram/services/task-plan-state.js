@@ -199,6 +199,7 @@ function buildTaskPlanStates(database, now = Date.now()) {
       originOccurrenceId: occurrence.originOccurrenceId
     }));
     const candidates = [...eventCandidates, ...occurrenceCandidates].sort(compareStartedAt);
+    const confirmableCandidates = candidates.filter((candidate) => candidate.startedAt <= now);
 
     let timerMatchesTask = false;
     let timerCandidateId = null;
@@ -238,6 +239,7 @@ function buildTaskPlanStates(database, now = Date.now()) {
       entityPlanEvidence,
       confirmedRecords: (confirmedRecordsByTaskId.get(task.id) || []).slice(),
       candidates,
+      confirmableCandidates,
       hasPlanAssociations: entityPlans.length > 0 || repeatRules.length > 0,
       canAutoComplete,
       topVisible: timerMatchesTask

@@ -9,6 +9,7 @@ const { showError } = require('../miniprogram/utils/page');
 const profilePagePath = require.resolve('../miniprogram/pages/profile/index.js');
 const profileWxmlPath = path.join(__dirname, '../miniprogram/pages/profile/index.wxml');
 const profileWxssPath = path.join(__dirname, '../miniprogram/pages/profile/index.wxss');
+const profileJsonPath = path.join(__dirname, '../miniprogram/pages/profile/index.json');
 const FIXED_NOW = new Date(2026, 6, 28, 12, 34, 56).getTime();
 
 function loadProfilePage() {
@@ -66,6 +67,7 @@ function createHarness(options = {}) {
       sync: 0
     },
     service: {
+      statistics: [],
       exportJson: 0,
       prepareJsonImport: [],
       previewJsonImport: [],
@@ -77,7 +79,10 @@ function createHarness(options = {}) {
 
   const service = {
     snapshot: () => createInitialDatabase(FIXED_NOW),
-    statistics: () => options.statistics || defaultStatistics(),
+    statistics(statisticsOptions) {
+      calls.service.statistics.push(statisticsOptions);
+      return options.statistics || defaultStatistics();
+    },
     storageUsage: () => options.storageUsage || {
       databaseBytes: 0,
       databaseLimitBytes: 1024 * 1024,
@@ -315,6 +320,201 @@ test('用户页用标签投入替代分类管理，并区分派生无标签桶�
     assert.doesNotMatch(wxss, /\.category-row/);
   } finally {
     harness.restore();
+  }
+});
+
+test('用户页用顶部复盘页签切换当前月，并把主统计截止到当前时刻', () => {
+  const harness = createHarness({ keepPageRefresh: true });
+  try {
+    harness.page.onReviewScaleChange({ currentTarget: { dataset: { scale: 'month' } } });
+
+    const request = harness.calls.service.statistics.at(-1);
+    assert.equal(harness.page.data.reviewScale, 'month');
+    assert.equal(harness.page.data.recentPeriods.length, 5);
+    assert.equal(harness.page.data.reviewRangeLabel, '2026年7月 · 截至当前');
+    assert.equal(request.rangeEnd, FIXED_NOW);
+    assert.equal(new Date(request.rangeStart).getDate(), 1);
+    assert.equal(request.trendRanges.length, 8);
+
+    const wxml = fs.readFileSync(profileWxmlPath, 'utf8');
+    const json = JSON.parse(fs.readFileSync(profileJsonPath, 'utf8'));
+    assert.doesNotMatch(wxml, /LOCAL PROFILE/);
+    assert.match(wxml, /投入时间（分钟）/);
+    assert.match(wxml, /计划时间（分钟）/);
+    assert.match(wxml, /计划与实际偏差趋势/);
+    assert.match(wxml, /<view wx:if="\{\{varianceTrend\.length\}\}" class="trend-section">/);
+    assert.doesNotMatch(wxml, /暂无可比较的计划数据/);
+    assert.match(wxml, /查看更多/);
+    assert.equal(json.usingComponents['pie-chart'], '/components/pie-chart/index');
+    assert.equal(json.usingComponents['sheet-header'], '/components/sheet-header/index');
+  } finally {
+    harness.restore();
+  }
+});
+
+test('投入时间仅在存在计划外投入时显示小号辅助说明', () => {
+  const wxml = fs.readFileSync(profileWxmlPath, 'utf8');
+  const wxss = fs.readFileSync(profileWxssPath, 'utf8');
+
+  assert.match(
+    wxml,
+    /wx:if="\{\{review\.nonPlannedMinutes > 0\}\}" class="metric-note">（含计划外 \{\{review\.nonPlannedMinutes\}\}）/
+  );
+  assert.match(
+    wxss,
+    /\.metric-value-line\s*\{[^}]*align-items:\s*baseline;[^}]*flex-wrap:\s*wrap;[^}]*min-width:\s*0;/s
+  );
+  assert.match(
+    wxss,
+    /\.metric-note\s*\{[^}]*font-size:\s*22rpx;[^}]*font-weight:\s*400;[^}]*overflow-wrap:\s*anywhere;/s
+  );
+});
+
+test('标签饼图默认全选、只显示前五行，并与查看更多弹窗同步勾选', () => {
+  const tags = Array.from({ length: 6 }, (_, index) => ({
+    id: `tag:${index + 1}`,
+    tag: `标签${index + 1}`,
+    name: `标签${index + 1}`,
+    isUntagged: false,
+    durationMinutes: 60 - index * 5,
+    count: 1
+  }));
+  const statistics = {
+    ...defaultStatistics(),
+    tags,
+    planVarianceTrend: [],
+    weeklyReview: {
+      totalMinutes: 100,
+      logCount: 2,
+      plannedMinutes: 0,
+      planCount: 0
+    }
+  };
+  const harness = createHarness({ keepPageRefresh: true, statistics });
+  try {
+    harness.page.refresh();
+
+    assert.equal(harness.page.data.tagStats.length, 6);
+    assert.equal(harness.page.data.visibleTagStats.length, 5);
+    assert.equal(harness.page.data.tagStats.every((item) => item.pieChecked), true);
+    assert.equal(harness.page.data.tagPie.selectable, true);
+    assert.equal(harness.page.data.tagPie.show, true);
+    assert.equal(
+      harness.page.data.tagPie.legend.reduce((sum, item) => sum + item.percent, 0),
+      100
+    );
+
+    harness.page.openStatisticsDetail({ currentTarget: { dataset: { type: 'tags' } } });
+    assert.equal(harness.page.data.detailSheet.rows.length, 6);
+    harness.page.onPieSelectionChange({
+      currentTarget: { dataset: { module: 'tags', scope: 'all' } },
+      detail: { value: ['tag:1', 'tag:2'] }
+    });
+    assert.equal(harness.page.data.tagPie.show, false);
+    assert.equal(harness.page.data.tagPie.prompt, true);
+    assert.equal(
+      harness.page.data.detailSheet.rows.filter((item) => item.pieChecked).length,
+      2
+    );
+  } finally {
+    harness.restore();
+  }
+});
+
+test('饼图最多九个独立条目使用九种不同颜色，单项灰色尾部保留原名称', () => {
+  const tags = Array.from({ length: 10 }, (_, index) => ({
+    id: `arbitrary-id-${index + 1}`,
+    tag: `标签${index + 1}`,
+    name: `标签${index + 1}`,
+    isUntagged: false,
+    durationMinutes: index < 9 ? 11 : 1,
+    count: 1
+  }));
+  const harness = createHarness({
+    keepPageRefresh: true,
+    statistics: { ...defaultStatistics(), tags, planVarianceTrend: [] }
+  });
+  try {
+    harness.page.refresh();
+
+    const ordinarySlices = harness.page.data.tagPie.slices.slice(0, 9);
+    const remainderSlice = harness.page.data.tagPie.slices.at(-1);
+    assert.deepEqual(
+      ordinarySlices.map((item) => item.color),
+      [
+        '#55725e', '#7f8ca1', '#a58454',
+        '#8d7770', '#6f8791', '#9a8f68',
+        '#8a7895', '#a36f73', '#6f7b59'
+      ]
+    );
+    assert.equal(new Set(ordinarySlices.map((item) => item.color)).size, 9);
+    assert.equal(remainderSlice.id, 'arbitrary-id-10');
+    assert.equal(remainderSlice.label, '#标签10');
+    assert.equal(remainderSlice.color, '#c8c2b8');
+  } finally {
+    harness.restore();
+  }
+});
+
+test('饼图灰色尾部包含多个条目时才合并显示为其他', () => {
+  const tags = [40, 35, 15, 5, 5].map((durationMinutes, index) => ({
+    id: `tag:${index + 1}`,
+    tag: `标签${index + 1}`,
+    name: `标签${index + 1}`,
+    isUntagged: false,
+    durationMinutes,
+    count: 1
+  }));
+  const harness = createHarness({
+    keepPageRefresh: true,
+    statistics: { ...defaultStatistics(), tags, planVarianceTrend: [] }
+  });
+  try {
+    harness.page.refresh();
+
+    const remainderSlice = harness.page.data.tagPie.slices.at(-1);
+    assert.equal(remainderSlice.id, 'other');
+    assert.equal(remainderSlice.label, '其他');
+    assert.equal(remainderSlice.value, 10);
+    assert.equal(remainderSlice.color, '#c8c2b8');
+  } finally {
+    harness.restore();
+  }
+});
+
+test('饼图在少于三项时不提示，恰好三项时不显示勾选框并直接绘制', () => {
+  const buildTags = (count) => Array.from({ length: count }, (_, index) => ({
+    id: `tag:${index + 1}`,
+    tag: `标签${index + 1}`,
+    name: `标签${index + 1}`,
+    isUntagged: false,
+    durationMinutes: 30 - index * 5,
+    count: 1
+  }));
+  const two = createHarness({
+    keepPageRefresh: true,
+    statistics: { ...defaultStatistics(), tags: buildTags(2), planVarianceTrend: [] }
+  });
+  try {
+    two.page.refresh();
+    assert.equal(two.page.data.tagPie.show, false);
+    assert.equal(two.page.data.tagPie.prompt, false);
+    assert.equal(two.page.data.tagPie.selectable, false);
+  } finally {
+    two.restore();
+  }
+
+  const three = createHarness({
+    keepPageRefresh: true,
+    statistics: { ...defaultStatistics(), tags: buildTags(3), planVarianceTrend: [] }
+  });
+  try {
+    three.page.refresh();
+    assert.equal(three.page.data.tagPie.show, true);
+    assert.equal(three.page.data.tagPie.prompt, false);
+    assert.equal(three.page.data.tagPie.selectable, false);
+  } finally {
+    three.restore();
   }
 });
 

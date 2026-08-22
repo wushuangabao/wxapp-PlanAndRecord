@@ -1,4 +1,12 @@
-const { rangeForView } = require('../../utils/date-range');
+const {
+  REVIEW_SCALE,
+  reviewRange,
+  recentPeriods,
+  parseCustomPeriod,
+  periodKey,
+  trendRanges,
+  reviewRangeLabel
+} = require('../../utils/review-range');
 const {
   getService,
   markPageVisible,
@@ -18,6 +26,29 @@ const CONFLICT_POLICY = {
   KEEP_LOCAL: 'keep-local',
   USE_IMPORTED: 'use-imported'
 };
+const REVIEW_TABS = [
+  { id: REVIEW_SCALE.WEEK, label: '本周复盘' },
+  { id: REVIEW_SCALE.MONTH, label: '月度复盘' },
+  { id: REVIEW_SCALE.YEAR, label: '年度复盘' }
+];
+const DETAIL_TITLES = {
+  tags: '标签投入',
+  projects: '项目投入',
+  variance: '计划与实际偏差'
+};
+const PIE_COLORS = [
+  '#55725e',
+  '#7f8ca1',
+  '#a58454',
+  '#8d7770',
+  '#6f8791',
+  '#9a8f68',
+  '#8a7895',
+  '#a36f73',
+  '#6f7b59'
+];
+const PIE_OTHER_COLOR = '#c8c2b8';
+const MAX_VISIBLE_STAT_ROWS = 5;
 let activeDataOperation = null;
 
 function tempExportPath(tempFileName) {
@@ -579,8 +610,178 @@ function confirmImportFileSelection(operation) {
   }
 }
 
+function signedMinutes(value) {
+  if (value > 0) return `+${value}`;
+  return String(value);
+}
+
+function integerPercentages(slices, total) {
+  const allocated = slices.map((slice, index) => {
+    const exact = (slice.value / total) * 100;
+    return { index, floor: Math.floor(exact), remainder: exact - Math.floor(exact) };
+  });
+  let remaining = 100 - allocated.reduce((sum, item) => sum + item.floor, 0);
+  allocated
+    .slice()
+    .sort((first, second) => second.remainder - first.remainder || first.index - second.index)
+    .forEach((item) => {
+      if (remaining <= 0) return;
+      allocated[item.index].floor += 1;
+      remaining -= 1;
+    });
+  return allocated.map((item) => item.floor);
+}
+
+function ensurePieSelections(page, moduleName) {
+  if (!page._pieSelections) {
+    page._pieSelections = { tags: new Map(), projects: new Map() };
+  }
+  return page._pieSelections[moduleName];
+}
+
+function decoratePieRows(page, moduleName, rows) {
+  const selections = ensurePieSelections(page, moduleName);
+  rows.forEach((row) => {
+    if (!selections.has(row.id)) selections.set(row.id, true);
+  });
+  return rows.map((row) => ({
+    ...row,
+    pieChecked: rows.length === 3 ? true : selections.get(row.id) !== false
+  }));
+}
+
+function pieViewModel(rows) {
+  const selectable = rows.length > 3;
+  if (rows.length < 3) {
+    return { selectable: false, show: false, prompt: false, slices: [], legend: [] };
+  }
+  const selected = rows.length === 3 ? rows : rows.filter((row) => row.pieChecked);
+  if (selected.length < 3) {
+    return { selectable, show: false, prompt: true, slices: [], legend: [] };
+  }
+
+  const total = selected.reduce((sum, row) => sum + row.durationMinutes, 0);
+  const separate = [];
+  const remainderRows = [];
+  selected.forEach((row) => {
+    if (row.durationMinutes / total > 0.1) {
+      separate.push({
+        id: row.id,
+        label: row.label,
+        value: row.durationMinutes
+      });
+    } else {
+      remainderRows.push(row);
+    }
+  });
+  if (remainderRows.length > 0) {
+    const onlyRemainder = remainderRows.length === 1 ? remainderRows[0] : null;
+    separate.push({
+      id: onlyRemainder ? onlyRemainder.id : 'other',
+      label: onlyRemainder ? onlyRemainder.label : '其他',
+      value: remainderRows.reduce((sum, row) => sum + row.durationMinutes, 0),
+      isRemainder: true
+    });
+  }
+  const percentages = integerPercentages(separate, total);
+  let ordinaryColorIndex = 0;
+  const slices = separate.map((slice, index) => ({
+    ...slice,
+    color: slice.isRemainder
+      ? PIE_OTHER_COLOR
+      : PIE_COLORS[ordinaryColorIndex++],
+    percent: percentages[index],
+    percentText: `${percentages[index]}%`
+  }));
+  return { selectable, show: true, prompt: false, slices, legend: slices };
+}
+
+function trendViewModel(buckets) {
+  const source = Array.isArray(buckets) ? buckets : [];
+  const maxAbsolute = source.reduce(
+    (maximum, bucket) => Math.max(maximum, Math.abs(bucket.varianceMinutes)),
+    0
+  );
+  return source.map((bucket) => {
+    const value = bucket.varianceMinutes;
+    const barHeight = value === 0 || maxAbsolute === 0
+      ? 2
+      : Math.max(4, Math.round((Math.abs(value) / maxAbsolute) * 62));
+    return {
+      ...bucket,
+      valueText: signedMinutes(value),
+      barHeight,
+      direction: value > 0 ? 'positive' : (value < 0 ? 'negative' : 'zero')
+    };
+  });
+}
+
+function statisticsViewModel(page, statistics) {
+  const tagRows = decoratePieRows(
+    page,
+    'tags',
+    (statistics.tags || []).map((item) => ({
+      ...item,
+      displayName: item.isUntagged ? '无标签' : `#${item.name}`,
+      label: item.isUntagged ? '无标签' : `#${item.name}`,
+      valueText: `${item.durationMinutes} 分钟`
+    }))
+  );
+  const projectRows = decoratePieRows(
+    page,
+    'projects',
+    (statistics.projects || []).map((item) => ({
+      ...item,
+      label: item.name,
+      valueText: `${item.durationMinutes} 分钟`
+    }))
+  );
+  const varianceRows = ((statistics.planVariance && statistics.planVariance.events) || [])
+    .map((item) => ({
+      ...item,
+      id: item.eventId,
+      label: item.title,
+      valueText: `计划 ${item.plannedMinutes} / 实际 ${item.actualMinutes}`,
+      varianceText: `偏差 ${signedMinutes(item.varianceMinutes)} 分钟`
+    }));
+  page._reviewRows = { tags: tagRows, projects: projectRows, variance: varianceRows };
+
+  const detailType = page.data.detailSheet && page.data.detailSheet.type;
+  const detailSheet = detailType
+    ? {
+      type: detailType,
+      title: DETAIL_TITLES[detailType],
+      rows: page._reviewRows[detailType],
+      selectable: detailType === 'tags'
+        ? tagRows.length > 3
+        : (detailType === 'projects' && projectRows.length > 3)
+    }
+    : null;
+  return {
+    statistics,
+    tagStats: tagRows,
+    visibleTagStats: tagRows.slice(0, MAX_VISIBLE_STAT_ROWS),
+    tagPie: pieViewModel(tagRows),
+    projectStats: projectRows,
+    visibleProjectStats: projectRows.slice(0, MAX_VISIBLE_STAT_ROWS),
+    projectPie: pieViewModel(projectRows),
+    variance: varianceRows,
+    visibleVariance: varianceRows.slice(0, MAX_VISIBLE_STAT_ROWS),
+    varianceTrend: trendViewModel(statistics.planVarianceTrend),
+    review: statistics.weeklyReview,
+    detailSheet
+  };
+}
+
 Page({
   data: {
+    reviewTabs: REVIEW_TABS,
+    reviewScale: REVIEW_SCALE.WEEK,
+    reviewAnchor: null,
+    reviewPeriodKey: 'current-week',
+    reviewRangeLabel: '本周 · 截至当前',
+    recentPeriods: [],
+    customPeriodInput: '',
     includeCandidates: false,
     dataOperationInProgress: false,
     storageUsage: storageUsageViewModel({
@@ -591,12 +792,21 @@ Page({
     }),
     statistics: null,
     tagStats: [],
+    visibleTagStats: [],
+    tagPie: pieViewModel([]),
     projectStats: [],
+    visibleProjectStats: [],
+    projectPie: pieViewModel([]),
     variance: [],
-    review: null
+    visibleVariance: [],
+    varianceTrend: [],
+    review: null,
+    detailSheet: null
   },
 
   onLoad() {
+    const now = Date.now();
+    this.setData({ reviewAnchor: now });
     cleanupStaleExports();
   },
 
@@ -607,24 +817,23 @@ Page({
 
   refresh() {
     try {
+      const now = Date.now();
+      const scale = this.data.reviewScale || REVIEW_SCALE.WEEK;
+      const anchor = Number.isFinite(this.data.reviewAnchor) ? this.data.reviewAnchor : now;
       const service = getService();
-      const range = rangeForView(Date.now(), 'week');
+      const range = reviewRange(anchor, scale, now);
       const statistics = service.statistics({
         rangeStart: range.start,
         rangeEnd: range.end,
-        includeCandidates: this.data.includeCandidates
+        includeCandidates: this.data.includeCandidates,
+        trendRanges: trendRanges(anchor, scale, now)
       });
       const storageUsage = storageUsageViewModel(service.storageUsage());
       this.setData({
         storageUsage,
-        statistics,
-        tagStats: statistics.tags.map((item) => ({
-          ...item,
-          displayName: item.isUntagged ? '无标签' : `#${item.name}`
-        })),
-        projectStats: statistics.projects,
-        variance: statistics.planVariance.events,
-        review: statistics.weeklyReview
+        reviewAnchor: anchor,
+        reviewRangeLabel: reviewRangeLabel(anchor, scale, now),
+        ...statisticsViewModel(this, statistics)
       });
     } catch (error) {
       showError(error);
@@ -633,6 +842,93 @@ Page({
 
   onCandidatesChange(event) {
     this.setData({ includeCandidates: event.detail.value }, () => this.refresh());
+  },
+
+  onReviewScaleChange(event) {
+    const scale = event.currentTarget.dataset.scale;
+    if (!Object.values(REVIEW_SCALE).includes(scale) || scale === this.data.reviewScale) return;
+    const now = Date.now();
+    this.setData({
+      reviewScale: scale,
+      reviewAnchor: now,
+      reviewPeriodKey: periodKey(now, scale),
+      recentPeriods: recentPeriods(now, scale),
+      customPeriodInput: '',
+      detailSheet: null
+    }, () => this.refresh());
+  },
+
+  selectReviewPeriod(event) {
+    const anchor = Number(event.currentTarget.dataset.anchor);
+    const key = event.currentTarget.dataset.key;
+    if (!Number.isFinite(anchor)) return;
+    this.setData({
+      reviewAnchor: anchor,
+      reviewPeriodKey: key,
+      customPeriodInput: '',
+      detailSheet: null
+    }, () => this.refresh());
+  },
+
+  onCustomPeriodInput(event) {
+    this.setData({ customPeriodInput: event.detail.value });
+  },
+
+  applyCustomPeriod() {
+    try {
+      const anchor = parseCustomPeriod(
+        this.data.customPeriodInput,
+        this.data.reviewScale,
+        Date.now()
+      );
+      this.setData({
+        reviewAnchor: anchor,
+        reviewPeriodKey: periodKey(anchor, this.data.reviewScale),
+        detailSheet: null
+      }, () => this.refresh());
+    } catch (error) {
+      showError(error);
+    }
+  },
+
+  openStatisticsDetail(event) {
+    const type = event.currentTarget.dataset.type;
+    const rows = this._reviewRows && this._reviewRows[type];
+    if (!DETAIL_TITLES[type] || !Array.isArray(rows)) return;
+    this.setData({
+      detailSheet: {
+        type,
+        title: DETAIL_TITLES[type],
+        rows,
+        selectable: type === 'tags'
+          ? this.data.tagStats.length > 3
+          : (type === 'projects' && this.data.projectStats.length > 3)
+      }
+    });
+  },
+
+  closeStatisticsDetail() {
+    this.setData({ detailSheet: null });
+  },
+
+  noop() {},
+
+  onPieSelectionChange(event) {
+    const moduleName = event.currentTarget.dataset.module;
+    const scope = event.currentTarget.dataset.scope;
+    if (moduleName !== 'tags' && moduleName !== 'projects') return;
+    const allRows = this._reviewRows && this._reviewRows[moduleName];
+    if (!Array.isArray(allRows)) return;
+    const scopedRows = scope === 'all'
+      ? allRows
+      : allRows.slice(0, MAX_VISIBLE_STAT_ROWS);
+    const checkedIds = new Set(event.detail.value || []);
+    const selections = ensurePieSelections(this, moduleName);
+    scopedRows.forEach((row) => selections.set(row.id, checkedIds.has(row.id)));
+    const statistics = this.data.statistics;
+    if (statistics) {
+      this.setData(statisticsViewModel(this, statistics));
+    }
   },
 
   openCloudStorage() {

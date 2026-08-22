@@ -130,6 +130,54 @@ test('连续翻页会更新关系文案并把三秒消失计时重新开始', ()
   }
 });
 
+test('切换年、月、周、日视图时复用翻页关系提示', () => {
+  const originalNow = Date.now;
+  const originalSetTimeout = global.setTimeout;
+  const originalClearTimeout = global.clearTimeout;
+  const scheduled = [];
+
+  Date.now = () => new Date(2026, 7, 22, 12, 0).getTime();
+  global.setTimeout = (callback, delay) => {
+    const timer = { callback, delay, active: true };
+    scheduled.push(timer);
+    return timer;
+  };
+  global.clearTimeout = (timer) => {
+    if (timer) timer.active = false;
+  };
+
+  try {
+    const page = loadCalendarPage();
+    page.data.anchor = Date.now();
+    page.data.view = 'day';
+    page.refresh = (afterRefresh) => {
+      if (afterRefresh) afterRefresh();
+    };
+    page.focusCurrentTime = () => {};
+
+    [
+      ['year', '今年'],
+      ['month', '本月'],
+      ['week', '本周'],
+      ['day', '今天']
+    ].forEach(([view, label]) => {
+      page.changeView({ currentTarget: { dataset: { view } } });
+      assert.equal(page.data.pageTurnRelativeLabel, label);
+    });
+
+    const labelTimers = scheduled.filter((timer) => timer.delay === 3000);
+    assert.equal(labelTimers.length, 4);
+    assert.deepEqual(labelTimers.map((timer) => timer.active), [false, false, false, true]);
+
+    labelTimers.at(-1).callback();
+    assert.equal(page.data.pageTurnRelativeLabel, '');
+  } finally {
+    Date.now = originalNow;
+    global.setTimeout = originalSetTimeout;
+    global.clearTimeout = originalClearTimeout;
+  }
+});
+
 test('从其他页面切回日历时显示当前范围关系，首次冷启动不提示', () => {
   const originalGetApp = global.getApp;
   const originalNow = Date.now;

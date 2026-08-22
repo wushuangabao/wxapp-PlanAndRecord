@@ -2164,6 +2164,54 @@ test('计划页：长按计时器 icon 多候选先选择再确认，无候选�
   }
 });
 
+test('计划页：未来计划仍可点按计时，但长按不提供直接完成', () => {
+  const originalDateNow = Date.now;
+  const now = new Date(2026, 7, 22, 20, 0).getTime();
+  Date.now = () => now;
+  const tasks = [{ id: 'task_future', title: '未来计划任务', status: TASK_STATUS.TODO, projectId: null, updatedAt: 1 }];
+  const state = {
+    topVisible: true,
+    controlKind: 'timer',
+    timerMatchesTask: false,
+    timerStatus: 'idle',
+    candidates: [{
+      id: 'event:event_future',
+      kind: 'event',
+      title: '稍后计划',
+      startedAt: now + 60 * 60 * 1000,
+      endedAt: now + 2 * 60 * 60 * 1000,
+      calendarEventId: 'event_future'
+    }],
+    confirmableCandidates: [],
+    entityPlans: [{ id: 'event_future' }],
+    repeatRules: [],
+    activeRepeatRules: []
+  };
+  const harness = createHarness({ tasks, planStates: new Map([['task_future', state]]) });
+  try {
+    harness.page.refresh();
+    const task = harness.page.data.tasks.find((item) => item.id === 'task_future');
+    assert.equal(task.planCandidates.length, 1);
+    assert.equal(task.confirmablePlanCandidates.length, 0);
+    assert.equal(task.hasConfirmablePlanCandidates, false);
+
+    harness.page.toggleTask(event('task_future', TASK_STATUS.TODO));
+    assert.deepEqual(harness.calls.startTaskPlanTimer, [['task_future', 'event:event_future']]);
+
+    harness.page.executeTaskTimerLongPress('task_future');
+    assert.equal(harness.wxState.modal, undefined);
+    assert.equal(harness.wxState.toast.title, '当前没有可确认的计划');
+    assert.equal(harness.calls.confirmTaskPlanCandidate.length, 0);
+
+    Date.now = () => state.candidates[0].startedAt;
+    harness.page.executeTaskTimerLongPress('task_future');
+    assert.equal(harness.wxState.modal.title, '直接完成？');
+  } finally {
+    Date.now = originalDateNow;
+    harness.restore();
+  }
+});
+
 test('计划页：共享底部弹窗头部承接创建和关闭事件', () => {
   const wxml = fs.readFileSync(plansWxmlPath, 'utf8');
   const pageConfig = JSON.parse(fs.readFileSync(plansJsonPath, 'utf8'));

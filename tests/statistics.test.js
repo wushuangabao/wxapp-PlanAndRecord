@@ -774,3 +774,197 @@ test('每月多选日期在命中的周期月各投影一次，短月份跳过�
     ]
   );
 });
+
+test('复盘汇总提供计划数和计划时间，偏差按绝对值排序并生成趋势桶', () => {
+  const startedAt = localTimestamp(2026, 8, 18, 9);
+  const database = createInitialDatabase(startedAt - DAY_MS);
+  const task = {
+    id: 'task_review',
+    title: '复盘任务',
+    status: 'todo',
+    projectId: null,
+    projectNameSnapshot: null,
+    completedAt: null
+  };
+  const firstEvent = createCalendarEvent({
+    title: '偏差不足',
+    startedAt,
+    endedAt: startedAt + HOUR_MS,
+    priority: 1,
+    taskId: task.id,
+    taskNameSnapshot: task.title
+  }, startedAt - 1);
+  const secondEvent = createCalendarEvent({
+    title: '偏差超出',
+    startedAt: startedAt + 2 * HOUR_MS,
+    endedAt: startedAt + 2 * HOUR_MS + 30 * MINUTE_MS,
+    priority: 1,
+    taskId: task.id,
+    taskNameSnapshot: task.title
+  }, startedAt - 1);
+  database.tasks.push(task);
+  database.calendarEvents.push(firstEvent, secondEvent);
+  database.timeLogs.push(
+    createTimeLog({
+      startedAt,
+      endedAt: startedAt + 20 * MINUTE_MS,
+      durationMinutes: 20,
+      calendarEventId: firstEvent.id,
+      status: LOG_STATUS.CONFIRMED,
+      source: LOG_SOURCE.MANUAL
+    }, startedAt + 4 * HOUR_MS),
+    createTimeLog({
+      startedAt: startedAt + 2 * HOUR_MS,
+      endedAt: startedAt + 2 * HOUR_MS + 100 * MINUTE_MS,
+      durationMinutes: 100,
+      calendarEventId: secondEvent.id,
+      status: LOG_STATUS.CONFIRMED,
+      source: LOG_SOURCE.MANUAL
+    }, startedAt + 4 * HOUR_MS)
+  );
+
+  const statistics = buildStatistics(database, {
+    rangeStart: startedAt,
+    rangeEnd: startedAt + 5 * HOUR_MS,
+    trendRanges: [{
+      id: 'empty',
+      label: '前一周',
+      rangeStart: startedAt - 2 * DAY_MS,
+      rangeEnd: startedAt - DAY_MS
+    }, {
+      id: 'current',
+      label: '本周',
+      rangeStart: startedAt,
+      rangeEnd: startedAt + 5 * HOUR_MS
+    }]
+  });
+
+  assert.equal(statistics.weeklyReview.planCount, 2);
+  assert.equal(statistics.weeklyReview.plannedMinutes, 90);
+  assert.deepEqual(
+    statistics.planVariance.events.map((item) => [item.title, item.varianceMinutes]),
+    [['偏差超出', 70], ['偏差不足', -40]]
+  );
+  assert.deepEqual(
+    statistics.planVarianceTrend.map((item) => [item.id, item.varianceMinutes]),
+    [['current', 30]]
+  );
+});
+
+test('范围内实际记录会带入尚未开始的关联实体计划并保持总览偏差恒等', () => {
+  const rangeStart = localTimestamp(2026, 8, 18, 8);
+  const rangeEnd = localTimestamp(2026, 8, 18, 12);
+  const database = createInitialDatabase(rangeStart - DAY_MS);
+  const task = {
+    id: 'task_future_event_review',
+    title: '提前执行任务',
+    status: 'todo',
+    projectId: null,
+    projectNameSnapshot: null,
+    completedAt: null
+  };
+  const event = createCalendarEvent({
+    title: '晚间计划',
+    startedAt: localTimestamp(2026, 8, 18, 20),
+    endedAt: localTimestamp(2026, 8, 18, 21),
+    priority: 1,
+    taskId: task.id,
+    taskNameSnapshot: task.title
+  }, rangeStart - 1);
+  database.tasks.push(task);
+  database.calendarEvents.push(event);
+  database.timeLogs.push(createTimeLog({
+    startedAt: localTimestamp(2026, 8, 18, 9),
+    endedAt: localTimestamp(2026, 8, 18, 10),
+    durationMinutes: 60,
+    calendarEventId: event.id,
+    status: LOG_STATUS.CONFIRMED,
+    source: LOG_SOURCE.MANUAL
+  }, rangeEnd));
+
+  const statistics = buildStatistics(database, {
+    rangeStart,
+    rangeEnd,
+    trendRanges: [{ id: 'current', label: '本周', rangeStart, rangeEnd }]
+  });
+  const varianceTotal = statistics.planVariance.events.reduce(
+    (total, item) => total + item.varianceMinutes,
+    0
+  );
+
+  assert.deepEqual(
+    statistics.planVariance.events.map((item) => [
+      item.eventId,
+      item.plannedMinutes,
+      item.actualMinutes,
+      item.varianceMinutes
+    ]),
+    [[event.id, 60, 60, 0]]
+  );
+  assert.deepEqual(
+    [statistics.weeklyReview.planCount, statistics.weeklyReview.plannedMinutes],
+    [1, 60]
+  );
+  assert.equal(statistics.weeklyReview.nonPlannedMinutes, 0);
+  assert.equal(
+    statistics.totalMinutes - statistics.weeklyReview.plannedMinutes,
+    varianceTotal + statistics.weeklyReview.nonPlannedMinutes
+  );
+  assert.deepEqual(
+    statistics.planVarianceTrend.map((item) => [item.id, item.planCount, item.varianceMinutes]),
+    [['current', 1, 0]]
+  );
+});
+
+test('范围内实际记录会按稳定实例去重带入范围外重复计划', () => {
+  const seed = localTimestamp(2026, 8, 18, 8);
+  const { database, rule, startedAt } = recurringDatabase(seed);
+  const occurrence = projectRule(
+    rule,
+    startedAt,
+    startedAt,
+    database.occurrenceExceptions
+  )[0];
+  const logStartedAt = startedAt - 90 * MINUTE_MS;
+  const logEndedAt = startedAt - 60 * MINUTE_MS;
+  database.timeLogs.push(
+    createTimeLog({
+      startedAt: logStartedAt,
+      endedAt: logEndedAt,
+      durationMinutes: 30,
+      originRuleId: rule.id,
+      originOccurrenceId: occurrence.originOccurrenceId,
+      status: LOG_STATUS.CONFIRMED,
+      source: LOG_SOURCE.MANUAL
+    }, logEndedAt),
+    createTimeLog({
+      startedAt: logStartedAt + 10 * MINUTE_MS,
+      endedAt: logEndedAt,
+      durationMinutes: 20,
+      originRuleId: rule.id,
+      originOccurrenceId: occurrence.originOccurrenceId,
+      status: LOG_STATUS.CONFIRMED,
+      source: LOG_SOURCE.MANUAL
+    }, logEndedAt)
+  );
+
+  const statistics = buildStatistics(database, {
+    rangeStart: logStartedAt,
+    rangeEnd: logEndedAt
+  });
+
+  assert.deepEqual(
+    statistics.planVariance.events.map((item) => [
+      item.eventId,
+      item.plannedMinutes,
+      item.actualMinutes,
+      item.varianceMinutes
+    ]),
+    [[occurrence.originOccurrenceId, 60, 50, -10]]
+  );
+  assert.deepEqual(
+    [statistics.weeklyReview.planCount, statistics.weeklyReview.plannedMinutes],
+    [1, 60]
+  );
+  assert.equal(statistics.totalMinutes - statistics.weeklyReview.plannedMinutes, -10);
+});

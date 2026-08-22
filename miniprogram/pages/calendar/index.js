@@ -294,6 +294,34 @@ function planRecordContext(item, recordsByEvent) {
   };
 }
 
+function planConfirmationContext(
+  item,
+  snapshot,
+  now,
+  confirmedEventIds = null,
+  knownTaskIds = null
+) {
+  if (!item || item.type !== 'plan') return {};
+  if (item.virtual) {
+    return {
+      canConfirmVirtual: item.startedAt <= now
+        && !activeTimerMatchesOccurrence(snapshot, item.ruleId, item.originOccurrenceId)
+    };
+  }
+  const availableTaskIds = knownTaskIds || new Set((snapshot.tasks || []).map((task) => task.id));
+  const recordedEventIds = confirmedEventIds || new Set(
+    (snapshot.timeLogs || [])
+      .filter((log) => log.status === LOG_STATUS.CONFIRMED && log.calendarEventId)
+      .map((log) => log.calendarEventId)
+  );
+  return {
+    canDirectComplete: item.startedAt <= now
+      && availableTaskIds.has(item.taskId)
+      && !recordedEventIds.has(item.id)
+      && !activeTimerMatchesEvent(snapshot, item.id)
+  };
+}
+
 Page({
   data: {
     view: 'day',
@@ -421,13 +449,7 @@ Page({
           displayTags: Array.isArray(item.tags) ? item.tags.join('、') : '',
           priority: item.priority || 1,
           canAssociate,
-          canDirectComplete: item.type === 'plan'
-            && !item.virtual
-            && canAssociate
-            && !confirmedEventIds.has(item.id)
-            && !activeTimerMatchesEvent(snapshot, item.id),
-          canConfirmVirtual: Boolean(item.virtual)
-            && !activeTimerMatchesOccurrence(snapshot, item.ruleId, item.originOccurrenceId),
+          ...planConfirmationContext(item, snapshot, now, confirmedEventIds, knownTaskIds),
           canEditRuleFollowing: canEditRuleFollowing(service, snapshot, item),
           canEditPlan: item.type === 'plan'
             && !item.virtual
@@ -502,10 +524,12 @@ Page({
       const detailItem = this.data.detailItem && this.data.detailItem.virtual
         ? {
           ...this.data.detailItem,
-          canConfirmVirtual: !activeTimerMatchesOccurrence(
+          ...planConfirmationContext(
+            this.data.detailItem,
             snapshot,
-            this.data.detailItem.ruleId,
-            this.data.detailItem.originOccurrenceId
+            now,
+            confirmedEventIds,
+            knownTaskIds
           ),
           canEditRuleFollowing: canEditRuleFollowing(
             service,
@@ -517,9 +541,13 @@ Page({
           ? {
             ...this.data.detailItem,
             ...planRecordContext(this.data.detailItem, confirmedRecordsByEventId),
-            canDirectComplete: knownTaskIds.has(this.data.detailItem.taskId)
-              && !confirmedEventIds.has(this.data.detailItem.id)
-              && !activeTimerMatchesEvent(snapshot, this.data.detailItem.id)
+            ...planConfirmationContext(
+              this.data.detailItem,
+              snapshot,
+              now,
+              confirmedEventIds,
+              knownTaskIds
+            )
           }
           : this.data.detailItem;
       this.setData({
@@ -629,6 +657,7 @@ Page({
       this.refresh(() => {
         if (shouldFocusCurrentTime) this.focusCurrentTime(now);
         else if (!hasSavedScrollTop) this.focusCurrentHour(now);
+        this.showPageTurnRelativeLabel(nextAnchor, view);
       });
     });
   },
@@ -698,6 +727,18 @@ Page({
   },
 
   refreshCurrentTimeLine(now = Date.now()) {
+    const detailItem = this.data.detailItem;
+    if (detailItem && detailItem.type === 'plan' && this.currentSnapshot) {
+      const confirmationContext = planConfirmationContext(
+        detailItem,
+        this.currentSnapshot,
+        now
+      );
+      const availabilityKey = detailItem.virtual ? 'canConfirmVirtual' : 'canDirectComplete';
+      if (detailItem[availabilityKey] !== confirmationContext[availabilityKey]) {
+        this.setData({ detailItem: { ...detailItem, ...confirmationContext } });
+      }
+    }
     const range = rangeForView(this.data.anchor, this.data.view);
     const grid = buildTimeRows(range, this.data.view);
     const rangeIncludesToday = rangeIncludesTimestamp(range, now);
@@ -1003,7 +1044,14 @@ Page({
 
   openItemDetail(event) {
     this.clearPendingPlanRecordLongPress();
-    this.setData({ detailItem: event.currentTarget.dataset.item });
+    const item = event.currentTarget.dataset.item;
+    const snapshot = this.currentSnapshot || getService().snapshot();
+    this.setData({
+      detailItem: {
+        ...item,
+        ...planConfirmationContext(item, snapshot, Date.now())
+      }
+    });
   },
 
   closeItemDetail() {

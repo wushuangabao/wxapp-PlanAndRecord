@@ -1,17 +1,44 @@
 <view class="page">
-  <view class="eyebrow">LOCAL PROFILE</view>
+  <view class="review-selector">
+    <view class="review-tabs" role="tablist" aria-label="复盘时间刻度">
+      <view wx:for="{{reviewTabs}}" wx:key="id" class="review-tab {{reviewScale === item.id ? 'review-tab-active' : ''}}" role="tab" aria-selected="{{reviewScale === item.id}}" data-scale="{{item.id}}" bindtap="onReviewScaleChange">{{item.label}}</view>
+    </view>
+    <view wx:if="{{reviewScale !== 'week'}}" class="period-controls">
+      <scroll-view class="period-scroll" scroll-x="{{true}}" enhanced="{{true}}" show-scrollbar="{{false}}"><view class="period-tabs"><view wx:for="{{recentPeriods}}" wx:key="key" class="period-tab {{reviewPeriodKey === item.key ? 'period-tab-active' : ''}}" role="button" aria-label="查看 {{item.label}} 复盘" data-key="{{item.key}}" data-anchor="{{item.anchor}}" bindtap="selectReviewPeriod">{{item.label}}</view></view></scroll-view>
+      <view class="custom-period-form"><input class="custom-period-input" type="text" value="{{customPeriodInput}}" placeholder="{{reviewScale === 'month' ? '输入 YYYY-MM' : '输入 YYYY'}}" maxlength="{{reviewScale === 'month' ? 7 : 4}}" confirm-type="done" bindinput="onCustomPeriodInput" bindconfirm="applyCustomPeriod" /><view class="custom-period-submit" role="button" aria-label="查看自定义复盘周期" bindtap="applyCustomPeriod">查看</view></view>
+    </view>
+  </view>
 
   <view class="risk">清理微信缓存、卸载微信或更换设备可能导致本地数据丢失；首版仍以本地存储为准，云端存储入口暂不可用。</view>
 
-  <view class="card">
-    <view class="section-title">本周复盘</view>
-    <view wx:if="{{review}}" class="review-grid"><view><text class="metric">{{review.totalMinutes}}</text><text>投入分钟</text></view><view><text class="metric">{{review.logCount}}</text><text>记录数</text></view><view><text class="metric">{{review.completedTaskCount}}</text><text>完成任务</text></view><view><text class="metric">{{review.nonPlannedMinutes}}</text><text>计划外</text></view></view>
+  <view class="card review-card">
+    <view class="review-range-label">{{reviewRangeLabel}}</view>
+    <view wx:if="{{review}}" class="review-grid"><view class="review-metric"><view class="metric-value-line"><text class="metric">{{review.totalMinutes}}</text><text wx:if="{{review.nonPlannedMinutes > 0}}" class="metric-note">（含计划外 {{review.nonPlannedMinutes}}）</text></view><text>投入时间（分钟）</text></view><view class="review-metric"><text class="metric">{{review.logCount}}</text><text>记录数</text></view><view class="review-metric"><text class="metric">{{review.plannedMinutes}}</text><text>计划时间（分钟）</text></view><view class="review-metric"><text class="metric">{{review.planCount}}</text><text>计划数</text></view></view>
     <view class="switch-row"><view>包含候选估算</view><switch checked="{{includeCandidates}}" color="#55725e" bindchange="onCandidatesChange" /></view>
+    <view wx:if="{{varianceTrend.length}}" class="trend-section"><view class="subsection-title">计划与实际偏差趋势</view><view class="trend-hint">正值表示超出计划，负值表示少于计划。</view><view class="trend-chart"><view wx:for="{{varianceTrend}}" wx:key="id" class="trend-column"><view class="trend-value">{{item.valueText}}</view><view class="trend-plot"><view wx:if="{{item.direction === 'positive'}}" class="trend-bar trend-bar-positive" style="height: {{item.barHeight}}rpx;"></view><view wx:elif="{{item.direction === 'negative'}}" class="trend-bar trend-bar-negative" style="height: {{item.barHeight}}rpx;"></view><view wx:else class="trend-bar trend-bar-zero"></view></view><view class="trend-label">{{item.label}}</view></view></view></view>
   </view>
 
-  <view class="card"><view class="section-title">标签投入</view><view class="stat-hint">一条记录有多个标签时，完整耗时会分别计入每个标签。</view><view wx:if="{{!tagStats.length}}" class="empty">本周还没有纳入统计的实际记录。</view><view wx:for="{{tagStats}}" wx:key="id" class="stat-row"><view>{{item.displayName}}</view><view>{{item.durationMinutes}} 分钟</view></view></view>
-  <view class="card"><view class="section-title">项目投入</view><view wx:if="{{!projectStats.length}}" class="empty">暂无项目投入。</view><view wx:for="{{projectStats}}" wx:key="id" class="stat-row"><view>{{item.name}}</view><view>{{item.durationMinutes}} 分钟</view></view></view>
-  <view class="card"><view class="section-title">计划与实际偏差</view><view wx:if="{{!variance.length}}" class="empty">本周没有计划块。</view><view wx:for="{{variance}}" wx:key="eventId" class="stat-row"><view>{{item.title}}</view><view>计划 {{item.plannedMinutes}} / 实际 {{item.actualMinutes}} / 偏差 {{item.varianceMinutes}} 分钟</view></view></view>
+  <view class="card">
+    <view class="section-header"><view class="section-title">标签投入</view><view wx:if="{{tagStats.length > 5}}" class="more-link" role="button" aria-label="查看全部标签投入" data-type="tags" bindtap="openStatisticsDetail">查看更多</view></view>
+    <view class="stat-hint">一条记录有多个标签时，完整耗时会分别计入每个标签。</view><view wx:if="{{!tagStats.length}}" class="empty">当前复盘范围还没有纳入统计的记录。</view>
+    <checkbox-group wx:if="{{tagPie.selectable}}" data-module="tags" data-scope="visible" bindchange="onPieSelectionChange"><label wx:for="{{visibleTagStats}}" wx:key="id" class="stat-row selectable-row"><view class="stat-label"><checkbox value="{{item.id}}" checked="{{item.pieChecked}}" color="#78947f" /><text>{{item.displayName}}</text></view><view class="stat-value">{{item.valueText}}</view></label></checkbox-group>
+    <block wx:else><view wx:for="{{visibleTagStats}}" wx:key="id" class="stat-row"><view class="stat-label">{{item.displayName}}</view><view class="stat-value">{{item.valueText}}</view></view></block>
+    <view wx:if="{{tagPie.show}}" class="pie-layout"><view class="pie-chart-slot"><pie-chart slices="{{tagPie.slices}}" /></view><view class="pie-legend"><view wx:for="{{tagPie.legend}}" wx:key="id" class="pie-legend-row"><view class="pie-swatch" style="background: {{item.color}};"></view><view class="pie-legend-label">{{item.label}}</view><view class="pie-legend-value">{{item.percentText}}</view></view></view></view><view wx:elif="{{tagPie.prompt}}" class="pie-prompt">请至少勾选三项</view>
+  </view>
+
+  <view class="card">
+    <view class="section-header"><view class="section-title">项目投入</view><view wx:if="{{projectStats.length > 5}}" class="more-link" role="button" aria-label="查看全部项目投入" data-type="projects" bindtap="openStatisticsDetail">查看更多</view></view>
+    <view wx:if="{{!projectStats.length}}" class="empty">当前复盘范围暂无项目投入。</view>
+    <checkbox-group wx:if="{{projectPie.selectable}}" data-module="projects" data-scope="visible" bindchange="onPieSelectionChange"><label wx:for="{{visibleProjectStats}}" wx:key="id" class="stat-row selectable-row"><view class="stat-label"><checkbox value="{{item.id}}" checked="{{item.pieChecked}}" color="#78947f" /><text>{{item.label}}</text></view><view class="stat-value">{{item.valueText}}</view></label></checkbox-group>
+    <block wx:else><view wx:for="{{visibleProjectStats}}" wx:key="id" class="stat-row"><view class="stat-label">{{item.label}}</view><view class="stat-value">{{item.valueText}}</view></view></block>
+    <view wx:if="{{projectPie.show}}" class="pie-layout"><view class="pie-chart-slot"><pie-chart slices="{{projectPie.slices}}" /></view><view class="pie-legend"><view wx:for="{{projectPie.legend}}" wx:key="id" class="pie-legend-row"><view class="pie-swatch" style="background: {{item.color}};"></view><view class="pie-legend-label">{{item.label}}</view><view class="pie-legend-value">{{item.percentText}}</view></view></view></view><view wx:elif="{{projectPie.prompt}}" class="pie-prompt">请至少勾选三项</view>
+  </view>
+
+  <view class="card">
+    <view class="section-header"><view class="section-title">计划与实际偏差</view><view wx:if="{{variance.length > 5}}" class="more-link" role="button" aria-label="查看全部计划与实际偏差" data-type="variance" bindtap="openStatisticsDetail">查看更多</view></view>
+    <view wx:if="{{!variance.length}}" class="empty">当前复盘范围没有计划块。</view><view wx:for="{{visibleVariance}}" wx:key="eventId" class="stat-row variance-row"><view class="stat-label">{{item.label}}</view><view class="variance-value"><text>{{item.valueText}}</text><text class="variance-number">{{item.varianceText}}</text></view></view>
+  </view>
+
   <view class="card data-management-card">
     <view class="section-title">数据管理</view>
     <view class="storage-summary">
@@ -25,3 +52,5 @@
     <button class="danger" disabled="{{dataOperationInProgress}}" bindtap="clearData">清空数据</button>
   </view>
 </view>
+
+<view wx:if="{{detailSheet}}" class="modal-mask" bindtap="closeStatisticsDetail"><view class="modal detail-modal" catchtap="noop"><sheet-header title="{{detailSheet.title}}" cancel-text="关闭" bind:cancel="closeStatisticsDetail" /><scroll-view class="detail-list" scroll-y="{{true}}"><checkbox-group wx:if="{{detailSheet.selectable}}" data-module="{{detailSheet.type}}" data-scope="all" bindchange="onPieSelectionChange"><label wx:for="{{detailSheet.rows}}" wx:key="id" class="stat-row selectable-row detail-row"><view class="stat-label"><checkbox value="{{item.id}}" checked="{{item.pieChecked}}" color="#78947f" /><text>{{item.label}}</text></view><view class="stat-value">{{item.valueText}}</view></label></checkbox-group><block wx:else><view wx:for="{{detailSheet.rows}}" wx:key="id" class="stat-row detail-row {{detailSheet.type === 'variance' ? 'variance-row' : ''}}"><view class="stat-label">{{item.label}}</view><view wx:if="{{detailSheet.type === 'variance'}}" class="variance-value"><text>{{item.valueText}}</text><text class="variance-number">{{item.varianceText}}</text></view><view wx:else class="stat-value">{{item.valueText}}</view></view></block></scroll-view></view></view>

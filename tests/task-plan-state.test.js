@@ -114,6 +114,7 @@ test('任务计划状态：过期与未来实体计划都可执行，只有 conf
   let state = buildTaskPlanStates(database, now).get(value.id);
   assert.deepEqual(state.pendingEntityPlans.map((item) => item.id), [past.id, future.id]);
   assert.deepEqual(state.candidates.map((item) => item.id), [`event:${past.id}`, `event:${future.id}`]);
+  assert.deepEqual(state.confirmableCandidates.map((item) => item.id), [`event:${past.id}`]);
   assert.equal(state.canAutoComplete, false);
   assert.equal(state.topVisible, true);
 
@@ -215,6 +216,7 @@ test('任务计划状态：今天多实例必须全部 confirmed，skip 实例�
 
   let state = buildTaskPlanStates(database, now).get(value.id);
   assert.equal(state.todayOccurrences.length, 2);
+  assert.deepEqual(state.confirmableCandidates.map((item) => item.kind), ['occurrence']);
   database.timeLogs.push(logForOccurrence(state.todayOccurrences[0], 'log_one', LOG_STATUS.CONFIRMED, now));
   state = buildTaskPlanStates(database, now).get(value.id);
   assert.equal(state.controlKind, 'timer');

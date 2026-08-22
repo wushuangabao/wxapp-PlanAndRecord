@@ -599,7 +599,7 @@ test('编辑普通计划开启固定日程写入失败时不删除或修改原�
 });
 
 test('确认 virtual plan 只创建一条 confirmed rule 日志且重复确认被拒绝', () => {
-  const { service, now } = createHarness();
+  const { service, setNow, now } = createHarness();
   const startedAt = now() + 60 * 60 * 1000;
   const { rule } = createRecurringPlanForTask(service, {
     title: '确认重复计划',
@@ -612,6 +612,12 @@ test('确认 virtual plan 只创建一条 confirmed rule 日志且重复确认�
   const occurrence = service.timeline(occurrenceStart, occurrenceStart + 30 * 60 * 1000)
     .find((item) => item.virtual);
 
+  assert.throws(
+    () => service.confirmVirtualOccurrence(occurrence),
+    (error) => error.code === 'PLAN_NOT_STARTED'
+  );
+  assert.equal(service.snapshot().timeLogs.length, 0);
+  setNow(occurrence.startedAt);
   const log = service.confirmVirtualOccurrence(occurrence);
 
   assert.deepEqual(
@@ -627,7 +633,7 @@ test('确认 virtual plan 只创建一条 confirmed rule 日志且重复确认�
 });
 
 test('活动计时关联的重复实例不能再被确认完成', () => {
-  const { service, now } = createHarness();
+  const { service, setNow, now } = createHarness();
   const startedAt = now() + 60 * 60 * 1000;
   createRecurringPlanForTask(service, {
     title: '计时中不可确认',
@@ -656,13 +662,18 @@ test('活动计时关联的重复实例不能再被确认完成', () => {
     (error) => error.code === 'OCCURRENCE_TIMER_ACTIVE'
   );
 
+  assert.throws(
+    () => service.confirmVirtualOccurrence(second),
+    (error) => error.code === 'PLAN_NOT_STARTED'
+  );
+  setNow(second.startedAt);
   const otherLog = service.confirmVirtualOccurrence(second);
   assert.equal(otherLog.originOccurrenceId, second.originOccurrenceId);
   assert.equal(service.snapshot().timer.status, TIMER_STATUS.PAUSED);
 });
 
-test('TODO 长按确认：按候选生成普通计划或固定日程记录，计时中拒绝', () => {
-  const { service, now } = createHarness();
+test('TODO 长按确认：未来候选到达开始时间后才能按计划生成记录，计时中拒绝', () => {
+  const { service, setNow, now } = createHarness();
   const task = service.createTask({ title: '待确认计划任务' });
   const event = service.createCalendarEvent({
     title: '上午计划',
@@ -672,6 +683,12 @@ test('TODO 长按确认：按候选生成普通计划或固定日程记录，计
     priority: 1
   });
 
+  assert.throws(
+    () => service.confirmTaskPlanCandidate(task.id, `event:${event.id}`),
+    (error) => error.code === 'PLAN_NOT_STARTED'
+  );
+  assert.equal(service.snapshot().timeLogs.length, 0);
+  setNow(event.startedAt);
   const eventLog = service.confirmTaskPlanCandidate(task.id, `event:${event.id}`);
   assert.deepEqual(
     [eventLog.status, eventLog.source, eventLog.calendarEventId, eventLog.startedAt, eventLog.endedAt],
@@ -695,6 +712,8 @@ test('TODO 长按确认：按候选生成普通计划或固定日程记录，计
   const occurrenceCandidate = service.taskPlanStates().get(occurrenceTaskId).candidates
     .find((item) => item.kind === 'occurrence');
   assert.ok(occurrenceCandidate);
+  assert.equal(service.taskPlanStates().get(occurrenceTaskId).confirmableCandidates.length, 0);
+  setNow(occurrenceCandidate.startedAt);
   const occurrenceLog = service.confirmTaskPlanCandidate(occurrenceTaskId, occurrenceCandidate.id);
   assert.deepEqual(
     [occurrenceLog.status, occurrenceLog.source, occurrenceLog.originRuleId, occurrenceLog.originOccurrenceId],
@@ -1501,6 +1520,7 @@ test('本地手工、计时和规则路径都不会生成 candidate', () => {
   });
   const virtual = service.timeline(startedAt + 86_400_000, startedAt + 86_400_000 + 30 * 60 * 1000)
     .find((item) => item.virtual);
+  setNow(virtual.startedAt);
   const rule = service.confirmVirtualOccurrence(virtual);
 
   assert.deepEqual(
@@ -2282,7 +2302,7 @@ test('导入预览期间无变化恢复不会制造假 stale', () => {
 });
 
 test('M4：重复实例按需投影，确认后不会再次投影', () => {
-  const { service, now } = createHarness();
+  const { service, setNow, now } = createHarness();
   const start = now() + 60 * 60 * 1000;
   const repeated = createRecurringPlanForTask(service, {
     title: '晨间阅读',
@@ -2295,6 +2315,7 @@ test('M4：重复实例按需投影，确认后不会再次投影', () => {
   const timeline = service.timeline(start, start + 2 * 24 * 60 * 60 * 1000);
   const virtual = timeline.find((item) => item.virtual);
   assert.equal(virtual.priority, 3);
+  setNow(virtual.startedAt);
   service.confirmVirtualOccurrence({ ...virtual });
   const after = service.timeline(start, start + 2 * 24 * 60 * 60 * 1000);
   assert.equal(after.filter((item) => item.originOccurrenceId === virtual.originOccurrenceId).length, 1);
@@ -2728,7 +2749,7 @@ test('M3：放弃项目断开计时草稿失效引用且保留仍有效的项目
 });
 
 test('M3：删除任务清除未结束计划并保留历史计划和计时记录', () => {
-  const { service, repository, now } = createHarness();
+  const { service, repository, setNow, now } = createHarness();
   const project = service.createProject({ title: '关联项目', deadlineAt: now() + 86_400_000 });
   const task = service.createTask({ title: '待删除任务', projectId: project.id });
   const historicalEvent = createCalendarEventForTask(service, { title: '历史任务计划', startedAt: now() - 3_600_000, endedAt: now() - 1_800_000, taskId: task.id });
@@ -2746,7 +2767,10 @@ test('M3：删除任务清除未结束计划并保留历史计划和计时记录
     start + 24 * 60 * 60 * 1000,
     start + 25 * 60 * 60 * 1000
   ).find((item) => item.virtual);
+  const deletionNow = now();
+  setNow(virtual.startedAt);
   const ruleLog = service.confirmVirtualOccurrence(virtual);
+  setNow(deletionNow);
   service.skipOccurrence(rule.id, start);
   const { log } = service.createManualLog({
     startedAt: now() - 3_600_000,
@@ -3225,7 +3249,7 @@ test('重复计划实例可作为日志和计时的统一计划关联，并校�
 });
 
 test('计划关联候选只返回有效计划，并且不因已有日志隐藏重复实例', () => {
-  const { service, now } = createHarness();
+  const { service, setNow, now } = createHarness();
   const task = service.createTask({ title: '多记录任务' });
   const start = now() + 60 * 60 * 1000;
   const { rule } = service.createRecurringPlan({
@@ -3248,6 +3272,7 @@ test('计划关联候选只返回有效计划，并且不因已有日志隐藏�
     nextStart + 30 * 60 * 1000
   ).find((item) => item.virtual);
 
+  setNow(nextOccurrence.startedAt);
   service.confirmVirtualOccurrence(nextOccurrence);
   service.createManualLog({
     startedAt: nextStart + 5 * 60 * 1000,
@@ -3290,7 +3315,7 @@ test('计划关联候选只返回有效计划，并且不因已有日志隐藏�
 });
 
 test('确认候选记录执行统一关联归一化，并保证具体计划与重复实例互斥成对', () => {
-  const { service, repository, now } = createHarness();
+  const { service, repository, setNow, now } = createHarness();
   const project = service.createProject({
     title: '候选所属项目',
     deadlineAt: now() + 86_400_000
@@ -3324,6 +3349,7 @@ test('确认候选记录执行统一关联归一化，并保证具体计划与�
     repeatStart + 24 * 60 * 60 * 1000,
     repeatStart + 25 * 60 * 60 * 1000
   ).find((item) => item.virtual);
+  setNow(virtual.startedAt);
   const recurring = service.confirmVirtualOccurrence(virtual);
 
   repository.transaction((database) => {
@@ -3386,7 +3412,7 @@ test('确认候选记录执行统一关联归一化，并保证具体计划与�
 });
 
 test('编辑日志保留导入的超限标签和历史计划；改标签时执行限制，显式空值解除计划关联', () => {
-  const { service, repository, now } = createHarness();
+  const { service, repository, setNow, now } = createHarness();
   const task = service.createTask({ title: '历史任务' });
   const historicalEvent = createCalendarEventForTask(service, {
     title: '历史计划',
@@ -3450,6 +3476,7 @@ test('编辑日志保留导入的超限标签和历史计划；改标签时执�
     repeatStart + 24 * 60 * 60 * 1000,
     repeatStart + 25 * 60 * 60 * 1000
   ).find((item) => item.virtual);
+  setNow(virtual.startedAt);
   const originLog = service.confirmVirtualOccurrence(virtual);
   const unchangedOrigin = service.updateLog(originLog.id, { note: '仍关联重复实例' }).log;
   assert.deepEqual(
